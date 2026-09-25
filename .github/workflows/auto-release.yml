@@ -70,18 +70,42 @@ jobs:
           }
           EOF
 
-      # 4. Cài đặt Thư viện & Build Web Assets
+      # 4. Cài đặt các thư viện cần thiết (bao gồm cả Capacitor Android Core) & Build Web
       - name: Install Dependencies
-        run: npm install --legacy-peer-deps
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
 
       - name: Build Web Assets
         run: npm run build
 
-      # 5. Đồng bộ code Web vào thư mục Android sẵn có
-      - name: Sync Capacitor
-        run: npx cap sync android
+      # 5. Khởi tạo lại hoàn toàn thư mục Android nếu bị rỗng / thiếu file build.gradle
+      - name: Generate Fresh Android Project
+        run: |
+          if [ ! -f "android/build.gradle" ]; then
+            echo "Thư mục android bị rỗng hoặc chưa hoàn chỉnh. Tiến hành khởi tạo mới..."
+            rm -rf android
+            npx cap add android
+          fi
+          npx cap sync android
 
-      # 6. Copy google-services.json (nếu có)
+      # 6. Cập nhật SDK & Phiên bản trong file Gradle vừa tạo
+      - name: Update Android SDK & Version
+        env:
+          VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
+          VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
+        run: |
+          if [ -f "android/variables.gradle" ]; then
+            sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
+            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
+          fi
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
+          fi
+
+      # 7. Copy google-services.json (nếu có) & Tạo icon
       - name: Copy google-services.json
         run: |
           if [ -f "google-services.json" ]; then
@@ -89,7 +113,11 @@ jobs:
             cp google-services.json android/app/google-services.json
           fi
 
-      # 7. Khai báo Keystore cố định từ GitHub Secrets & In SHA-1
+      - name: Generate App Icons
+        run: |
+          npx @capacitor/assets generate --android || true
+
+      # 8. Khai báo Keystore cố định từ GitHub Secrets & In SHA-1
       - name: Setup Fixed Keystore & Print SHA-1
         run: |
           mkdir -p ~/.android
@@ -116,23 +144,20 @@ jobs:
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
 
-      # 8. Tự kiểm tra & cấp quyền/tạo gradlew nếu thiếu, sau đó đóng gói APK
+      # 9. Đóng gói APK bằng Gradle
       - name: Build Android APK
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
-          if [ ! -f "gradlew" ]; then
-            gradle wrapper
-          fi
           chmod +x gradlew
-          ./gradlew assembleDebug -PversionCode=${{ steps.auto_version.outputs.CODE }} -PversionName=${{ steps.auto_version.outputs.NAME }} --no-daemon
+          ./gradlew assembleDebug --no-daemon
 
-      # 9. Đổi tên tệp APK về định dạng chuẩn sotietkiem_v[version].apk
+      # 10. Đổi tên tệp APK về định dạng chuẩn sotietkiem_v[version].apk
       - name: Rename APK
         run: |
           mv android/app/build/outputs/apk/debug/app-debug.apk sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
 
-      # 10. Tự động tạo GitHub Release & đính kèm APK
+      # 11. Tự động tạo GitHub Release & đính kèm APK
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -145,7 +170,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 11. Tự động cập nhật file version.json trên nhánh main
+      # 12. Tự động cập nhật file version.json trên nhánh main
       - name: Update version.json
         run: |
           APK_URL="https://github.com/tuanta3012/sotietkiem/releases/download/v${{ steps.auto_version.outputs.NAME }}/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk"
