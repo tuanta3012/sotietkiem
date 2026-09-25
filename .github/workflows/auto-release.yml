@@ -106,14 +106,26 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode ${{ steps.auto_version.outputs.CODE }}/g" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.auto_version.outputs.NAME }}\"/g" android/app/build.gradle
 
-      # 8. Khai báo Keystore cố định từ GitHub Secrets (An toàn 100% qua biến env)
+       # 8. Khai báo Keystore cố định từ GitHub Secrets (Tự động lọc rác và bù padding =)
       - name: Setup Fixed Keystore & Print SHA-1
         env:
           KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
           if [ -n "$KEYSTORE_BASE64" ]; then
-            echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > ~/.android/debug.keystore
+            # 1. Lọc sạch khoảng trắng, xuống dòng
+            CLEAN_B64=$(echo "$KEYSTORE_BASE64" | tr -d '[:space:]')
+            
+            # 2. Tự động bổ sung padding '=' nếu độ dài không chia hết cho 4
+            MOD=$((${#CLEAN_B64} % 4))
+            if [ $MOD -eq 2 ]; then
+              CLEAN_B64="${CLEAN_B64}=="
+            elif [ $MOD -eq 3 ]; then
+              CLEAN_B64="${CLEAN_B64}="
+            fi
+            
+            # 3. Giải mã ra file keystore
+            echo "$CLEAN_B64" | base64 -d > ~/.android/debug.keystore
             echo ">>> Giải mã thành công Keystore từ GitHub Secrets!"
           else
             keytool -genkeypair -v \
