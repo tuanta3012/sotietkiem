@@ -60,10 +60,7 @@ jobs:
                   resolutionStrategy {
                       force 'org.bouncycastle:bcprov-jdk15to18:1.70'
                       dependencySubstitution {
-                          substitute module('org.bouncycastle:bcprov-jdk15to18:1.70')
-                          dependencySubstitution {
-                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
-                          }
+                          substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
                       }
                   }
               }
@@ -97,21 +94,23 @@ jobs:
 
       # 7. Cập nhật Android SDK (minSdk 23, compileSdk/targetSdk 35) & Version
       - name: Update Android SDK & Version
+        env:
+          VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
+          VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
         run: |
           if [ -f "android/variables.gradle" ]; then
             sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
             sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
             sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
           fi
-          sed -i "s/versionCode [0-9]*/versionCode ${{ steps.auto_version.outputs.CODE }}/g" android/app/build.gradle
-          sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.auto_version.outputs.NAME }}\"/g" android/app/build.gradle
+          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
 
-       # 8. Khai báo Keystore cố định từ GitHub Secrets (Tự động sửa lỗi chuỗi Base64)
+      # 8. Khai báo Keystore cố định từ GitHub Secrets (Tự động sửa lỗi chuỗi Base64)
       - name: Setup Fixed Keystore & Print SHA-1
         run: |
           mkdir -p ~/.android
           if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
-            # Làm sạch chuỗi Base64: xóa khoảng trắng, xuống dòng và bổ sung padding = nếu thiếu
             CLEAN_BASE64=$(echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | tr -d '[:space:]')
             PAD_NEEDED=$(( (4 - ${#CLEAN_BASE64} % 4) % 4 ))
             for i in $(seq 1 $PAD_NEEDED); do CLEAN_BASE64="${CLEAN_BASE64}="; done
@@ -136,7 +135,6 @@ jobs:
           echo "=== FIXED SHA-1 FINGERPRINT FOR FIREBASE CONSOLE ==="
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
-
 
       # 9. Đóng gói APK bằng Gradle (Sử dụng Keystore cố định ở bước 8)
       - name: Build Android APK
