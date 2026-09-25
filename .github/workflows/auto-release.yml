@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch: # Cho phép bấm "Run workflow" thủ công trên web GitHub bất cứ lúc nào
 
 jobs:
   build-and-release:
@@ -59,7 +60,10 @@ jobs:
                   resolutionStrategy {
                       force 'org.bouncycastle:bcprov-jdk15to18:1.70'
                       dependencySubstitution {
-                          substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          substitute module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          dependencySubstitution {
+                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          }
                       }
                   }
               }
@@ -102,49 +106,50 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode ${{ steps.auto_version.outputs.CODE }}/g" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.auto_version.outputs.NAME }}\"/g" android/app/build.gradle
 
-          # Đảm bảo server_client_id luôn có trong strings.xml
-          STRINGS_XML="android/app/src/main/res/values/strings.xml"
-          if [ -f "$STRINGS_XML" ] && ! grep -q "server_client_id" "$STRINGS_XML"; then
-            sed -i 's/<\/resources>/    <string name="server_client_id">864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com<\/string>\n<\/resources>/' "$STRINGS_XML"
-          fi
-
-      # 8. Tạo Release Keystore cố định & In mã SHA-1 ra Log (1 LẦN DUY NHẤT)
-      - name: Generate Keystore & Print SHA-1
+       # 8. Khai báo Keystore cố định từ GitHub Secrets (Tự động sửa lỗi chuỗi Base64)
+      - name: Setup Fixed Keystore & Print SHA-1
         run: |
-          mkdir -p android/app
-          if [ ! -f android/app/release.keystore ]; then
+          mkdir -p ~/.android
+          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
+            # Làm sạch chuỗi Base64: xóa khoảng trắng, xuống dòng và bổ sung padding = nếu thiếu
+            CLEAN_BASE64=$(echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | tr -d '[:space:]')
+            PAD_NEEDED=$(( (4 - ${#CLEAN_BASE64} % 4) % 4 ))
+            for i in $(seq 1 $PAD_NEEDED); do CLEAN_BASE64="${CLEAN_BASE64}="; done
+            
+            echo "$CLEAN_BASE64" | base64 -d > ~/.android/debug.keystore
+          else
             keytool -genkeypair -v \
-              -keystore android/app/release.keystore \
-              -alias my-key-alias \
+              -keystore ~/.android/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
-              -storepass 123456654321 \
-              -keypass 123456654321 \
-              -dname "CN=So Tiet Kiem, OU=Dev, O=App, L=HCM, C=VN"
+              -dname "CN=Android Debug, O=Android, C=US"
+            
+            echo "=== TẠO CHUỖI BASE64 ĐỂ LƯU CỐ ĐỊNH ==="
+            base64 -w 0 ~/.android/debug.keystore
           fi
+          
           echo "===================================================="
-          echo "=== RELEASE KEYSTORE SHA-1 FINGERPRINT FOR FIREBASE ==="
-          keytool -list -v -keystore android/app/release.keystore -alias my-key-alias -storepass 123456654321 | grep "SHA1:"
+          echo "=== FIXED SHA-1 FINGERPRINT FOR FIREBASE CONSOLE ==="
+          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
 
-      # 9. Đóng gói & Ký file APK Signed chính thức
-      - name: Build Signed Android APK
+
+      # 9. Đóng gói APK bằng Gradle (Sử dụng Keystore cố định ở bước 8)
+      - name: Build Android APK
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
           chmod +x gradlew
-          ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=release.keystore \
-            -Pandroid.injected.signing.store.password=123456654321 \
-            -Pandroid.injected.signing.key.alias=my-key-alias \
-            -Pandroid.injected.signing.key.password=123456654321 \
-            --no-daemon
+          ./gradlew assembleDebug --no-daemon
 
-      # 10. Đổi tên tệp APK đã ký về định dạng chuẩn sotietkiem_v[version].apk
+      # 10. Đổi tên tệp APK về định dạng chuẩn sotietkiem_v[version].apk
       - name: Rename APK
         run: |
-          mv android/app/build/outputs/apk/release/app-release.apk sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+          mv android/app/build/outputs/apk/debug/app-debug.apk sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
 
       # 11. Tự động tạo GitHub Release & đính kèm APK
       - name: Create GitHub Release
