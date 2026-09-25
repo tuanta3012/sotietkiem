@@ -106,7 +106,7 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode ${{ steps.auto_version.outputs.CODE }}/g" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.auto_version.outputs.NAME }}\"/g" android/app/build.gradle
 
-       # 8. Khai báo Keystore cố định từ GitHub Secrets (Sử dụng Python giải mã an toàn 100%)
+      # 8. Khai báo Keystore cố định từ GitHub Secrets (Sử dụng Python giải mã an toàn 100%)
       - name: Setup Fixed Keystore & Print SHA-1
         run: |
           mkdir -p ~/.android
@@ -115,7 +115,7 @@ jobs:
 import os, base64, re
 
 raw_data = """${{ secrets.RELEASE_KEYSTORE_BASE64 }}"""
-# Lọc bỏ tất cả các ký tự không thuộc bảng mã Base64
+# Lọc bỏ tất cả các ký tự không thuộc bảng mã Base64 (khoảng trắng, xuống dòng, ký tự lạ)
 cleaned_data = re.sub(r"[^A-Za-z0-9+/=]", "", raw_data)
 
 # Tự động bổ sung padding = nếu thiếu
@@ -151,8 +151,6 @@ except Exception as e:
           echo "=== FIXED SHA-1 FINGERPRINT FOR FIREBASE CONSOLE ==="
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
-
-
 
       # 9. Đóng gói APK bằng Gradle (Sử dụng Keystore cố định ở bước 8)
       - name: Build Android APK
@@ -193,7 +191,7 @@ except Exception as e:
           EOF
           
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "github-actions[bot]"
           git add version.json
           git commit -m "chore: auto-update version.json [skip ci]" || echo "No changes to commit"
           git push
