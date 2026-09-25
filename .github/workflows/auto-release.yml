@@ -87,7 +87,7 @@ jobs:
           fi
           npx cap sync android
 
-      # 6. Cập nhật Android SDK (minSdk 23, compileSdk/targetSdk 35) & Version
+      # 6. Cập nhật Android SDK & Version
       - name: Update Android SDK & Version
         env:
           VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
@@ -145,11 +145,14 @@ jobs:
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
 
-      # 9. Đóng gói APK bằng Gradle
+      # 9. Đóng gói APK bằng Gradle (Tự tạo gradlew nếu thiếu)
       - name: Build Android APK
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          if [ ! -f "gradlew" ]; then
+            gradle wrapper
+          fi
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
