@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   PiggyBank,
   AlertCircle,
@@ -108,16 +108,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
       <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto pt-4 pb-6 flex flex-col items-center text-center relative z-10">
         {/* Emblem */}
         <div className="relative mb-5 group">
-          <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-3xl overflow-hidden shadow-2xl shadow-emerald-500/30 ring-4 ring-emerald-500/20 bg-gradient-to-tr from-emerald-600 via-emerald-500 to-teal-400 flex items-center justify-center">
+          <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-3xl overflow-hidden shadow-2xl shadow-emerald-500/30 ring-4 ring-emerald-500/20 bg-slate-950/70 border border-emerald-500/30 flex items-center justify-center">
             <img 
               src="/stk_app_icon.png" 
               alt="Logo" 
               className="w-full h-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-              }} 
             />
-            <PiggyBank className="w-10 h-10 sm:w-11 sm:h-11 text-slate-950 stroke-[2.2] hidden only:block" />
           </div>
         </div>
 

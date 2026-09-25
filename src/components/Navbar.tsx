@@ -23,13 +23,14 @@ import {
   Building2,
   Fingerprint,
   LogOut,
-  Globe,
-  WifiOff,
+  LogIn,
   Trash2,
   Users,
   Bell,
   FileText,
-  ArrowUpCircle,
+  Download,
+  Globe,
+  WifiOff,
 } from 'lucide-react';
 import { SyncAuditLogModal } from './SyncAuditLogModal';
 import { AppSettings, AuthUser } from '../types';
@@ -134,16 +135,12 @@ export const Navbar: React.FC<NavbarProps> = ({
         <div className="flex items-center justify-between gap-2 sm:gap-3">
           {/* Logo & Title */}
           <div className="flex items-center space-x-2 sm:space-x-2.5 shrink-0 min-w-0">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl overflow-hidden bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl overflow-hidden bg-slate-950/60 border border-emerald-500/40 flex items-center justify-center shadow-lg shadow-emerald-500/20 shrink-0">
               <img 
                 src="/stk_app_icon.png" 
                 alt="Logo" 
                 className="w-full h-full object-cover" 
-                onError={(e) => {
-                  e.currentTarget.style.display = 'none';
-                }}
               />
-              <PiggyBank className="w-4 h-4 sm:w-6 sm:h-6 text-slate-950 font-bold hidden only:block" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center space-x-1.5 sm:space-x-2">
@@ -262,31 +259,33 @@ export const Navbar: React.FC<NavbarProps> = ({
                       {currentUser?.isOffline ? 'Lưu trữ trên thiết bị này' : (currentUser?.email || 'Đã kết nối Google')}
                     </div>
 
-                    {/* Action buttons inside drawer */}
-                    {currentUser?.isOffline && onLoginGoogle && (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          onLoginGoogle();
-                        }}
-                        className="w-full mt-2 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
-                      >
-                        <Globe className="w-3.5 h-3.5" />
-                        <span>Đăng Nhập Google &amp; Đồng Bộ Drive</span>
-                      </button>
-                    )}
-
-                    {onLogout && (
-                      <button
-                        onClick={() => {
-                          setShowMenu(false);
-                          onLogout();
-                        }}
-                        className="w-full mt-1.5 py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold border border-rose-500/30 transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
-                      >
-                        <LogOut className="w-3.5 h-3.5" />
-                        <span>{currentUser?.isOffline ? 'Đổi Phương Thức Truy Cập' : 'Đăng Xuất Tài Khoản Google'}</span>
-                      </button>
+                    {/* Action button inside drawer: Đăng xuất khi đã login, Đăng nhập khi chưa login */}
+                    {currentUser && !currentUser.isOffline ? (
+                      onLogout && (
+                        <button
+                          onClick={() => {
+                            setShowMenu(false);
+                            onLogout();
+                          }}
+                          className="w-full mt-2 py-2 px-3 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-bold border border-rose-500/30 transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          <span>Đăng xuất</span>
+                        </button>
+                      )
+                    ) : (
+                      onLoginGoogle && (
+                        <button
+                          onClick={() => {
+                            setShowMenu(false);
+                            onLoginGoogle();
+                          }}
+                          className="w-full mt-2 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
+                        >
+                          <LogIn className="w-3.5 h-3.5" />
+                          <span>Đăng nhập</span>
+                        </button>
+                      )
                     )}
                   </div>
 
@@ -336,16 +335,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <Building2 className="w-4 h-4 text-teal-400 shrink-0" />
                       <div>
-                        <div className="font-semibold">Quản Lý Danh Sách Ngân Hàng</div>
+                        <div className="font-semibold">Danh sách ngân hàng</div>
                       </div>
                     </button>
 
-                    {/* Cài đặt Nhắc Lịch Đáo Hạn Tự Động (Capacitor / Android) */}
+                    {/* Cài đặt Thông báo tự động */}
                     <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 mt-1">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
                           <Bell className="w-4 h-4 text-amber-400 shrink-0" />
-                          <span className="font-semibold text-slate-200 text-xs">Nhắc Lịch Đáo Hạn</span>
+                          <span className="font-semibold text-slate-200 text-xs">Thông báo</span>
                         </div>
                         <button
                           type="button"
@@ -376,12 +375,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                     </div>
 
-                    {/* Cài đặt Đăng Nhập Vân Tay / Face ID */}
+                    {/* Cài đặt Khóa vân tay */}
                     <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 mt-1">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-2">
                           <Fingerprint className="w-4 h-4 text-emerald-400 shrink-0" />
-                          <span className="font-semibold text-slate-200 text-xs">Vân Tay / Face ID</span>
+                          <span className="font-semibold text-slate-200 text-xs">Khóa vân tay</span>
                         </div>
                         <button
                           type="button"
@@ -431,12 +430,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span className="font-semibold text-xs text-blue-200">Kiểm toán đồng bộ</span>
                     </button>
 
-                    {/* Cài đặt Cập nhật APK từ xa */}
+                    {/* Phiên bản & Cập nhật */}
                     <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-between mt-1 space-x-2">
                       <div className="flex items-center space-x-2 min-w-0">
-                        <ArrowUpCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span className="font-medium text-slate-200 text-xs truncate">
-                          Phiên bản hiện tại <strong className="text-emerald-400 font-mono">v{currentVersion}</strong>
+                        <span className="font-mono font-bold text-slate-200 text-xs">
+                          {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
                         </span>
                       </div>
 
@@ -448,9 +446,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                             onTriggerManualCheckUpdate();
                           }
                         }}
-                        className="py-1 px-3 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 text-xs font-bold shrink-0 shadow-sm transition-all active:scale-95 cursor-pointer"
+                        title="Tải cập nhật mới"
+                        className="p-1.5 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold shrink-0 shadow-sm transition-all active:scale-95 cursor-pointer flex items-center justify-center"
                       >
-                        Update
+                        <Download className="w-3.5 h-3.5" />
                       </button>
                     </div>
 
@@ -464,7 +463,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
                       <div>
-                        <div className="font-semibold text-rose-300">Xóa Sạch Dữ Liệu Trên Máy</div>
+                        <div className="font-semibold text-rose-300">Xóa dữ liệu</div>
                       </div>
                     </button>
                   </div>
