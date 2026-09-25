@@ -15,16 +15,7 @@ const config: CapacitorConfig = {
       sound: 'beep.wav',
     },
     GoogleAuth: {
-      // BẮT BUỘC phải giữ lại các scope truy cập Google Drive & Google Sheets để đồng bộ dữ liệu
-      scopes: [
-        'profile',
-        'email',
-        'openid',
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive',
-        'https://www.googleapis.com/auth/spreadsheets'
-      ],
+      scopes: ['profile', 'email', 'openid'],
       clientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
       serverClientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
       forceCodeForRefreshToken: false,

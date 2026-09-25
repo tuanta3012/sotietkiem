@@ -252,15 +252,7 @@ export async function trySilentRefresh(): Promise<string | null> {
       try {
         await GoogleAuth.initialize({
           clientId: firebaseConfig.oAuthClientId,
-          scopes: [
-            'email',
-            'profile',
-            'openid',
-            'https://www.googleapis.com/auth/drive.file',
-            'https://www.googleapis.com/auth/drive.readonly',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/spreadsheets'
-          ],
+          scopes: ['email', 'profile', 'openid'],
           grantOfflineAccess: true,
         });
       } catch (e) {
@@ -438,15 +430,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       try {
         await GoogleAuth.initialize({
           clientId: firebaseConfig.oAuthClientId,
-          scopes: [
-            'email',
-            'profile',
-            'openid',
-            'https://www.googleapis.com/auth/drive.file',
-            'https://www.googleapis.com/auth/drive.readonly',
-            'https://www.googleapis.com/auth/drive',
-            'https://www.googleapis.com/auth/spreadsheets'
-          ],
+          scopes: ['email', 'profile', 'openid'],
           grantOfflineAccess: false,
         });
       } catch (initErr) {

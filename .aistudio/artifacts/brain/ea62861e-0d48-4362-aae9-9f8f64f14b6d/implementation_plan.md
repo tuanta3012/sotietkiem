@@ -1,69 +1,51 @@
-# Kế hoạch Khắc phục Lỗi Đăng nhập Google (Mã 10) trên Android APK
+# Kế hoạch Đóng Gói Keystore Cố Định Trực Tiếp Vào Repository
 
-Kế hoạch toàn diện giải quyết triệt để lỗi đăng nhập Google (Mã lỗi 10: `DEVELOPER_ERROR`) trên ứng dụng Android APK khi đóng gói qua GitHub Actions, đồng thời sửa lỗi 404 trang web khi bấm liên kết đồng bộ.
+Nhận định của bạn hoàn toàn chính xác! Khi build trực tiếp bằng **Android Studio trên máy tính**, Android Studio dùng trực tiếp file `debug.keystore` chuẩn trên máy của bạn (có mã SHA-1 `4C:01:EF:4E:B3:77:59:57:C7:00:0B:4E:8C:2C:BF:BD:A4:BA:54:88` đã được khai báo sẵn trong `google-services.json`).
+
+Trong khi đó, trên **GitHub Actions**, việc giải mã chuỗi Base64 từ GitHub Secrets qua môi trường dòng lệnh Linux (base64 -d) thường xuyên gặp các lỗi:
+1. Thiếu ký tự đệm `=`, ngắt dòng ẩn `\r\n` khiến file keystore sinh ra bị lỗi định dạng.
+2. Khi file giải mã bị lỗi, Gradle âm thầm tự sinh một keystore ngẫu nhiên mới để tiếp tục build, dẫn đến file APK có mã SHA-1 lạ khiến Google từ chối (Mã 10).
+
+---
 
 ### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> Bạn đã xác nhận có cài đặt Secret `RELEASE_KEYSTORE_BASE64` trên GitHub Repo.
-> Tuy nhiên, lỗi **Mã 10** xảy ra do 1 trong 2 nguyên nhân cốt lõi sau:
-> 1. **Mã SHA-1 của Keystore thực tế chưa được thêm vào Firebase Console**: Khi GitHub Actions biên dịch, nó in ra dòng `SHA1: XX:XX:...`. Mã này phải được dán vào phần **Thêm vân tay (Add fingerprint)** của ứng dụng Android trong Firebase Console.
-> 2. **Cấu hình `strings.xml` và `server_client_id` trong Android**: Plugin Capacitor Google Auth yêu cầu tài nguyên `server_client_id` trong Android native để giao tiếp với Google Play Services.
+> **Giải pháp tối ưu & triệt để nhất**:
+> - Tạo một file `debug.keystore` chuẩn cố định ngay trong thư mục mã nguồn dự án (`keystore/debug.keystore`).
+> - Cấu hình Gradle chỉ định trực tiếp đến file này (`signingConfigs.debug.storeFile = file(...)`).
+> - Bằng cách này, **100% mọi lượt build trên GitHub Actions hay bất kỳ máy tính nào** đều sử dụng chung một file keystore duy nhất, tạo ra mã SHA-1 cố định vĩnh viễn, không phụ thuộc vào GitHub Secrets.
 
-- **Đã xác nhận**: Secret `RELEASE_KEYSTORE_BASE64` đã được cấu hình trên GitHub.
-- **Mục tiêu**: Tối ưu mã nguồn Capacitor, luồng xử lý lỗi đăng nhập, cơ chế sao lưu dữ liệu và khắc phục đường link bản Web mở từ ứng dụng Android.
-
----
-
-### 1. Tổng quan & Bản chất lỗi
-
-- **Hiện tượng**:
-  - Khi bấm **Đăng nhập bằng Google** trên file APK cài trên điện thoại, xuất hiện cảnh báo đỏ: *Lỗi xác thực Google trên Android (Mã 10: Mã SHA-1 của APK hoặc Client ID chưa khớp với cấu hình Firebase)*.
-  - Khi bấm nút *"Mở bản Web để đồng bộ"*, trình duyệt Chrome mở link và báo lỗi: *Error: Page not found (The requested URL was not found on this server)*.
-- **Bản chất**:
-  - Mã lỗi 10 (`CommonStatusCodes.DEVELOPER_ERROR`) là mã trả về trực tiếp từ ứng dụng **Google Play Services** của Android khi chữ ký của file APK chạy trên máy không khớp với bất kỳ OAuth 2.0 Client ID Android nào đã đăng ký trên Google Cloud / Firebase Console của dự án `gen-lang-client-0423718439`.
-  - Nút *"Mở bản Web để đồng bộ"* đang dẫn tới đường dẫn nội bộ máy chủ dev cũ hoặc không đúng định dạng URL preview công khai.
+- **Lựa chọn đã xác nhận**: Tạo file Keystore cố định ngay trong repository.
 
 ---
 
-### 2. Kế hoạch Thực hiện Chi tiết
+### 1. Chi tiết Các Bước Thực Hiện
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│               QUY TRÌNH KHẮC PHỤC TRIỆT ĐỂ             │
+│         GIẢI PHÁP KEYSTORE CỐ ĐỊNH TRONG REPO          │
 └────────────────────────────────────────────────────────┘
                            │
        ┌───────────────────┴───────────────────┐
        ▼                                       ▼
-【1. Sửa Mã Nguồn & Cấu Hình】       【2. Cập Nhật Workflow & SHA-1】
- • Cập nhật `capacitor.config.ts`    • In nổi bật mã SHA-1 trong Log GitHub
- • Đồng bộ `strings.xml` Android      • Hướng dẫn sao chép vào Firebase Console
- • Sửa URL nút "Mở bản Web"          • Đảm bảo Keystore cố định mọi lần build
- • Bổ sung chế độ đăng nhập dự phòng
+【1. Tạo Keystore Cố Định】           【2. Cấu hình Gradle & Workflow】
+ • Tạo file `keystore/debug.keystore`  • Cấu hình cứng `build.gradle`
+ • Trích xuất mã SHA-1 chuẩn           • Bỏ phụ thuộc GitHub Secrets Base64
+ • Thêm mã SHA-1 vào Firebase Console  • GitHub Actions luôn ký ra mã cố định
 ```
 
-#### Bước 1: Khắc phục cấu hình Native Android & Capacitor
-1. **Kiểm tra và chuẩn hóa cấu hình `server_client_id`**:
-   - Đảm bảo `capacitor.config.ts` trỏ đúng Web Client ID (`864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com`).
-   - Đảm bảo trong `android/app/src/main/res/values/strings.xml` có thẻ `<string name="server_client_id">...</string>` để Google Play Services nhận diện được Web Client ID cho việc cấp token.
-2. **Sửa lỗi link "Mở bản Web để đồng bộ"**:
-   - Thay thế URL nội bộ cũ bị lỗi 404 bằng đường dẫn chia sẻ công khai chính xác của ứng dụng (`https://ais-pre-ue6i2njozapz2wlld2tvs2-546075383474.asia-southeast1.run.app`).
+#### Bước 1: Tạo file Keystore cố định trong mã nguồn
+1. Khởi tạo thư mục `keystore/` trong dự án.
+2. Sinh file `keystore/debug.keystore` với alias `androiddebugkey` và mật khẩu chuẩn `android`.
+3. Trích xuất chính xác mã **SHA-1** của file keystore này và thông báo cho bạn để kiểm tra với Firebase Console.
 
-#### Bước 2: Tối ưu hóa file GitHub Actions (`auto-release.yml`)
-1. **In mã SHA-1 rõ ràng trong phần Summary của GitHub Action**:
-   - Bổ sung bước hiển thị mã SHA-1 của APK vào `$GITHUB_STEP_SUMMARY` để bạn có thể xem và copy ngay lập tức trên giao diện web của GitHub mà không cần lục tìm trong log.
-2. **Khắc phục lỗi giải mã Keystore**:
-   - Đảm bảo lệnh `base64 -d` tương thích trên Ubuntu runner, ghi đúng vào `~/.android/debug.keystore` và kiểm tra tính toàn vẹn của file keystore trước khi biên dịch Gradle.
+#### Bước 2: Cấu hình `auto-release.yml` và Gradle
+1. Loại bỏ hoàn toàn bước giải mã Base64 phức tạp trong `auto-release.yml`.
+2. Sao chép `keystore/debug.keystore` vào thẳng thư mục `android/app/debug.keystore` và `~/.android/debug.keystore`.
+3. Ép cấu hình `android/app/build.gradle` trỏ trực tiếp đến `debug.keystore` này khi đóng gói APK.
 
-#### Bước 3: Hướng dẫn người dùng thao tác một lần trên Firebase Console
-1. Mở trang quản trị [Firebase Console](https://console.firebase.google.com/) -> Dự án của bạn.
-2. Vào **Cài đặt dự án (Project settings)** -> cuộn xuống phần **Ứng dụng Android của bạn (`com.tietkiemgiadinh.app`)**.
-3. Bấm **Thêm vân tay (Add fingerprint)** -> Dán mã SHA-1 được GitHub Actions in ra vào.
-4. Tải file `google-services.json` mới nhất về thay thế (nếu có bổ sung client).
-
----
-
-### 3. Đánh giá & Rủi ro
-
-- **Tính tương thích**: Giữ nguyên toàn bộ tính năng hoạt động ngoại tuyến (Offline-First) và cơ chế lưu trữ nội bộ bằng IndexedDB/LocalStorage, đảm bảo người dùng vẫn nhập liệu và tính lãi suất bình thường ngay cả khi chưa kết nối mạng.
-- **An toàn dữ liệu**: Dữ liệu trên máy không bị ảnh hưởng khi cài đặt bản APK mới đè lên bản cũ nếu dùng chung keystore.
+#### Bước 3: Xác minh & Thử nghiệm
+1. Build test thử nghiệm và in mã SHA-1.
+2. Đảm bảo SHA-1 được đăng ký trên Firebase Console.
+3. Khi bạn tải APK mới từ GitHub Actions về, đăng nhập Google sẽ hoạt động hoàn hảo y hệt như khi bạn build từ Android Studio.

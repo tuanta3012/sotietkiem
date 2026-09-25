@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch giải quyết triệt để lỗi đăng nhập Google Mã 10 (DEVELOPER_ERROR) trên ứng dụng Android APK và sửa lỗi 404 khi mở bản web đồng bộ.",
-  "updatedAt":  "2026-09-25T10:55:35.322191818Z",
+  "summary":  "Kế hoạch giải quyết dứt điểm lỗi SHA-1: Đóng gói và lưu trữ file Keystore cố định trực tiếp trong Repository, cấu hình cứng trong Gradle để GitHub Actions và Android Studio luôn tạo ra bản APK có cùng mã chữ ký 100%.",
+  "updatedAt":  "2026-09-25T11:43:09.886029175Z",
   "requestFeedback":  true,
   "userFacing":  true
 }
