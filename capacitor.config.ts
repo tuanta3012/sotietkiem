@@ -25,8 +25,8 @@ const config: CapacitorConfig = {
         'https://www.googleapis.com/auth/drive',
         'https://www.googleapis.com/auth/spreadsheets'
       ],
-      clientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
-      serverClientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
+      clientId: '864440372329-fgoo891qp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
+      serverClientId: '864440372329-fgoo891qp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
       forceCodeForRefreshToken: false,
     },
   },
