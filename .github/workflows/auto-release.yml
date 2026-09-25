@@ -72,20 +72,14 @@ jobs:
 
       # 4. Cài đặt Thư viện & Build Web Assets
       - name: Install Dependencies
-        run: |
-          npm install --legacy-peer-deps
-          npm install @capacitor/android@latest --legacy-peer-deps
+        run: npm install --legacy-peer-deps
 
       - name: Build Web Assets
         run: npm run build
 
-      # 5. Sinh dự án Android & Đồng bộ Capacitor
-      - name: Add & Sync Capacitor Android
-        run: |
-          if [ ! -d "android" ]; then
-            npx cap add android
-          fi
-          npx cap sync android
+      # 5. Đồng bộ Capacitor
+      - name: Sync Capacitor Android
+        run: npx cap sync android
 
       # 6. Cập nhật Android SDK & Version
       - name: Update Android SDK & Version
@@ -145,14 +139,11 @@ jobs:
           keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
           echo "===================================================="
 
-      # 9. Đóng gói APK bằng Gradle (Tự tạo gradlew nếu thiếu)
+      # 9. Đóng gói APK bằng Gradle
       - name: Build Android APK
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
-          if [ ! -f "gradlew" ]; then
-            gradle wrapper
-          fi
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
