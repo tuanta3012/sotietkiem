@@ -409,94 +409,113 @@ export function useDriveSync({
           remoteSyncCooldownUntilRef.current = Date.now() + 5000;
           applyMasterSettlements(res.settlements || []);
 
+          const userEmail = currentUser?.email || 'unknown';
+          const role = (settingsRef.current?.members?.find(m => m.email?.toLowerCase() === userEmail.toLowerCase())?.role) ||
+                       (settingsRef.current?.currentRole) || 'admin';
+          const activeBooksCount = res.books?.length || 0;
+          const settlementsCount = res.settlements?.length || 0;
+
           recordSyncAuditLog({
             type: 'SYNC_PULL',
-            title: 'Đồng bộ dữ liệu từ Google Drive',
+            title: 'Đồng bộ dữ liệu từ Google Drive (PULL)',
             status: 'success',
             fileId,
-            userEmail: currentUser?.email,
-            currentRole: settingsRef.current?.currentRole,
-            sheetName: settingsRef.current?.googleSheetName,
-            summary: `Đã nạp ${res.books?.length || 0} sổ tiết kiệm, ${res.settlements?.length || 0} nhật ký tất toán.`,
+            userEmail,
+            currentRole: role,
+            sheetName: settingsRef.current?.googleSheetName || 'Google Sheets',
+            summary: `Đã nạp ${activeBooksCount} sổ tiết kiệm (Cột A-M), ${res.annualInterestHistory?.length || 0} mốc lãi (N-P), ${res.balanceGrowthHistory?.length || 0} mốc số dư (Q-S), ${settlementsCount} nhật ký tất toán (U-AC).`,
             details: {
-              activeBooksCount: res.books?.length || 0,
-              settlementsCount: res.settlements?.length || 0,
-              settlementDetails: res.settlements?.map((s) => ({
-                bookCode: s.bookCode,
-                date: s.settlementDate,
-                type: s.settlementType,
-                principalMil: s.principal / 1_000_000,
-                actualInterestMil: s.actualInterestVND / 1_000_000,
+              activeBooksCount,
+              totalPrincipalMillion: res.books?.reduce((s, b) => s + b.principal, 0) ? Math.round(res.books.reduce((s, b) => s + b.principal, 0) / 1_000_000) : 0,
+              columns_A_to_M_books: res.books?.map((b, idx) => ({
+                col_A_bank: b.bankId.toUpperCase(),
+                col_B_owner: b.owner,
+                col_C_type: b.depositType || 'counter',
+                col_D_rate: `${b.interestRate}%`,
+                col_E_principalMil: b.principal / 1_000_000,
+                col_F_startDate: b.startDate,
+                col_G_maturityDate: b.maturityDate,
+                col_H_termMonths: b.termMonths,
+                col_J_termInterestMil: (b.estimatedInterest || 0) / 1_000_000,
+                col_K_annualInterestMil: (b.annualInterestEquivalent || 0) / 1_000_000,
+                col_L_maturityMonth: b.maturityMonthYear,
+                col_M_code: b.bookCode || `SO-${idx + 1}`,
+              })),
+              columns_N_to_P_annualInterest: res.annualInterestHistory,
+              columns_Q_to_S_balanceGrowth: res.balanceGrowthHistory,
+              columns_U_to_AC_settlements: res.settlements?.map((s) => ({
+                col_U_id: s.id,
+                col_V_date: s.settlementDate,
+                col_W_type: s.settlementType,
+                col_X_code: s.bookCode,
+                col_Y_bank: s.bankId,
+                col_Z_owner: s.owner,
+                col_AA_principalMil: s.principal / 1_000_000,
+                col_AB_actualInterestMil: s.actualInterestVND / 1_000_000,
+                col_AC_note: s.note,
               })),
             },
           });
 
-          if (res.books && res.books.length > 0) {
-            isInitialSyncDoneRef.current = true;
-            const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-          const mergedBooks = sortAndReindexBooks(activeRemote);
+          isInitialSyncDoneRef.current = true;
 
-          setBooks((prevBooks) => {
-            const nextStr = JSON.stringify(mergedBooks);
-            const prevStr = JSON.stringify(prevBooks);
-            if (prevStr === nextStr) {
-              return prevBooks; // Return same reference if data is unchanged
-            }
-            previousBooksStringRef.current = nextStr;
+          if (res.books && res.books.length > 0) {
+            const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
+            const mergedBooks = sortAndReindexBooks(activeRemote);
+
+            setBooks((prevBooks) => {
+              const nextStr = JSON.stringify(mergedBooks);
+              const prevStr = JSON.stringify(prevBooks);
+              if (prevStr === nextStr) {
+                return prevBooks;
+              }
+              previousBooksStringRef.current = nextStr;
+              try {
+                localStorage.removeItem('savings_books_cleared');
+                localStorage.setItem('savings_books_v3', nextStr);
+              } catch {
+                // ignore
+              }
+              return mergedBooks;
+            });
+
+            const nowStr = new Date().toLocaleString('vi-VN');
+            let fetchedName = settings.googleSheetName;
             try {
-              localStorage.removeItem('savings_books_cleared');
-              localStorage.setItem('savings_books_v3', nextStr);
+              const meta = await getRealGoogleDriveFileMetadata(token, fileId);
+              if (meta?.modifiedTime) {
+                lastCheckedModifiedTimeRef.current = meta.modifiedTime;
+              }
+              if (meta?.name && !fetchedName) {
+                fetchedName = meta.name;
+              }
             } catch {
               // ignore
             }
-            return mergedBooks;
-          });
-          const nowStr = new Date().toLocaleString('vi-VN');
-          let fetchedName = settings.googleSheetName;
-          try {
-            const meta = await getRealGoogleDriveFileMetadata(token, fileId);
-            if (meta?.modifiedTime) {
-              lastCheckedModifiedTimeRef.current = meta.modifiedTime;
-            }
-            if (meta?.name && !fetchedName) {
-              fetchedName = meta.name;
-            }
-          } catch {
-            // ignore
-          }
 
-          setSettings((prev) => {
-            const shouldUpdateName = fetchedName && fetchedName !== prev.googleSheetName;
-            if (!shouldUpdateName && prev.lastSyncTime === nowStr) {
-              return prev;
-            }
-            return {
-              ...prev,
-              lastSyncTime: nowStr,
-              ...(shouldUpdateName ? { googleSheetName: fetchedName } : {}),
-            };
-          });
+            setSettings((prev) => {
+              const shouldUpdateName = fetchedName && fetchedName !== prev.googleSheetName;
+              if (!shouldUpdateName && prev.lastSyncTime === nowStr) {
+                return prev;
+              }
+              return {
+                ...prev,
+                lastSyncTime: nowStr,
+                ...(shouldUpdateName ? { googleSheetName: fetchedName } : {}),
+              };
+            });
 
-          lastSyncedUrlRef.current = currentUrl;
-          setSyncDriveStatus(`Đã đồng bộ ${res.books.length} sổ từ Google Drive`);
-
-          // Nếu người dùng chủ động yêu cầu đồng bộ (pushAfterSync = true) HOẶC phát hiện dữ liệu tải về bị thiếu các cột tính toán cốt lõi, tự động điền đầy đủ ngược lên Drive ngay lập tức
-          const hasEmptyCalculatedColumns = res.books.some(
-            (b) =>
-              b.estimatedInterest === undefined ||
-              b.estimatedInterest === null ||
-              b.interestRateConverted === undefined ||
-              b.interestRateConverted === null
-          );
-          if ((pushAfterSync || hasEmptyCalculatedColumns) && token && mergedBooks.length > 0) {
+            lastSyncedUrlRef.current = currentUrl;
+            setSyncDriveStatus(`Đã đồng bộ ${res.books.length} sổ từ Google Drive`);
+          } else {
+            // File trên Google Drive trống hoặc chưa có sổ
+            setBooks([]);
             try {
-              await updateRealGoogleDriveFile(token, fileId, mergedBooks, settlementAdjustments);
-              console.info('[Central Hub Sync] Đã tự động điền đầy đủ các cột tính toán lên Google Drive do phát hiện cột rỗng.');
-            } catch (pushErr) {
-              console.warn('Lỗi cập nhật lại file sau khi đồng bộ:', pushErr);
-            }
+              localStorage.setItem('savings_books_v3', JSON.stringify([]));
+              localStorage.setItem('savings_books_cleared', 'true');
+            } catch {}
+            setSyncDriveStatus('File Google Drive chưa có sổ tiết kiệm nào.');
           }
-        }
         } else if (!res.success && res.errors && res.errors.length > 0) {
           isInitialSyncDoneRef.current = true;
           setSyncDriveStatus(res.errors[0]);
@@ -622,6 +641,50 @@ export function useDriveSync({
             members: settings.members,
             updatedAt: new Date().toISOString(),
           }).catch(() => {});
+
+          const userEmail = currentUser?.email || 'unknown';
+          const role = (settingsRef.current?.members?.find(m => m.email?.toLowerCase() === userEmail.toLowerCase())?.role) ||
+                       (settingsRef.current?.currentRole) || 'admin';
+
+          recordSyncAuditLog({
+            type: 'SYNC_PUSH',
+            title: 'Đồng bộ dữ liệu lên Google Drive (PUSH)',
+            status: 'success',
+            fileId,
+            userEmail,
+            currentRole: role,
+            sheetName: settingsRef.current?.googleSheetName || 'Google Sheets',
+            summary: `Đã ghi nhận ${updatedBooks.length} sổ tiết kiệm (Cột A-M) và ${adjs.length} nhật ký tất toán (U-AC) lên Google Drive.`,
+            details: {
+              activeBooksCount: updatedBooks.length,
+              totalPrincipalMillion: updatedBooks.reduce((s, b) => s + b.principal, 0) ? Math.round(updatedBooks.reduce((s, b) => s + b.principal, 0) / 1_000_000) : 0,
+              columns_A_to_M_books: updatedBooks.map((b, idx) => ({
+                col_A_bank: b.bankId.toUpperCase(),
+                col_B_owner: b.owner,
+                col_C_type: b.depositType || 'counter',
+                col_D_rate: `${b.interestRate}%`,
+                col_E_principalMil: b.principal / 1_000_000,
+                col_F_startDate: b.startDate,
+                col_G_maturityDate: b.maturityDate,
+                col_H_termMonths: b.termMonths,
+                col_J_termInterestMil: (b.estimatedInterest || 0) / 1_000_000,
+                col_K_annualInterestMil: (b.annualInterestEquivalent || 0) / 1_000_000,
+                col_L_maturityMonth: b.maturityMonthYear,
+                col_M_code: b.bookCode || `SO-${idx + 1}`,
+              })),
+              columns_U_to_AC_settlements: adjs.map((s) => ({
+                col_U_id: s.id,
+                col_V_date: s.settlementDate,
+                col_W_type: s.settlementType,
+                col_X_code: s.bookCode,
+                col_Y_bank: s.bankId,
+                col_Z_owner: s.owner,
+                col_AA_principalMil: s.principal / 1_000_000,
+                col_AB_actualInterestMil: s.actualInterestVND / 1_000_000,
+                col_AC_note: s.note,
+              })),
+            },
+          });
 
           setSyncDriveStatus('Đã đồng bộ 2 chiều thành công lên Google Drive');
         }
@@ -817,7 +880,7 @@ export function useDriveSync({
 
   // Centralized reactive effect: tự động đẩy thay đổi từ phía App lên Google Drive khi người dùng sửa dữ liệu
   useEffect(() => {
-    if (!isInitialSyncDoneRef.current || isSwitchingFileRef.current) {
+    if (!isInitialSyncDoneRef.current || isSwitchingFileRef.current || isSyncingRef.current) {
       return;
     }
 
@@ -1350,7 +1413,19 @@ export function useDriveSync({
       }
     } catch (err: any) {
       console.warn('Gia hạn token thất bại:', err);
-      setSyncDriveStatus('❌ Gia hạn kết nối Google Drive thất bại.');
+      const errMsg = err?.message || String(err);
+      setSyncDriveStatus(`❌ Gia hạn kết nối Google Drive thất bại: ${errMsg}`);
+      recordSyncAuditLog({
+        type: 'SYNC_ERROR',
+        title: 'Lỗi gia hạn kết nối Google Drive',
+        status: 'error',
+        userEmail: currentUser?.email,
+        currentRole: settingsRef.current?.currentRole,
+        sheetName: settingsRef.current?.googleSheetName,
+        summary: `Gia hạn kết nối thất bại: ${errMsg}`,
+        errorMessage: err?.stack || errMsg,
+      });
+      throw err;
     }
   }, [currentUser, setSettings, clearExpiredNoticeTimer]);
 

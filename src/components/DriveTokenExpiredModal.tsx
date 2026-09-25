@@ -15,16 +15,19 @@ export const DriveTokenExpiredModal: React.FC<DriveTokenExpiredModalProps> = ({
   isReconnecting = true,
 }) => {
   const [isRenewing, setIsRenewing] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen) return null;
 
   const handleConfirm = async () => {
     setIsRenewing(true);
+    setErrorMessage(null);
     try {
       await onRenewToken();
       onClose();
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Failed to renew token from modal:', err);
+      setErrorMessage(err?.message || 'Không thể gia hạn kết nối Google. Vui lòng kiểm tra mạng và thử lại.');
     } finally {
       setIsRenewing(false);
     }
@@ -32,7 +35,7 @@ export const DriveTokenExpiredModal: React.FC<DriveTokenExpiredModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 bg-slate-950/60 backdrop-blur-[2px] animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-[270px] rounded-2xl shadow-xl border border-emerald-100 overflow-hidden animate-in zoom-in-95 duration-200 text-slate-800">
+      <div className="bg-white w-full max-w-[290px] rounded-2xl shadow-xl border border-emerald-100 overflow-hidden animate-in zoom-in-95 duration-200 text-slate-800">
         {/* Header Icon Compact */}
         <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-3 text-center text-white relative">
           <div className="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mx-auto mb-1 border border-white/30 shadow-inner">
@@ -54,15 +57,20 @@ export const DriveTokenExpiredModal: React.FC<DriveTokenExpiredModalProps> = ({
               Phiên kết nối đã hết hạn (60 phút). Bấm kết nối lại để tiếp tục đồng bộ.
             </span>
           </div>
+
+          {errorMessage && (
+            <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-left text-[10.5px] text-rose-700 font-medium leading-tight">
+              ⚠️ {errorMessage}
+            </div>
+          )}
         </div>
 
         {/* Action Buttons Compact */}
         <div className="p-2.5 bg-slate-50 border-t border-slate-100 flex items-center space-x-1.5">
           <button
             type="button"
-            disabled={isRenewing}
             onClick={onClose}
-            className="flex-1 py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 font-medium text-[11px] transition-all cursor-pointer disabled:opacity-50"
+            className="flex-1 py-1.5 px-2 rounded-lg bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 font-medium text-[11px] transition-all cursor-pointer"
           >
             Để sau
           </button>

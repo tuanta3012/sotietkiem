@@ -15,7 +15,14 @@ const config: CapacitorConfig = {
       sound: 'beep.wav',
     },
     GoogleAuth: {
-      scopes: ['profile', 'email', 'openid'],
+      scopes: [
+        'profile',
+        'email',
+        'openid',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/spreadsheets',
+      ],
       clientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
       serverClientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
       forceCodeForRefreshToken: false,

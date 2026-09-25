@@ -252,7 +252,15 @@ export async function trySilentRefresh(): Promise<string | null> {
       try {
         await GoogleAuth.initialize({
           clientId: firebaseConfig.oAuthClientId,
-          scopes: ['email', 'profile', 'openid'],
+          serverClientId: firebaseConfig.oAuthClientId,
+          scopes: [
+            'email',
+            'profile',
+            'openid',
+            'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/drive.readonly',
+            'https://www.googleapis.com/auth/spreadsheets',
+          ],
           grantOfflineAccess: true,
         });
       } catch (e) {
@@ -430,7 +438,15 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       try {
         await GoogleAuth.initialize({
           clientId: firebaseConfig.oAuthClientId,
-          scopes: ['email', 'profile', 'openid'],
+          serverClientId: firebaseConfig.oAuthClientId,
+          scopes: [
+            'email',
+            'profile',
+            'openid',
+            'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/drive.readonly',
+            'https://www.googleapis.com/auth/spreadsheets',
+          ],
           grantOfflineAccess: false,
         });
       } catch (initErr) {
@@ -439,7 +455,11 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
 
       let nativeResult: any;
       try {
-        nativeResult = await GoogleAuth.signIn();
+        const signInPromise = GoogleAuth.signIn();
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian chờ phản hồi đăng nhập Google (15 giây). Vui lòng thử lại.')), 15000)
+        );
+        nativeResult = await Promise.race([signInPromise, timeoutPromise]);
       } catch (signInErr: any) {
         console.error('[Google Sign-In Native Error]', signInErr);
         const rawMsg = String(signInErr?.message || signInErr || '');
@@ -544,6 +564,13 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       throw new Error('Yêu cầu mở cửa sổ đăng nhập Google bị hủy do có cửa sổ khác đang mở.');
     }
     console.warn('Google Sign In Notice:', error?.message || error);
+    recordSyncAuditLog({
+      type: 'SYNC_ERROR',
+      title: 'Lỗi đăng nhập / xác thực Google',
+      status: 'error',
+      summary: `Đăng nhập Google thất bại: ${error?.message || error}`,
+      errorMessage: error?.stack || error?.message || String(error),
+    });
     throw error;
   } finally {
     isSigningIn = false;
@@ -910,19 +937,6 @@ export async function downloadRealGoogleDriveFile(
           if (liveData?.values && Array.isArray(liveData.values) && liveData.values.length > 0) {
             const matrixResult = parseMatrixData(liveData.values);
             if (matrixResult.success && (matrixResult.books.length > 0 || (matrixResult.settlements && matrixResult.settlements.length > 0))) {
-              recordSyncAuditLog({
-                type: 'SYNC_PULL',
-                title: 'Tải dữ liệu từ Google Sheets',
-                status: 'success',
-                fileId,
-                summary: `Đã đọc ${matrixResult.books.length} sổ tiết kiệm, ${matrixResult.annualInterestHistory?.length || 0} mốc lãi, ${matrixResult.settlements?.length || 0} nhật ký tất toán.`,
-                details: {
-                  activeBooksCount: matrixResult.books.length,
-                  annualYears: matrixResult.annualInterestHistory?.map((a) => a.year),
-                  balanceYears: matrixResult.balanceGrowthHistory?.map((b) => b.year),
-                  settlementsCount: matrixResult.settlements?.length || 0,
-                },
-              });
               return matrixResult;
             }
           }
@@ -994,21 +1008,6 @@ export async function downloadRealGoogleDriveFile(
 
     const arrayBuffer = await res.arrayBuffer();
     const parsedBinary = await parseWorkbook(arrayBuffer);
-    if (parsedBinary.success) {
-      recordSyncAuditLog({
-        type: 'SYNC_PULL',
-        title: 'Đọc file bảng tính từ Google Drive',
-        status: 'success',
-        fileId,
-        summary: `Đã đọc ${parsedBinary.books.length} sổ tiết kiệm, ${parsedBinary.annualInterestHistory?.length || 0} mốc lãi.`,
-        details: {
-          activeBooksCount: parsedBinary.books.length,
-          annualYears: parsedBinary.annualInterestHistory?.map((a) => a.year),
-          balanceYears: parsedBinary.balanceGrowthHistory?.map((b) => b.year),
-          settlementsCount: parsedBinary.settlements?.length || 0,
-        },
-      });
-    }
     return parsedBinary;
   } catch (error: any) {
     if (error?.message?.includes('hết hạn') || error?.message?.includes('invalid authentication credentials')) {
@@ -1369,14 +1368,6 @@ export async function updateRealGoogleDriveFile(
         if (!putRes.ok) {
           const err = await putRes.json().catch(() => ({}));
           const errMsg = err?.error?.message || `Lỗi cập nhật Google Sheet (Mã ${putRes.status})`;
-          recordSyncAuditLog({
-            type: 'SYNC_PUSH',
-            title: 'Lỗi ghi dữ liệu Google Sheets',
-            status: 'error',
-            fileId,
-            summary: errMsg,
-            errorMessage: errMsg,
-          });
 
           if (
             putRes.status === 401 ||
@@ -1393,32 +1384,6 @@ export async function updateRealGoogleDriveFile(
           }
           throw new Error(errMsg);
         }
-
-        // Ghi lại nhật ký kiểm toán thành công
-        recordSyncAuditLog({
-          type: 'SYNC_PUSH',
-          title: 'Đồng bộ Google Sheets thành công',
-          status: 'success',
-          fileId,
-          summary: `Đã cập nhật ${rowCount} sổ tiết kiệm, cập nhật Lãi 2026-2028, Số dư 2026, bảo toàn dữ liệu lịch sử.`,
-          details: {
-            activeBooksCount: rowCount,
-            updatedRanges: updatedRangesAudit,
-            annualInterestUpdated: [
-              { year: 2026, interestMillion: annualInterestList.find((a) => a.year === 2026)?.interestEarnedMillion ?? 2059 },
-              { year: 2027, interestMillion: annualInterestList.find((a) => a.year === 2027)?.interestEarnedMillion ?? 2775 },
-              { year: 2028, interestMillion: annualInterestList.find((a) => a.year === 2028)?.interestEarnedMillion ?? 449 },
-            ],
-            annualInterestPreserved: [2022, 2023, 2024, 2025],
-            balanceGrowthUpdated: {
-              year: 2026,
-              balanceMillion: balanceGrowthList.find((b) => b.year === 2026)?.balanceMillion ?? 37000,
-              incomeMillion: balanceGrowthList.find((b) => b.year === 2026)?.annualIncomeMillion ?? 1711,
-            },
-            balanceGrowthPreserved: [2019, 2020, 2021, 2022, 2023, 2024, 2025],
-            settlementsCount: activityLogList.length,
-          },
-        });
 
         // 5. Đồng bộ định dạng font (Arial 10pt), kẻ khung viền (Borders) và sao chép định dạng đồng đều cho toàn bộ các dòng
         try {
