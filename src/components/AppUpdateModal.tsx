@@ -27,7 +27,17 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   const handleUpdate = () => {
     const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
     if (targetLink) {
-      window.open(targetLink, '_system');
+      try {
+        const a = document.createElement('a');
+        a.href = targetLink;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch {
+        window.open(targetLink, '_system');
+      }
     }
   };
 

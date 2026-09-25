@@ -202,29 +202,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
                 <button
                   type="button"
                   onClick={handleUseOffline}
-                  className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
                 >
                   <HardDrive className="w-4 h-4" />
                   <span>Vào ứng dụng ngay (Chế độ Ngoại tuyến)</span>
                 </button>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleOpenInNewTab}
-                    className="flex-1 py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-medium text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    <span>Mở bản Web để đồng bộ</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowShaHelp(true)}
-                    className="py-1.5 px-2.5 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-xl font-medium text-[11px] flex items-center justify-center space-x-1 transition-colors cursor-pointer"
-                  >
-                    <Info className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Khắc phục SHA-1</span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowShaHelp(true)}
+                  className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-xl font-medium text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
+                >
+                  <Info className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Xem cách Khắc phục mã SHA-1</span>
+                </button>
               </div>
             ) : (
               <div className="pt-2 flex items-center justify-between gap-2 border-t border-rose-900/60">
@@ -253,7 +243,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
       {/* Modal Hướng dẫn khắc phục SHA-1 APK */}
       {showShaHelp && (
         <div className="fixed inset-0 z-60 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 text-slate-200 space-y-4 shadow-2xl animate-in zoom-in-95">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-md w-full p-5 text-slate-200 space-y-4 shadow-2xl animate-in zoom-in-95 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center space-x-2">
                 <ShieldCheck className="w-5 h-5 text-emerald-400" />
@@ -269,7 +259,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
             </div>
 
             <p className="text-xs text-slate-300 leading-relaxed">
-              Google yêu cầu khớp mã <strong>SHA-1 Fingerprint</strong> của file APK đã ký với cấu hình Firebase / Google Cloud Console:
+              Google yêu cầu mã <strong>SHA-1 Fingerprint</strong> của file APK đã ký phải khớp 100% với cấu hình trong Firebase Console:
             </p>
 
             <div className="space-y-2 text-xs">
@@ -287,25 +277,20 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
                 </div>
               </div>
 
-              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1">
-                <div className="text-[11px] text-slate-400">Mã SHA-1 đã đăng ký trong Firebase:</div>
-                <div className="font-mono text-[10px] text-emerald-300 break-all flex items-center justify-between">
-                  <span>4C:01:EF:4E:B3:77:59:57:C7:00:0B:4E:8C:2C:BF:BD:A4:BA:54:88</span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopy('4C:01:EF:4E:B3:77:59:57:C7:00:0B:4E:8C:2C:BF:BD:A4:BA:54:88', 'sha')}
-                    className="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white shrink-0 ml-2"
-                  >
-                    {copiedKey === 'sha' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
+              <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 space-y-1.5">
+                <div className="text-[11px] text-slate-400 font-medium">Các bước lấy mã SHA-1 chính xác:</div>
+                <ol className="list-decimal pl-4 space-y-1 text-slate-300 text-[11px]">
+                  <li>Vào <strong>GitHub Repo</strong> của bạn &gt; tab <strong>Actions</strong> &gt; chọn lần chạy mới nhất.</li>
+                  <li>Xem mục <strong>Summary</strong> ở dưới cùng để lấy mã <strong>SHA-1 Fingerprint</strong> của bản build.</li>
+                  <li>Mở <strong>Firebase Console</strong> &gt; <strong>Project settings</strong> &gt; cuộn xuống phần app Android.</li>
+                  <li>Bấm <strong>Add fingerprint</strong> và dán mã SHA-1 vào.</li>
+                </ol>
               </div>
             </div>
 
             <div className="text-[11px] text-slate-400 space-y-1.5 bg-slate-800/40 p-3 rounded-xl">
-              <div className="font-semibold text-slate-300">Giải pháp nhanh nhất:</div>
-              <div>1. Bấm nút <strong>"Sử dụng ngay (Ngoại tuyến)"</strong>: Dùng 100% tính năng, quản lý sổ, lãi suất, khóa sinh trắc học ngay trên máy.</div>
-              <div>2. Hoặc mở bản Web trên điện thoại để đồng bộ trực tiếp với Google Drive mà không bị giới hạn bởi chữ ký APK.</div>
+              <div className="font-semibold text-slate-300">Tính năng Ngoại tuyến:</div>
+              <div>Bạn có thể bấm nút dưới đây để sử dụng ngay toàn bộ tính năng quản lý sổ, tính lãi suất, khóa sinh trắc học hoàn toàn trên máy mà không cần đợi cấu hình SHA-1.</div>
             </div>
 
             <button

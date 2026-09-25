@@ -89,12 +89,24 @@ jobs:
           fi
           npx cap sync android
 
-      # 6. Cập nhật SDK & Phiên bản trong file Gradle vừa tạo
-      - name: Update Android SDK & Version
+      # 6. Cập nhật SDK, strings.xml (server_client_id cho Google Auth) & Phiên bản
+      - name: Update Android Config, SDK & Strings
         env:
           VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
           VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
         run: |
+          mkdir -p android/app/src/main/res/values
+          cat << 'EOF' > android/app/src/main/res/values/strings.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <resources>
+              <string name="app_name">Tiết Kiệm Gia Đình</string>
+              <string name="title_activity_main">Tiết Kiệm Gia Đình</string>
+              <string name="package_name">com.tietkiemgiadinh.app</string>
+              <string name="custom_url_scheme">com.tietkiemgiadinh.app</string>
+              <string name="server_client_id">864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com</string>
+          </resources>
+          EOF
+
           if [ -f "android/variables.gradle" ]; then
             sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
             sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
@@ -117,7 +129,7 @@ jobs:
         run: |
           npx @capacitor/assets generate --android || true
 
-      # 8. Khai báo Keystore cố định từ GitHub Secrets & In SHA-1
+      # 8. Khai báo Keystore cố định từ GitHub Secrets & In SHA-1 vào Summary
       - name: Setup Fixed Keystore & Print SHA-1
         run: |
           mkdir -p ~/.android
@@ -139,10 +151,20 @@ jobs:
               -dname "CN=Android Debug, O=Android, C=US"
           fi
           
+          mkdir -p android/app
+          cp ~/.android/debug.keystore android/app/debug.keystore
+          
+          SHA1_VAL=$(keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
+          
           echo "===================================================="
           echo "=== FIXED SHA-1 FINGERPRINT FOR FIREBASE CONSOLE ==="
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:"
+          echo "SHA-1: $SHA1_VAL"
           echo "===================================================="
+          
+          echo "### 🔑 Android APK Fingerprints (SHA-1)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package Name:** \`com.tietkiemgiadinh.app\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **SHA-1 Fingerprint:** \`$SHA1_VAL\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Hãy kiểm tra và thêm mã SHA-1 trên vào **Firebase Console -> Project Settings -> Your Apps -> Android App** nếu đăng nhập Google báo Mã 10." >> $GITHUB_STEP_SUMMARY
 
       # 9. Đóng gói APK bằng Gradle
       - name: Build Android APK

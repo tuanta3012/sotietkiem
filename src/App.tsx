@@ -56,8 +56,9 @@ const TabLoadingFallback = () => (
   </div>
 );
 
-const CURRENT_APP_VERSION = '1.0.0';
-const UPDATE_SERVER_URL = 'https://github.com/tuanta3012/sotietkiem/raw/refs/heads/main/version.json';
+import { CURRENT_APP_VERSION } from './version';
+
+const UPDATE_SERVER_URL = 'https://raw.githubusercontent.com/tuanta3012/sotietkiem/main/version.json';
 
 function isNewerVersion(current: string, latest: string): boolean {
   const parse = (v: string) => v.replace(/^v/i, '').split('.').map(Number);
@@ -278,7 +279,9 @@ export default function App() {
               apkUrl: data.apkUrl || data.downloadUrl,
               changelog: Array.isArray(data.changelog)
                 ? data.changelog
-                : (data.changelog ? [data.changelog] : ['Nâng cấp hiệu năng và khắc phục lỗi hệ thống.']),
+                : (data.notes 
+                    ? [data.notes] 
+                    : (data.changelog ? [data.changelog] : ['Nâng cấp hiệu năng và khắc phục lỗi hệ thống.'])),
               releaseDate: data.releaseDate || data.date,
             });
             setIsUpdateModalOpen(true);
