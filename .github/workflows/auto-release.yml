@@ -75,24 +75,12 @@ jobs:
         run: npm run build
 
       # 5. Sinh dự án Android & Đồng bộ Capacitor
-      - name: Capacitor Sync / Add Android
+      - name: Add & Sync Capacitor Android
         run: |
           npx cap add android || true
           npx cap sync android
 
-      # 6. Copy google-services.json (nếu có) & Sinh Icon cho App
-      - name: Copy google-services.json
-        run: |
-          if [ -f "google-services.json" ]; then
-            mkdir -p android/app
-            cp google-services.json android/app/google-services.json
-          fi
-
-      - name: Generate App Icons
-        run: |
-          npx @capacitor/assets generate --android || true
-
-      # 7. Cập nhật Android SDK (minSdk 23, compileSdk/targetSdk 35) & Version
+      # 6. Cập nhật Android SDK (minSdk 23, compileSdk/targetSdk 35) & Version
       - name: Update Android SDK & Version
         env:
           VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
@@ -103,8 +91,22 @@ jobs:
             sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
             sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
           fi
-          sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
-          sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
+          fi
+
+      # 7. Copy google-services.json (nếu có) & Sinh Icon cho App
+      - name: Copy google-services.json
+        run: |
+          if [ -f "google-services.json" ]; then
+            mkdir -p android/app
+            cp google-services.json android/app/google-services.json
+          fi
+
+      - name: Generate App Icons
+        run: |
+          npx @capacitor/assets generate --android || true
 
       # 8. Khai báo Keystore cố định từ GitHub Secrets (Tự động sửa lỗi chuỗi Base64)
       - name: Setup Fixed Keystore & Print SHA-1
