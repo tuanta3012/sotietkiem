@@ -35,6 +35,9 @@ import {
   saveWorkspaceMasterStateToFirestore,
 } from './firebaseFirestoreService';
 
+// Web Client ID chuẩn (client_type = 3) dùng cho Google Authentication trên Capacitor Android Native
+const WEB_CLIENT_ID = '864440372329-fgoo891qp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com';
+
 // Initialize Firebase App
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
@@ -251,7 +254,7 @@ export async function trySilentRefresh(): Promise<string | null> {
     try {
       try {
         await GoogleAuth.initialize({
-          clientId: firebaseConfig.oAuthClientId,
+          clientId: WEB_CLIENT_ID,
           scopes: [
             'email',
             'profile',
@@ -320,7 +323,6 @@ export async function trySilentRefresh(): Promise<string | null> {
   }
 
   // 2. Web Platform / AI Studio Preview Flow
-  // On Web, if Firebase auth session is preserved, but access token expired, we let re-auth handle it gracefully
   return null;
 }
 
@@ -377,7 +379,6 @@ export const isRunningInIframe = (): boolean => {
  */
 export const checkRedirectResult = async (): Promise<{ user: User; accessToken: string } | null> => {
   if (Capacitor.isNativePlatform()) {
-    // Native platforms use signInWithCredential/GoogleAuth.signIn, so redirect flows don't apply.
     return null;
   }
   try {
@@ -437,7 +438,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       console.info('[Google Sign-In] Khởi chạy GoogleAuth trên thiết bị Native App...');
       try {
         await GoogleAuth.initialize({
-          clientId: firebaseConfig.oAuthClientId,
+          clientId: WEB_CLIENT_ID,
           scopes: [
             'email',
             'profile',
@@ -579,8 +580,6 @@ export async function ensureGoogleAccessToken(): Promise<string> {
 
 /**
  * Actively validate the token by checking validity first, then making a test API call if needed.
- * If the token is missing, expired, or invalid, it will automatically try silent-refresh,
- * and if that also fails, it will call signInWithGoogle() to re-authorize.
  */
 export async function validateAndEnsureToken(): Promise<string> {
   const silentToken = await trySilentRefresh();
@@ -648,7 +647,6 @@ export const formatFileSizeBytes = (bytes?: string | number): string => {
 
 /**
  * A highly robust fetch wrapper that handles transient network dropouts with exponential backoff retries.
- * It also translates CORS/Adblock/Shield-blocked requests into crystal clear troubleshooting steps.
  */
 async function fetchWithRetry(url: string | URL, options?: RequestInit, retries = 3, delay = 1000): Promise<Response> {
   const controller = new AbortController();
@@ -679,15 +677,14 @@ async function fetchWithRetry(url: string | URL, options?: RequestInit, retries 
         return fetchWithRetry(url, options, retries - 1, delay * 2);
       }
       
-      // If it fails after all retries, analyze if it is likely blocked by an Adblocker or sandbox iframe
       const isIframe = window.self !== window.top;
       let adblockWarning = 'Lỗi kết nối (Failed to fetch). ';
       if (error?.name === 'AbortError') {
         adblockWarning += 'Kết nối tới Google Drive bị quá thời gian chờ (Timeout sau 15s). Vui lòng kiểm tra kết nối mạng và thử lại.';
       } else if (isIframe) {
-        adblockWarning += 'Trình duyệt hoặc phần mềm chặn quảng cáo (Adblock / Brave Shields) đã chặn kết nối Google Drive API từ môi trường xem trước (iframe) của AI Studio. Vui lòng bấm vào biểu tượng "Mở trong tab mới" (ở góc trên bên phải màn hình AI Studio) để chạy ứng dụng trực tiếp, hoặc tạm thời vô hiệu hóa Adblock cho trang web này.';
+        adblockWarning += 'Trình duyệt hoặc phần mềm chặn quảng cáo đã chặn kết nối Google Drive API từ môi trường xem trước. Vui lòng mở trong tab mới.';
       } else {
-        adblockWarning += 'Không thể kết nối tới máy chủ Google Drive. Vui lòng kiểm tra lại đường truyền internet của bạn hoặc tạm thời tắt các phần mềm chặn quảng cáo (Adblock / Brave Shields).';
+        adblockWarning += 'Không thể kết nối tới máy chủ Google Drive. Vui lòng kiểm tra lại đường truyền internet.';
       }
       throw new Error(adblockWarning);
     }
@@ -696,7 +693,7 @@ async function fetchWithRetry(url: string | URL, options?: RequestInit, retries 
 }
 
 /**
- * List real files from the user's Google Drive (All spreadsheets and table files)
+ * List real files from the user's Google Drive
  */
 export async function listRealGoogleDriveFiles(
   accessToken: string,
@@ -741,11 +738,9 @@ export async function listRealGoogleDriveFiles(
     const data = await res.json();
     const rawFiles: any[] = data.files || [];
 
-    // Lấy thông tin Master Sync Pointer file (nguồn chân lý duy nhất) để đánh dấu file nào đang là Hub
     const masterState = await getMasterSyncStateFromDrive(accessToken).catch(() => null);
     const activeFileId = masterState && masterState.status === 'active' ? masterState.activeFileId : null;
 
-    // Filter to relevant spreadsheet files or master JSON backup file
     const files = rawFiles.filter((f) => {
       const isGSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
       const isExcel =
@@ -784,7 +779,6 @@ export async function listRealGoogleDriveFiles(
       };
     });
 
-    // Sort files: Central hub files always placed at the very top
     mappedFiles.sort((a, b) => {
       if (a.isCentralHub && !b.isCentralHub) return -1;
       if (!a.isCentralHub && b.isCentralHub) return 1;
@@ -819,7 +813,6 @@ export async function getRealGoogleDriveFileMetadata(
 } | null> {
   if (!accessToken || !fileId) return null;
   try {
-    // 1. Thử gọi Google Drive API v3
     const driveRes = await fetchWithRetry(
       `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink,modifiedTime,version,trashed`,
       {
@@ -847,7 +840,6 @@ export async function getRealGoogleDriveFileMetadata(
       }
     }
 
-    // 2. Fallback: Nếu là Google Spreadsheet và Drive API bị chặn quyền đọc danh mục, thử gọi Google Sheets API v4
     const sheetsRes = await fetchWithRetry(
       `https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=properties.title`,
       {
@@ -884,7 +876,6 @@ export async function downloadRealGoogleDriveFile(
   mimeType?: string
 ): Promise<ParseExcelResult> {
   try {
-    // 0. Check if file is trashed or deleted first
     const metaCheck = await getRealGoogleDriveFileMetadata(accessToken, fileId);
     if (metaCheck?.isDeleted) {
       throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc chuyển vào thùng rác trên Google Drive.');
@@ -892,10 +883,8 @@ export async function downloadRealGoogleDriveFile(
 
     let resolvedMime = mimeType || metaCheck?.mimeType;
     
-    // 1. First, try direct Google Sheets API v4 (Instant live data with ZERO caching delay)
     if (!resolvedMime || resolvedMime === 'application/vnd.google-apps.spreadsheet') {
       try {
-        // First get sheet info to find the first sheet's title
         const metaSheetRes = await fetchWithRetry(
           `https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=sheets(properties(title,sheetId))`,
           {
@@ -954,7 +943,6 @@ export async function downloadRealGoogleDriveFile(
       }
     }
 
-    // 2. If not a native Google Sheet or if direct Sheets API didn't return rows, fetch metadata
     if (!resolvedMime) {
       const metaRes = await fetchWithRetry(
         `https://www.googleapis.com/drive/v3/files/${fileId}?fields=mimeType,name,trashed`,
@@ -977,10 +965,8 @@ export async function downloadRealGoogleDriveFile(
     let fetchUrl: string;
 
     if (resolvedMime === 'application/vnd.google-apps.spreadsheet') {
-      // Export Google Sheet as Excel binary (.xlsx)
       fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
     } else {
-      // Download binary file (Excel or CSV)
       fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
     }
 
@@ -1038,7 +1024,6 @@ export async function downloadRealGoogleDriveFile(
 
 /**
  * Upload and update an existing file on Google Drive (Real 2-way sync Push)
- * Works for both native Google Sheets (via Sheets API) and binary Excel files (.xlsx)
  */
 export async function updateRealGoogleDriveFile(
   accessToken: string,
@@ -1047,12 +1032,11 @@ export async function updateRealGoogleDriveFile(
   settlements: SettlementAdjustment[] = []
 ): Promise<boolean> {
   try {
-    // 0. Check if file is trashed or deleted first
     const metaCheck = await getRealGoogleDriveFileMetadata(accessToken, fileId);
     if (metaCheck?.isDeleted) {
       throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc chuyển vào thùng rác trên Google Drive.');
     }
-    // 1. Get file metadata to check if it's a native Google Sheet or an uploaded Excel file
+
     let isGoogleSheet = false;
     try {
       const metaRes = await fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=mimeType,name`, {
@@ -1071,11 +1055,9 @@ export async function updateRealGoogleDriveFile(
       if (err?.message?.includes('FILE_NOT_FOUND')) {
         throw err;
       }
-      // fallback for other network errors
     }
 
     if (isGoogleSheet) {
-      // 0. Fetch first sheet title to prefix ranges safely (in case user has custom sheet name)
       let sheetPrefix = '';
       let targetSheetId = 0;
       try {
@@ -1099,12 +1081,9 @@ export async function updateRealGoogleDriveFile(
         // fallback
       }
 
-      // 1. Translate App SavingsBook[] to exact 12-column data rows (starting at Row 2)
-      // Note: Sổ đã tất toán đã bị loại bỏ khỏi books, nên dataRows chỉ gồm các sổ đang hoạt động
       const dataRows = translateBooksToDataRows(books);
       const rowCount = dataRows.length;
 
-      // 2. Clear ONLY the book rows range (A2:L35 max), preserving Row 1 Headers and Columns N..S
       const maxBookRows = Math.max(35, rowCount + 10);
       const clearRange = `${sheetPrefix}A2:L${maxBookRows}`;
 
@@ -1120,7 +1099,6 @@ export async function updateRealGoogleDriveFile(
         // ignore clear error
       }
 
-      // 3. Đọc dữ liệu các cột N:AC hiện có từ Google Sheet để bảo toàn dữ liệu lịch sử
       let existingMatrixNtoAC: any[][] = [];
       try {
         const getMetaRange = `${sheetPrefix}N1:AC40`;
@@ -1138,7 +1116,6 @@ export async function updateRealGoogleDriveFile(
         console.warn('Không thể đọc trước dữ liệu N:AC từ Google Sheet:', readErr);
       }
 
-      // 3.1. Tính toán LÃI HÀNG NĂM & SỐ CUỐI NĂM
       const annualInterestList = getDynamicAnnualInterestHistory(books, settlements);
       const balanceGrowthList = getDynamicBalanceGrowthHistory(books, settlements);
       const activityLogList = deduplicateSettlementAdjustments(settlements || []);
@@ -1146,7 +1123,6 @@ export async function updateRealGoogleDriveFile(
       const batchDataPayload: { range: string; majorDimension: string; values: any[][] }[] = [];
       const updatedRangesAudit: string[] = [];
 
-      // A. CẬP NHẬT DANH MỤC SỔ TIẾT KIỆM (A2:L...)
       const targetRange = `${sheetPrefix}A2:L${1 + rowCount}`;
       batchDataPayload.push({
         range: targetRange,
@@ -1155,8 +1131,6 @@ export async function updateRealGoogleDriveFile(
       });
       updatedRangesAudit.push(`A2:L${1 + rowCount}`);
 
-      // Xóa triệt để các hàng sổ cũ dôi dư (ví dụ vừa tất toán sổ làm giảm số lượng sổ từ 18 xuống 17)
-      // Giúp ngăn ngừa việc PULL lại từ Sheet làm "hồi sinh" sổ cũ đã tất toán!
       const clearBookStartRow = 2 + rowCount;
       const clearBookEndRow = Math.max(clearBookStartRow + 10, 100);
       const emptyBookRow = ['', '', '', '', '', '', '', '', '', '', '', ''];
@@ -1168,9 +1142,7 @@ export async function updateRealGoogleDriveFile(
         values: clearBookRows,
       });
 
-      // B. BẢO VỆ & CẬP NHẬT LÃI HÀNG NĂM (Cột N & O)
-      // Tìm các năm hiện có ở cột N (index 0)
-      const existingAnnualMap = new Map<number, number>(); // year -> sheet row (1-indexed)
+      const existingAnnualMap = new Map<number, number>();
       for (let i = 1; i < existingMatrixNtoAC.length; i++) {
         const yrRaw = parseInt(String(existingMatrixNtoAC[i]?.[0] || '').replace(/\D/g, ''), 10);
         if (yrRaw >= 2000 && yrRaw <= 2099) {
@@ -1185,8 +1157,6 @@ export async function updateRealGoogleDriveFile(
         existingAnnualMap.has(2025);
 
       if (hasHistoricalAnnuals) {
-        // Sheet ĐÃ CÓ các năm cũ: TUYỆT ĐỐI KHÔNG GHI ĐÈ các hàng cũ!
-        // Chỉ cập nhật hoặc ghi tiếp cho các năm 2026, 2027, 2028
         const yearsToUpdate = [2026, 2027, 2028];
         let maxAnnualRow = Math.max(...Array.from(existingAnnualMap.values()), 1);
 
@@ -1207,8 +1177,6 @@ export async function updateRealGoogleDriveFile(
           updatedRangesAudit.push(`N${targetRow}:O${targetRow} (Năm ${yr})`);
         });
       } else {
-        // Sheet BỊ THIẾU các năm cũ (do lỗi ghi đè trước đây):
-        // KHÔI PHỤC TOÀN DIỆN chuỗi lịch sử (2022 - 2028)
         const fullAnnuals = [
           ...DEFAULT_HISTORICAL_ANNUALS.filter((a) => a.year < 2026),
           ...annualInterestList.filter((a) => a.year >= 2026),
@@ -1222,9 +1190,7 @@ export async function updateRealGoogleDriveFile(
         updatedRangesAudit.push(`N2:O${1 + annualRows.length} (Khôi phục toàn bộ 2022-2028)`);
       }
 
-      // C. BẢO VỆ & CẬP NHẬT SỐ DƯ CUỐI NĂM & THU NHẬP NĂM (Cột Q, R, S)
-      // Tìm các năm hiện có ở cột Q (index 3)
-      const existingBalanceMap = new Map<number, number>(); // year -> sheet row (1-indexed)
+      const existingBalanceMap = new Map<number, number>();
       for (let i = 1; i < existingMatrixNtoAC.length; i++) {
         const yrRaw = parseInt(String(existingMatrixNtoAC[i]?.[3] || '').replace(/\D/g, ''), 10);
         if (yrRaw >= 2000 && yrRaw <= 2099) {
@@ -1239,8 +1205,6 @@ export async function updateRealGoogleDriveFile(
         existingBalanceMap.has(2025);
 
       if (hasHistoricalBalances) {
-        // Sheet ĐÃ CÓ các năm cũ 2019-2025: TUYỆT ĐỐI KHÔNG GHI ĐÈ các hàng cũ!
-        // Chỉ cập nhật số dư & thu nhập năm 2026
         const rec2026 = balanceGrowthList.find((b) => b.year === 2026);
         const bal2026 = rec2026?.balanceMillion ?? 37000;
         const inc2026 = rec2026?.annualIncomeMillion !== undefined ? rec2026.annualIncomeMillion : 1711;
@@ -1258,8 +1222,6 @@ export async function updateRealGoogleDriveFile(
         });
         updatedRangesAudit.push(`Q${targetRow}:S${targetRow} (Năm 2026)`);
       } else {
-        // Sheet BỊ THIẾU các năm cũ (do lỗi ghi đè trước đây):
-        // KHÔI PHỤC TOÀN DIỆN chuỗi lịch sử (2019 - 2026)
         const rec2026 = balanceGrowthList.find((b) => b.year === 2026);
         const bal2026 = rec2026?.balanceMillion ?? 37000;
         const inc2026 = rec2026?.annualIncomeMillion !== undefined ? rec2026.annualIncomeMillion : 1711;
@@ -1281,8 +1243,6 @@ export async function updateRealGoogleDriveFile(
         updatedRangesAudit.push(`Q2:S${1 + fullBalances.length} (Khôi phục toàn bộ 2019-2026)`);
       }
 
-      // D. BẢO VỆ & CẬP NHẬT NHẬT KÝ BIẾN ĐỘNG / TẤT TOÁN (Cột U..AC)
-      // Tự động nhận diện cấu trúc 9 cột (có ID biến động ở U) hoặc cấu trúc cũ 8 cột (bắt đầu bằng Ngày ở U)
       let colUHeader = '';
       if (existingMatrixNtoAC.length > 0 && existingMatrixNtoAC[0]) {
         colUHeader = String(existingMatrixNtoAC[0][7] || '').toLowerCase().normalize('NFC').trim();
@@ -1292,7 +1252,6 @@ export async function updateRealGoogleDriveFile(
       let maxExistingActivityRow = 1;
       existingMatrixNtoAC.slice(1).forEach((r, idx) => {
         const rowNum = idx + 2;
-        // Kiểm tra xem hàng này ở cột U..AC có dữ liệu không (indices 7..15 trong N:AC)
         const checkIndices = is9ColLayout ? [7, 8, 9, 10, 11, 12, 13, 14, 15] : [7, 8, 9, 10, 11, 12, 13, 14];
         const hasData = checkIndices.some(
           (cIdx) => r[cIdx] !== undefined && String(r[cIdx]).trim() !== ''
@@ -1301,13 +1260,11 @@ export async function updateRealGoogleDriveFile(
           maxExistingActivityRow = Math.max(maxExistingActivityRow, rowNum);
         }
       });
-      const existingActivityCount = Math.max(0, maxExistingActivityRow - 1);
 
       if (activityLogList.length > 0) {
         const activityRows = activityLogList.map((s, idx) => {
           const cleanCode = (s.bookCode || 'SO').replace(/\s+/g, '').toUpperCase();
           const shortBank = getBankShortCode(s.bankId, cleanCode);
-          // Thống nhất kiểu ID biến động theo dạng ADJ_{index}_{Mã_Sổ} (ví dụ ADJ_1_SEA-2609-1100)
           const standardizedId = `ADJ_${idx + 1}_${cleanCode}`;
 
           if (is9ColLayout) {
@@ -1336,8 +1293,6 @@ export async function updateRealGoogleDriveFile(
           }
         });
 
-        // Nếu số dòng nhật ký hiện có trên Sheet nhiều hơn số dòng app ghi (ví dụ Sheet đang có 4 dòng, nhưng app chỉ ghi 1 dòng):
-        // Bắt buộc xóa sạch các dòng dôi dư để dọn sạch nhật ký thừa
         if (maxExistingActivityRow > 1 + activityRows.length) {
           const clearStartRow = 2 + activityRows.length;
           const clearEndRow = Math.max(maxExistingActivityRow, 10);
@@ -1351,7 +1306,7 @@ export async function updateRealGoogleDriveFile(
             majorDimension: 'ROWS',
             values: clearRows,
           });
-          updatedRangesAudit.push(`U${clearStartRow}:${clearColLetter}${clearEndRow} (Dọn sạch ${clearRowCount} dòng nhật ký thừa trên Sheet)`);
+          updatedRangesAudit.push(`U${clearStartRow}:${clearColLetter}${clearEndRow}`);
         }
 
         const targetColLetter = is9ColLayout ? 'AC' : 'AB';
@@ -1360,11 +1315,9 @@ export async function updateRealGoogleDriveFile(
           majorDimension: 'ROWS',
           values: activityRows,
         });
-        updatedRangesAudit.push(`U2:${targetColLetter}${1 + activityRows.length} (${activityRows.length} dòng nhật ký)`);
+        updatedRangesAudit.push(`U2:${targetColLetter}${1 + activityRows.length}`);
       }
-      // Lưu ý: Nếu existingActivityCount > 0 và activityLogList rỗng, TUYỆT ĐỐI KHÔNG GHI ĐÈ để bảo vệ dòng dữ liệu cũ trong Sheet!
 
-      // 4. Batch update chính xác vào các ô được chỉ định (KHÔNG DÙNG PADDING Ô TRỐNG ĐỂ XÓA DỮ LIỆU)
       if (rowCount > 0) {
         const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`;
 
@@ -1398,8 +1351,7 @@ export async function updateRealGoogleDriveFile(
             putRes.status === 401 ||
             err?.error?.status === 'UNAUTHENTICATED' ||
             err?.error?.code === 401 ||
-            err?.error?.message?.includes('invalid authentication credentials') ||
-            err?.error?.message?.includes('Invalid Credentials')
+            err?.error?.message?.includes('invalid authentication credentials')
           ) {
             setGoogleAccessToken(null);
             throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
@@ -1410,33 +1362,18 @@ export async function updateRealGoogleDriveFile(
           throw new Error(errMsg);
         }
 
-        // Ghi lại nhật ký kiểm toán thành công
         recordSyncAuditLog({
           type: 'SYNC_PUSH',
           title: 'Đồng bộ Google Sheets thành công',
           status: 'success',
           fileId,
-          summary: `Đã cập nhật ${rowCount} sổ tiết kiệm, cập nhật Lãi 2026-2028, Số dư 2026, bảo toàn dữ liệu lịch sử.`,
+          summary: `Đã cập nhật ${rowCount} sổ tiết kiệm.`,
           details: {
             activeBooksCount: rowCount,
             updatedRanges: updatedRangesAudit,
-            annualInterestUpdated: [
-              { year: 2026, interestMillion: annualInterestList.find((a) => a.year === 2026)?.interestEarnedMillion ?? 2059 },
-              { year: 2027, interestMillion: annualInterestList.find((a) => a.year === 2027)?.interestEarnedMillion ?? 2775 },
-              { year: 2028, interestMillion: annualInterestList.find((a) => a.year === 2028)?.interestEarnedMillion ?? 449 },
-            ],
-            annualInterestPreserved: [2022, 2023, 2024, 2025],
-            balanceGrowthUpdated: {
-              year: 2026,
-              balanceMillion: balanceGrowthList.find((b) => b.year === 2026)?.balanceMillion ?? 37000,
-              incomeMillion: balanceGrowthList.find((b) => b.year === 2026)?.annualIncomeMillion ?? 1711,
-            },
-            balanceGrowthPreserved: [2019, 2020, 2021, 2022, 2023, 2024, 2025],
-            settlementsCount: activityLogList.length,
           },
         });
 
-        // 5. Đồng bộ định dạng font (Arial 10pt), kẻ khung viền (Borders) và sao chép định dạng đồng đều cho toàn bộ các dòng
         try {
           const sheetsMetaRes = await fetchWithRetry(
             `https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=sheets.properties`,
@@ -1450,7 +1387,6 @@ export async function updateRealGoogleDriveFile(
 
             const formatBody = {
               requests: [
-                // 1. Sao chép định dạng chuẩn (PASTE_FORMAT) từ dòng 2 (hàng mẫu) xuống toàn bộ các dòng còn lại của bảng sổ
                 {
                   copyPaste: {
                     source: {
@@ -1470,7 +1406,6 @@ export async function updateRealGoogleDriveFile(
                     pasteType: 'PASTE_FORMAT',
                   },
                 },
-                // 2. Ép phông chữ Arial 10pt Bold cho tiêu đề hàng 1 (Cột A đến AC)
                 {
                   repeatCell: {
                     range: {
@@ -1493,7 +1428,6 @@ export async function updateRealGoogleDriveFile(
                     fields: 'userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment',
                   },
                 },
-                // 3. Đảm bảo phông chữ Arial 10pt đồng nhất 100% cho TẤT CẢ các vùng dữ liệu (Sổ A..L, Lãi N..O, Số dư Q..S, Nhật ký U..AC)
                 {
                   repeatCell: {
                     range: {
@@ -1516,7 +1450,6 @@ export async function updateRealGoogleDriveFile(
                     fields: 'userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment',
                   },
                 },
-                // 4. Kẻ khung viền mỏng đồng nhất cho tất cả các ô từ A2 đến L(1+rowCount)
                 {
                   updateBorders: {
                     range: {
@@ -1552,7 +1485,6 @@ export async function updateRealGoogleDriveFile(
       }
       return true;
     } else {
-      // Binary Excel (.xlsx) file on Google Drive
       const currentYear = new Date().getFullYear();
       const annualInterestList = getDynamicAnnualInterestHistory(books, settlements).filter(
         (r) => r.year <= currentYear
@@ -1581,8 +1513,7 @@ export async function updateRealGoogleDriveFile(
           res.status === 401 ||
           err?.error?.status === 'UNAUTHENTICATED' ||
           err?.error?.code === 401 ||
-          err?.error?.message?.includes('invalid authentication credentials') ||
-          err?.error?.message?.includes('Invalid Credentials')
+          err?.error?.message?.includes('invalid authentication credentials')
         ) {
           setGoogleAccessToken(null);
           throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
@@ -1650,8 +1581,7 @@ export async function createRealGoogleDriveFile(
         res.status === 401 ||
         err?.error?.status === 'UNAUTHENTICATED' ||
         err?.error?.code === 401 ||
-        err?.error?.message?.includes('invalid authentication credentials') ||
-        err?.error?.message?.includes('Invalid Credentials')
+        err?.error?.message?.includes('invalid authentication credentials')
       ) {
         setGoogleAccessToken(null);
         throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
@@ -1663,7 +1593,6 @@ export async function createRealGoogleDriveFile(
     const linkedTimestamp = new Date().toISOString();
     const webViewLink = data.webViewLink || `https://drive.google.com/file/d/${data.id}/view`;
 
-    // Save Master Sync State on Drive
     try {
       const currentMaster = await getMasterSyncStateFromDrive(accessToken);
       await saveMasterSyncStateOnDrive(accessToken, {
@@ -1699,22 +1628,10 @@ export async function createRealGoogleDriveFile(
   }
 }
 
-/**
- * Stamp central hub metadata (appProperties, description, linked_timestamp) on a linked Google Drive file.
- * Ensures any device logging in with the same account can auto-discover this file as the central data hub (Single Source of Truth).
- * Automatically un-stamps any previous files so only 1 file on Drive remains marked as active central hub.
- */
-/**
- * Master Sync State stored directly on user's Google Drive as a single source of truth
- */
 export type { MasterSyncState };
 
 export const MASTER_STATE_FILENAME = 'so_tiet_kiem_backup.json';
 
-/**
- * Helper to sync MasterSyncState into AppSettings and compute current role dynamically.
- * Accepts optional currentSettings to compare and skip redundant setSettings calls (avoiding app re-renders).
- */
 export function applyMasterStateToSettings(
   masterState: MasterSyncState | null,
   currentUserEmail: string | undefined,
@@ -1744,7 +1661,6 @@ export function applyMasterStateToSettings(
   const newFileName = masterState.activeFileId ? masterState.activeFileName : undefined;
   const newTimestamp = masterState.activeFileId ? masterState.linkedTimestamp : undefined;
 
-  // Auto-revoke permissions if Admin detects members who self-exited on Drive
   if (accessToken && cleanUserEmail && adminEmail && cleanUserEmail === adminEmail && currentSettings?.members) {
     const missingMembers = currentSettings.members.filter(
       (oldM) => !newMembers.some((newM) => newM.email.trim().toLowerCase() === oldM.email.trim().toLowerCase())
@@ -1757,8 +1673,6 @@ export function applyMasterStateToSettings(
     }
   }
 
-  // Tự động rà soát và đồng bộ quyền Google Drive (file Excel và file JSON master) khớp với danh sách members trong JSON khi Admin đăng nhập/đồng bộ:
-  // Nếu JSON không có danh sách user (danh sách members rỗng hoặc chỉ có Admin), toàn bộ quyền chia sẻ cho người khác phải bị thu hồi ngay!
   if (accessToken && cleanUserEmail && adminEmail && cleanUserEmail === adminEmail) {
     if (masterState.activeFileId) {
       synchronizeDrivePermissionsWithJsonMembers(
@@ -1781,7 +1695,6 @@ export function applyMasterStateToSettings(
     }).catch(() => {});
   }
 
-  // Jump out early if currentSettings provided and nothing changed
   if (currentSettings) {
     const hasRoleChange = currentSettings.currentRole !== resolvedRole;
     const hasMembersChange = JSON.stringify(currentSettings.members || []) !== JSON.stringify(newMembers);
@@ -1791,7 +1704,7 @@ export function applyMasterStateToSettings(
     const hasTimestampChange = Boolean(newTimestamp && currentSettings.lastLocalLinkTimestamp !== newTimestamp);
 
     if (!hasRoleChange && !hasMembersChange && !hasOwnerChange && !hasFileChange && !hasFileNameChange && !hasTimestampChange) {
-      return; // Skip setSettings completely to prevent unnecessary re-renders
+      return;
     }
   }
 
@@ -1823,16 +1736,13 @@ export function applyMasterStateToSettings(
     }
 
     if (Object.keys(updates).length === 0) {
-      return prev; // Return prev unchanged so React skips re-render
+      return prev;
     }
 
     return { ...prev, ...updates };
   });
 }
 
-/**
- * Helper to get current Vietnam time formatted nicely for human reading in JSON
- */
 export function formatIsoToVietnamTime(isoStr?: string): string {
   try {
     const d = isoStr ? new Date(isoStr) : new Date();
@@ -1854,22 +1764,13 @@ export function formatIsoToVietnamTime(isoStr?: string): string {
   }
 }
 
-function getVietnamTimeFormatted(): string {
-  return formatIsoToVietnamTime();
-}
-
-/**
- * Retrieve the active Master Sync Pointer state from Firebase Firestore (fallback to Drive JSON if migrating)
- */
 export async function getMasterSyncStateFromDrive(accessToken: string): Promise<MasterSyncState | null> {
   try {
-    // 1. Ưu tiên tuyệt đối nạp từ Firebase Firestore (Nguồn sự thật duy nhất cho Master State)
     const firestoreMaster = await getWorkspaceMasterStateFromFirestore();
     if (firestoreMaster) {
       return firestoreMaster;
     }
 
-    // 2. Fallback đọc 1 lần từ Drive nếu đang trong quá trình chuyển giao
     if (accessToken) {
       const searchUrl = new URL('https://www.googleapis.com/drive/v3/files');
       searchUrl.searchParams.set('pageSize', '10');
@@ -1893,7 +1794,6 @@ export async function getMasterSyncStateFromDrive(accessToken: string): Promise<
           if (contentRes.ok) {
             const state = await contentRes.json();
             if (state && (state.activeFileId || state.status)) {
-              // Tự động chuyển giao ngay lên Firestore
               saveWorkspaceMasterStateToFirestore(state).catch(() => {});
               return state as MasterSyncState;
             }
@@ -1909,9 +1809,6 @@ export async function getMasterSyncStateFromDrive(accessToken: string): Promise<
   }
 }
 
-/**
- * Lấy file ID của file master pointer trên Google Drive (nếu có để dọn dẹp)
- */
 export async function getMasterPointerFileId(accessToken: string): Promise<string | null> {
   try {
     const cached = localStorage.getItem(MASTER_POINTER_FILE_ID_KEY);
@@ -1920,11 +1817,6 @@ export async function getMasterPointerFileId(accessToken: string): Promise<strin
   return null;
 }
 
-/**
- * Save or update the active Master Workspace state on Firebase Firestore.
- * KHÔNG CÒN TẠO HOẶC LƯU FILE so_tiet_kiem_backup.json TRÊN GOOGLE DRIVE NỮA.
- * Trên Google Drive chỉ lưu file bảng tính liên kết (.xlsx hoặc Google Sheets).
- */
 export async function saveMasterSyncStateOnDrive(
   accessToken: string,
   state: MasterSyncState
@@ -1957,10 +1849,8 @@ export async function saveMasterSyncStateOnDrive(
       updatedAtVi: nowVi,
     };
 
-    // 1. Lưu trạng thái Master Workspace lên Firebase Firestore
     await saveWorkspaceMasterStateToFirestore(preparedState);
 
-    // 2. Dọn dẹp sạch sẽ các file JSON cũ trên Google Drive (nếu còn sót lại) để Drive chỉ có file liên kết
     if (accessToken) {
       try {
         const searchUrl = new URL('https://www.googleapis.com/drive/v3/files');
@@ -1987,7 +1877,6 @@ export async function saveMasterSyncStateOnDrive(
       } catch {}
     }
 
-    // 3. Đồng bộ quyền truy cập Google Drive cho FILE BẢNG TÍNH LIÊN KẾT DUY NHẤT
     if (preparedState.activeFileId && accessToken) {
       await synchronizeDrivePermissionsWithJsonMembers(
         accessToken,
@@ -2004,10 +1893,6 @@ export async function saveMasterSyncStateOnDrive(
   }
 }
 
-/**
- * Set the active linked file on Firebase Firestore Master State.
- * Automatically preserves the ORIGINAL linkedTimestamp unless explicitly switching to another file.
- */
 export async function setMasterSyncLinked(
   accessToken: string,
   fileId: string,
@@ -2020,7 +1905,6 @@ export async function setMasterSyncLinked(
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
 
-  // 1. Determine and PRESERVE the authentic linkedTimestamp
   let resolvedLinkedTimestamp = existingLinkedTimestamp;
 
   if (!resolvedLinkedTimestamp && !isSwitching) {
@@ -2032,7 +1916,6 @@ export async function setMasterSyncLinked(
     } catch {}
   }
 
-  // 2. Fetch file details to ensure accurate metadata in Master State
   let resolvedName = fileName;
   let resolvedUrl = fileUrl;
   let resolvedMime: string | undefined;
@@ -2048,12 +1931,10 @@ export async function setMasterSyncLinked(
     // fallback
   }
 
-  // If this is a truly new link or file switch, establish the new linked timestamp
   if (!resolvedLinkedTimestamp) {
     resolvedLinkedTimestamp = new Date().toISOString();
   }
 
-  // If switching files, revoke permissions of members on the previous file
   if (isSwitching && previousFileId) {
     try {
       const currentMaster = await getWorkspaceMasterStateFromFirestore();
@@ -2069,7 +1950,6 @@ export async function setMasterSyncLinked(
     }
   }
 
-  // 3. Update the Master Workspace State on Firestore
   try {
     const actionType: 'link' | 'switch' | 'create_and_link' = isSwitching ? 'switch' : 'link';
     const currentMaster = await getWorkspaceMasterStateFromFirestore();
@@ -2090,7 +1970,6 @@ export async function setMasterSyncLinked(
       updatedAt: new Date().toISOString(),
     });
 
-    // Automatically synchronize file permissions for the linked Google Sheet!
     await synchronizeDrivePermissionsWithJsonMembers(
       accessToken,
       fileId,
@@ -2104,10 +1983,6 @@ export async function setMasterSyncLinked(
   return resolvedLinkedTimestamp;
 }
 
-/**
- * Touch updatedAt on Master Workspace State on Firebase Firestore after a successful data sync,
- * leaving linkedTimestamp 100% UNTOUCHED and PRESERVED.
- */
 export async function touchMasterSyncStateOnDrive(
   accessToken: string,
   fileId: string,
@@ -2120,7 +1995,6 @@ export async function touchMasterSyncStateOnDrive(
     const currentMaster = await getWorkspaceMasterStateFromFirestore();
     const nowIso = new Date().toISOString();
 
-    // If current master state is explicitly unlinked, DO NOT auto-touch it back to active!
     if (currentMaster && (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink')) {
       return;
     }
@@ -2143,9 +2017,6 @@ export async function touchMasterSyncStateOnDrive(
   }
 }
 
-/**
- * Update the Master Workspace State on Firebase Firestore to 'unlinked' status when user explicitly unlinks.
- */
 export async function setMasterSyncUnlinked(
   accessToken: string,
   userEmail?: string
@@ -2156,7 +2027,6 @@ export async function setMasterSyncUnlinked(
       return;
     }
 
-    // Phân quyền nghiêm ngặt: Chỉ Admin của Workspace mới có quyền hủy liên kết file trung tâm
     const cleanUser = userEmail?.trim().toLowerCase();
     const adminEmail = (currentMaster.adminEmail || currentMaster.linkedAccountEmail || '').trim().toLowerCase();
     if (cleanUser && adminEmail && cleanUser !== adminEmail) {
@@ -2164,7 +2034,6 @@ export async function setMasterSyncUnlinked(
       return;
     }
 
-    // Revoke Drive file permission for all non-admin members on the file being unlinked
     try {
       if (currentMaster.activeFileId && currentMaster.members && currentMaster.members.length > 0) {
         const activeId = currentMaster.activeFileId;
@@ -2196,9 +2065,6 @@ export async function setMasterSyncUnlinked(
   }
 }
 
-/**
- * Auto-discover the latest central hub file directly from Firebase Firestore
- */
 export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   _userEmail?: string
@@ -2207,12 +2073,10 @@ export async function autoDiscoverLatestCentralHub(
     const masterState = await getWorkspaceMasterStateFromFirestore();
     if (!masterState) return null;
 
-    // If master state is explicitly unlinked or has no active file, do NOT auto-discover anything
     if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
       return null;
     }
 
-    // Verify file still exists and is accessible on Google Drive
     try {
       const meta = await getRealGoogleDriveFileMetadata(accessToken, masterState.activeFileId);
       if (meta && !meta.isDeleted) {
@@ -2235,9 +2099,6 @@ export async function autoDiscoverLatestCentralHub(
   }
 }
 
-/**
- * Revoke Google Drive file permission for a specific user email
- */
 export async function revokeFilePermission(
   accessToken: string,
   fileId: string,
@@ -2247,7 +2108,6 @@ export async function revokeFilePermission(
     if (!fileId || !userEmail) return false;
     const cleanEmail = userEmail.trim().toLowerCase();
 
-    // 1. Get permissions list for the file
     const listUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,emailAddress,role,type)`;
     const listRes = await fetchWithRetry(listUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -2261,7 +2121,6 @@ export async function revokeFilePermission(
     const data = await listRes.json();
     const permissions: Array<{ id: string; emailAddress?: string; role?: string; type?: string }> = data.permissions || [];
 
-    // 2. Find permission entry for target user (only type: 'user', never touch type: 'anyone')
     const userPerm = permissions.find(
       (p) => p.type === 'user' && p.emailAddress?.trim().toLowerCase() === cleanEmail
     );
@@ -2270,7 +2129,6 @@ export async function revokeFilePermission(
       return false;
     }
 
-    // 3. Delete the permission
     const delUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${userPerm.id}`;
     const delRes = await fetchWithRetry(delUrl, {
       method: 'DELETE',
@@ -2284,9 +2142,6 @@ export async function revokeFilePermission(
   }
 }
 
-/**
- * Remove a specific member email from Master Workspace State and revoke their Drive file permissions
- */
 export async function removeMemberFromDriveMaster(
   accessToken: string,
   memberEmailToRemove: string
@@ -2306,7 +2161,6 @@ export async function removeMemberFromDriveMaster(
       updatedAt: new Date().toISOString(),
     });
 
-    // Revoke Drive access permissions on Central Hub
     if (currentMaster.activeFileId) {
       await revokeFilePermission(accessToken, currentMaster.activeFileId, cleanTarget).catch(() => {});
     }
@@ -2315,9 +2169,6 @@ export async function removeMemberFromDriveMaster(
   }
 }
 
-/**
- * Update member role on Google Drive by adjusting file permissions
- */
 export async function updateMemberRoleOnDrive(
   accessToken: string,
   fileId: string,
@@ -2329,10 +2180,8 @@ export async function updateMemberRoleOnDrive(
     const cleanEmail = userEmail.trim().toLowerCase();
     const driveRole = newRole === 'EDITOR' ? 'writer' : 'reader';
 
-    // Step 1: Revoke existing permission to ensure clean state without conflicting roles
     await revokeFilePermission(accessToken, fileId, cleanEmail);
 
-    // Step 2: Grant new permission at target role
     return await shareFileWithUserEmail(accessToken, fileId, cleanEmail, driveRole);
   } catch (err) {
     console.warn(`Lỗi khi cập nhật role cho ${userEmail} trên Google Drive:`, err);
@@ -2340,9 +2189,6 @@ export async function updateMemberRoleOnDrive(
   }
 }
 
-/**
- * Grant Google Drive file permissions to a specific email address (e.g., 'reader' or 'writer')
- */
 export async function shareFileWithUserEmail(
   accessToken: string,
   fileId: string,
@@ -2371,13 +2217,6 @@ export async function shareFileWithUserEmail(
   }
 }
 
-/**
- * Synchronizes Google Drive permissions of a file with the list of members in the Master Sync State.
- * - If the JSON member list has NO users (is empty or only has Admin): ALL permissions on Drive
- *   (both Excel and JSON files) are revoked, retaining ONLY the Admin / Owner.
- * - Any user on Drive not present in the JSON member list is immediately revoked.
- * - Any member in the JSON list is granted or updated to the correct role (EDITOR -> writer, VIEWER -> reader).
- */
 export async function synchronizeDrivePermissionsWithJsonMembers(
   accessToken: string,
   fileId: string,
@@ -2389,7 +2228,6 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
     const cleanAdminEmail = adminEmail?.trim().toLowerCase();
     const activeMembers = members || [];
 
-    // Tập hợp tất cả email Admin (từ adminEmail và các member có role ADMIN)
     const adminEmailsSet = new Set<string>();
     if (cleanAdminEmail && cleanAdminEmail !== 'admin' && cleanAdminEmail !== 'google user') {
       adminEmailsSet.add(cleanAdminEmail);
@@ -2400,7 +2238,6 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
       }
     });
 
-    // Danh sách thành viên được chia sẻ (non-admin: EDITOR hoặc VIEWER)
     const nonAdminMembers = activeMembers.filter(
       (m) => m && m.email && m.role !== 'ADMIN'
     );
@@ -2409,7 +2246,6 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
       memberMap.set(m.email.trim().toLowerCase(), m);
     });
 
-    // 1. Lấy danh sách quyền Google Drive hiện tại của file
     const listUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,emailAddress,role,type,displayName)&supportsAllDrives=true&pageSize=100`;
     const listRes = await fetchWithRetry(listUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -2423,7 +2259,6 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
     const data = await listRes.json();
     const permissions: Array<{ id: string; emailAddress?: string; role?: string; type?: string; displayName?: string }> = data.permissions || [];
 
-    // Helper xóa permission an toàn và ghi log rõ ràng
     const deletePermission = async (pId: string, desc: string) => {
       console.info(`[Permission Sync] Thu hồi quyền truy cập Drive: ${desc} (permId: ${pId}) trên file ${fileId}`);
       const delUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${pId}?supportsAllDrives=true`;
@@ -2438,27 +2273,20 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
       }
     };
 
-    // 2. Duyệt qua từng permission trên Drive để đối chiếu
     for (const p of permissions) {
-      // Tuyệt đối không xóa Owner của file
       if (p.role === 'owner') continue;
 
       const emailClean = p.emailAddress?.trim().toLowerCase();
 
-      // Nếu là Admin đã xác định, giữ nguyên quyền
       if (emailClean && adminEmailsSet.has(emailClean)) {
         continue;
       }
 
-      // TH1: File JSON không có danh sách user chia sẻ (danh sách members rỗng hoặc chỉ có Admin)
-      // -> Đã thống nhất nếu JSON không có user thì các file liên quan (JSON + Excel) PHẢI REMOVE HẾT QUYỀN ĐI, CHỈ CÒN ADMIN!
       if (nonAdminMembers.length === 0) {
         await deletePermission(p.id, emailClean || p.displayName || p.type || p.id);
         continue;
       }
 
-      // TH2: Có danh sách user chia sẻ trong JSON
-      // Thu hồi link chia sẻ công khai hoặc chia sẻ theo domain
       if (p.type === 'anyone' || p.type === 'domain') {
         await deletePermission(p.id, `Public/Domain Link (${p.type})`);
         continue;
@@ -2466,11 +2294,9 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
 
       const memberInJson = emailClean ? memberMap.get(emailClean) : null;
 
-      // Nếu user trên Drive KHÔNG có trong danh sách chia sẻ của JSON -> Thu hồi quyền!
       if (!memberInJson) {
         await deletePermission(p.id, emailClean || p.displayName || p.type || p.id);
       } else {
-        // User có trong JSON, kiểm tra role (EDITOR -> writer, VIEWER -> reader)
         const expectedDriveRole = memberInJson.role === 'EDITOR' ? 'writer' : 'reader';
         if (p.role !== expectedDriveRole) {
           console.info(`[Permission Sync] Cập nhật role cho ${p.emailAddress} thành ${expectedDriveRole} để khớp với JSON`);
@@ -2482,7 +2308,6 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
       }
     }
 
-    // 3. Nếu có thành viên trong JSON chưa được cấp quyền trên Drive, cấp quyền cho họ
     if (nonAdminMembers.length > 0) {
       const driveEmails = new Set(
         permissions
@@ -2506,4 +2331,3 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
     console.warn('[Permission Sync] Error synchronizing Drive permissions with JSON:', err);
   }
 }
-
