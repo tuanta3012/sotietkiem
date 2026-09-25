@@ -36,7 +36,6 @@ import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
 import { scheduleMaturityNotifications } from './utils/notificationService';
-import { PullToRefreshWrapper } from './components/PullToRefreshWrapper';
 
 // Chuyển hai component có kích thước lớn và chứa biểu đồ thành dạng lazy load
 const MobilizationOptimizer = React.lazy(() =>
@@ -854,12 +853,6 @@ export default function App() {
         }}
       />
 
-      <PullToRefreshWrapper
-        onRefresh={async () => {
-          await syncBooksFromDrive(true, undefined, true);
-          showToast('Đã làm mới dữ liệu từ Google Drive thành công!', 'success', 3000);
-        }}
-      >
         {/* Top Navbar */}
         <Navbar
           activeTab={activeTab}
@@ -1100,7 +1093,6 @@ export default function App() {
             Quản Lý Sổ Tiết Kiệm Gia Đình &bull; Gửi gối đầu &bull; Tối ưu hóa huy động vốn tại Ngân hàng Việt Nam
           </p>
         </footer>
-      </PullToRefreshWrapper>
 
       {/* APK Auto-Update Modal */}
       <AppUpdateModal

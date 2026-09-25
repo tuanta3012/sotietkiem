@@ -622,18 +622,27 @@ export function extractHistoricalTablesFromMatrix(
     }
 
     const cleanDateStr = String(actDateRaw || '').trim();
-    const hasMeaningfulData =
-      (actCodeRaw && String(actCodeRaw).trim() !== '') ||
-      (actBankRaw && String(actBankRaw).trim() !== '') ||
-      (actPrincipalRaw && translateMoneyFromSheet(actPrincipalRaw) > 0) ||
-      (actInterestRaw && translateMoneyFromSheet(actInterestRaw) > 0);
+    const cleanDateLower = cleanDateStr.toLowerCase();
+    if (
+      cleanDateLower.includes('ngày') ||
+      cleanDateLower.includes('date') ||
+      cleanDateLower.includes('tổng') ||
+      cleanDateLower.includes('total') ||
+      cleanDateLower.includes('stt') ||
+      cleanDateLower.includes('nhật ký')
+    ) {
+      continue;
+    }
+
+    const principalVal = translateMoneyFromSheet(actPrincipalRaw);
+    const interestVal = translateMoneyFromSheet(actInterestRaw);
+    const hasMeaningfulData = (principalVal > 0 || interestVal > 0) && !!(String(actCodeRaw || '').trim() || String(actBankRaw || '').trim());
 
     if (cleanDateStr !== '' && hasMeaningfulData) {
       const dateIso = translateDateFromSheet(cleanDateStr);
-      if (!dateIso) continue;
-      const yr = parseInt(dateIso.slice(0, 4), 10) || new Date().getFullYear();
-      const principalVal = translateMoneyFromSheet(actPrincipalRaw);
-      const interestVal = translateMoneyFromSheet(actInterestRaw);
+      if (!dateIso || !/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) continue;
+      const yr = parseInt(dateIso.slice(0, 4), 10);
+      if (isNaN(yr) || yr < 2000 || yr > 2100) continue;
       const typeStr = String(actTypeRaw || '').toLowerCase();
       const settlementType = typeStr.includes('trước') ? 'early' : 'maturity';
       const ownerVal = normalizeOwner(actOwnerRaw, String(actBankRaw || ''), String(actCodeRaw || ''));

@@ -66,8 +66,8 @@ export function useDriveSync({
   // Helper đồng bộ danh sách nhật ký tất toán từ file liên kết trên Google Drive (Nguồn sự thật duy nhất)
   const applyMasterSettlements = useCallback(
     (remoteSettlements: SettlementAdjustment[] | undefined) => {
-      if (!setSettlementAdjustments || !Array.isArray(remoteSettlements)) return;
-      const cleanNext = deduplicateSettlementAdjustments(remoteSettlements);
+      if (!setSettlementAdjustments) return;
+      const cleanNext = Array.isArray(remoteSettlements) ? deduplicateSettlementAdjustments(remoteSettlements) : [];
       const nextStr = JSON.stringify(cleanNext);
       previousAdjsStringRef.current = nextStr;
       try {
@@ -407,9 +407,7 @@ export function useDriveSync({
         if (res.success) {
           isRemoteUpdateRef.current = true;
           remoteSyncCooldownUntilRef.current = Date.now() + 5000;
-          if (res.settlements && Array.isArray(res.settlements)) {
-            applyMasterSettlements(res.settlements);
-          }
+          applyMasterSettlements(res.settlements || []);
 
           recordSyncAuditLog({
             type: 'SYNC_PULL',
@@ -596,19 +594,7 @@ export function useDriveSync({
       isPushingRef.current = true;
       try {
         setIsSyncingDrive(true);
-        setSyncDriveStatus('Đang đồng bộ 2 chiều lên Google Drive...');
-        let adjs = currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments;
-        if ((!adjs || adjs.length === 0) && typeof localStorage !== 'undefined') {
-          try {
-            const saved = localStorage.getItem('savings_settlements_v3');
-            if (saved) {
-              const parsed = JSON.parse(saved);
-              if (Array.isArray(parsed) && parsed.length > 0) {
-                adjs = deduplicateSettlementAdjustments(parsed);
-              }
-            }
-          } catch {}
-        }
+        const adjs = currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [];
         const success = await updateRealGoogleDriveFile(token, fileId, updatedBooks, adjs);
         if (success) {
           lastLocalPushTimeRef.current = Date.now();
@@ -759,11 +745,14 @@ export function useDriveSync({
             // Tải dữ liệu từ file trung tâm
             try {
               const res = await downloadRealGoogleDriveFile(token, hub.id, hub.mimeType);
-              if (res.success && res.books && res.books.length > 0) {
-                const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-                const mergedBooks = sortAndReindexBooks(activeRemote);
-                setBooks(mergedBooks);
-                localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
+              if (res.success) {
+                applyMasterSettlements(res.settlements || []);
+                if (res.books && res.books.length > 0) {
+                  const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
+                  const mergedBooks = sortAndReindexBooks(activeRemote);
+                  setBooks(mergedBooks);
+                  localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
+                }
               }
             } catch (err: any) {
               console.warn('Lỗi tải dữ liệu cho file tự động phát hiện:', err);
@@ -1024,11 +1013,14 @@ export function useDriveSync({
 
               try {
                 const res = await downloadRealGoogleDriveFile(token, latestHub.id, latestHub.mimeType);
-                if (res.success && res.books && res.books.length > 0) {
-                  const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-                  const mergedBooks = sortAndReindexBooks(activeRemote);
-                  setBooks(mergedBooks);
-                  localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
+                if (res.success) {
+                  applyMasterSettlements(res.settlements || []);
+                  if (res.books && res.books.length > 0) {
+                    const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
+                    const mergedBooks = sortAndReindexBooks(activeRemote);
+                    setBooks(mergedBooks);
+                    localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
+                  }
                 }
               } catch (dErr) {
                 console.warn('Lỗi tải file trung tâm mới:', dErr);

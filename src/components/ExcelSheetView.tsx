@@ -618,16 +618,6 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
               />
 
               <div className="flex flex-col sm:flex-row flex-wrap items-center justify-center gap-2 pt-1.5 w-full">
-                {settings.googleSheetUrl && onSyncDrive && (
-                  <button
-                    disabled={isSyncingDrive}
-                    onClick={() => onSyncDrive()}
-                    className="flex items-center justify-center space-x-2 w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all active:scale-98 disabled:opacity-60 cursor-pointer"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingDrive ? 'animate-spin' : ''}`} />
-                    <span>{isSyncingDrive ? 'Đang đồng bộ...' : '⚡ Đồng bộ ngay từ Drive'}</span>
-                  </button>
-                )}
 
                 {onOpenSyncModal && (
                   <button

@@ -547,17 +547,7 @@ export function translateBooksToSheetMatrix(
   // Row 0: Headers
   matrix.push([...ORIGINAL_SHEET_HEADERS]);
 
-  let effectiveSettlements: SettlementAdjustment[] = deduplicateSettlementAdjustments(settlements || []);
-  if (!settlements) {
-    try {
-      const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('savings_settlements_v3') : null;
-      if (saved) {
-        effectiveSettlements = deduplicateSettlementAdjustments(JSON.parse(saved));
-      }
-    } catch {
-      effectiveSettlements = [];
-    }
-  }
+  const effectiveSettlements: SettlementAdjustment[] = deduplicateSettlementAdjustments(settlements || []);
 
   const currentYear = new Date().getFullYear();
   let annuals: AnnualInterestRecord[] = [];
