@@ -106,32 +106,15 @@ jobs:
           sed -i "s/versionCode [0-9]*/versionCode ${{ steps.auto_version.outputs.CODE }}/g" android/app/build.gradle
           sed -i "s/versionName \"[^\"]*\"/versionName \"${{ steps.auto_version.outputs.NAME }}\"/g" android/app/build.gradle
 
-      # 8. Khai báo Keystore cố định từ GitHub Secrets (Sử dụng Python giải mã an toàn 100%)
+      # 8. Khai báo Keystore cố định từ GitHub Secrets (An toàn 100% qua biến env)
       - name: Setup Fixed Keystore & Print SHA-1
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
         run: |
           mkdir -p ~/.android
-          if [ -n "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" ]; then
-            python3 -c '
-import os, base64, re
-
-raw_data = """${{ secrets.RELEASE_KEYSTORE_BASE64 }}"""
-# Lọc bỏ tất cả các ký tự không thuộc bảng mã Base64 (khoảng trắng, xuống dòng, ký tự lạ)
-cleaned_data = re.sub(r"[^A-Za-z0-9+/=]", "", raw_data)
-
-# Tự động bổ sung padding = nếu thiếu
-missing_padding = len(cleaned_data) % 4
-if missing_padding:
-    cleaned_data += "=" * (4 - missing_padding)
-
-try:
-    keystore_bytes = base64.b64decode(cleaned_data)
-    with open(os.path.expanduser("~/.android/debug.keystore"), "wb") as f:
-        f.write(keystore_bytes)
-    print(">>> Giải mã thành công Keystore từ GitHub Secrets!")
-except Exception as e:
-    print(f">>> Lỗi giải mã Base64: {e}")
-    exit(1)
-'
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > ~/.android/debug.keystore
+            echo ">>> Giải mã thành công Keystore từ GitHub Secrets!"
           else
             keytool -genkeypair -v \
               -keystore ~/.android/debug.keystore \
@@ -191,7 +174,7 @@ except Exception as e:
           EOF
           
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add version.json
           git commit -m "chore: auto-update version.json [skip ci]" || echo "No changes to commit"
           git push
