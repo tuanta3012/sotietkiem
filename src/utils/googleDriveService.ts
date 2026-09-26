@@ -447,7 +447,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
             'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/spreadsheets',
           ],
-          grantOfflineAccess: false,
+          grantOfflineAccess: true,
         });
       } catch (initErr) {
         console.warn('GoogleAuth.initialize warn/error:', initErr);
@@ -456,8 +456,9 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       let nativeResult: any;
       try {
         const signInPromise = GoogleAuth.signIn();
+        // Cho phép tối đa 180 giây (3 phút) để người dùng chọn tài khoản và cấp quyền ứng dụng
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian chờ phản hồi đăng nhập Google (15 giây). Vui lòng thử lại.')), 15000)
+          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác (3 phút). Vui lòng thử lại.')), 180000)
         );
         nativeResult = await Promise.race([signInPromise, timeoutPromise]);
       } catch (signInErr: any) {
