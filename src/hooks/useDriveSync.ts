@@ -17,6 +17,7 @@ import {
   applyMasterStateToSettings,
 } from '../utils/googleDriveService';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
+import { resolveUserRole } from '../utils/roleHelper';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import {
@@ -410,20 +411,19 @@ export function useDriveSync({
           applyMasterSettlements(res.settlements || []);
 
           const userEmail = currentUser?.email || 'unknown';
-          const role = (settingsRef.current?.members?.find(m => m.email?.toLowerCase() === userEmail.toLowerCase())?.role) ||
-                       (settingsRef.current?.currentRole) || 'admin';
+          const role = resolveUserRole(userEmail, settingsRef.current?.currentRole, settingsRef.current?.members, settingsRef.current?.workspaceOwnerEmail);
           const activeBooksCount = res.books?.length || 0;
           const settlementsCount = res.settlements?.length || 0;
 
           recordSyncAuditLog({
             type: 'SYNC_PULL',
-            title: 'Đồng bộ dữ liệu từ Google Drive (PULL)',
+            title: 'Tải từ Google Drive',
             status: 'success',
             fileId,
             userEmail,
             currentRole: role,
             sheetName: settingsRef.current?.googleSheetName || 'Google Sheets',
-            summary: `Đã nạp ${activeBooksCount} sổ tiết kiệm (Cột A-M), ${res.annualInterestHistory?.length || 0} mốc lãi (N-P), ${res.balanceGrowthHistory?.length || 0} mốc số dư (Q-S), ${settlementsCount} nhật ký tất toán (U-AC).`,
+            summary: `Nạp ${activeBooksCount} sổ tiết kiệm, ${res.annualInterestHistory?.length || 0} mốc lãi, ${res.balanceGrowthHistory?.length || 0} mốc số dư, ${settlementsCount} tất toán.`,
             details: {
               activeBooksCount,
               totalPrincipalMillion: res.books?.reduce((s, b) => s + b.principal, 0) ? Math.round(res.books.reduce((s, b) => s + b.principal, 0) / 1_000_000) : 0,
@@ -643,18 +643,17 @@ export function useDriveSync({
           }).catch(() => {});
 
           const userEmail = currentUser?.email || 'unknown';
-          const role = (settingsRef.current?.members?.find(m => m.email?.toLowerCase() === userEmail.toLowerCase())?.role) ||
-                       (settingsRef.current?.currentRole) || 'admin';
+          const role = resolveUserRole(userEmail, settingsRef.current?.currentRole, settingsRef.current?.members, settingsRef.current?.workspaceOwnerEmail);
 
           recordSyncAuditLog({
             type: 'SYNC_PUSH',
-            title: 'Đồng bộ dữ liệu lên Google Drive (PUSH)',
+            title: 'Cập nhật lên Drive',
             status: 'success',
             fileId,
             userEmail,
             currentRole: role,
             sheetName: settingsRef.current?.googleSheetName || 'Google Sheets',
-            summary: `Đã ghi nhận ${updatedBooks.length} sổ tiết kiệm (Cột A-M) và ${adjs.length} nhật ký tất toán (U-AC) lên Google Drive.`,
+            summary: `Lưu ${updatedBooks.length} sổ tiết kiệm, ${adjs.length} tất toán lên Google Drive.`,
             details: {
               activeBooksCount: updatedBooks.length,
               totalPrincipalMillion: updatedBooks.reduce((s, b) => s + b.principal, 0) ? Math.round(updatedBooks.reduce((s, b) => s + b.principal, 0) / 1_000_000) : 0,
