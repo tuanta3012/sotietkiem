@@ -455,17 +455,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                     </button>
 
-                    {/* Clear All App Data */}
-                    <button
-                      onClick={() => {
-                        setShowMenu(false);
-                        if (onOpenClearDataModal) onOpenClearDataModal();
-                      }}
-                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 transition-all text-left border-t border-slate-800/80 pt-2 group active:scale-[0.99] cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
-                      <span className="font-semibold text-rose-300 text-xs">Xóa dữ liệu</span>
-                    </button>
+                    {/* Clear All App Data (Chỉ Admin / Editor mới hiển thị) */}
+                    {canEditData(settings.currentRole) && (
+                      <button
+                        onClick={() => {
+                          setShowMenu(false);
+                          if (onOpenClearDataModal) onOpenClearDataModal();
+                        }}
+                        className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 transition-all text-left border-t border-slate-800/80 pt-2 group active:scale-[0.99] cursor-pointer"
+                      >
+                        <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
+                        <span className="font-semibold text-rose-300 text-xs">Xóa dữ liệu</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

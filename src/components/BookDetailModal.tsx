@@ -16,8 +16,9 @@ import {
   Plus,
   Check,
   ChevronDown,
+  Eye,
 } from 'lucide-react';
-import { SavingsBook, AppSettings } from '../types';
+import { SavingsBook, AppSettings, canEditData } from '../types';
 import { getBankById } from '../data/banks';
 import {
   formatVND,
@@ -434,41 +435,48 @@ export const BookDetailModal: React.FC<BookDetailModalProps> = ({
                     </div>
                   )}
                   
-                  <div className="flex flex-wrap gap-2">
-                    {!isOriginalMatured ? (
-                      <button
-                        onClick={() => {
-                          setIsEarlySettle(true);
-                          setShowSettleConfirm(true);
-                        }}
-                        className="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors cursor-pointer flex items-center space-x-1"
-                      >
-                        <span>⚠️ Tất toán trước hạn (Rút sớm)</span>
-                      </button>
-                    ) : (
-                      <>
+                  {!canEditData(settings.currentRole) ? (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-800 rounded-xl text-xs font-semibold flex items-center space-x-2">
+                      <Eye className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Tài khoản ở vai trò <strong>Chỉ xem (Viewer)</strong> — Bạn không có quyền tất toán, tái tục hay tác động dữ liệu.</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      {!isOriginalMatured ? (
                         <button
                           onClick={() => {
-                            setIsEarlySettle(false);
+                            setIsEarlySettle(true);
                             setShowSettleConfirm(true);
                           }}
-                          className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer"
+                          className="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors cursor-pointer flex items-center space-x-1"
                         >
-                          {daysToMaturity < 0 ? '✅ Tất toán quá hạn' : '✅ Tất toán đúng hạn'}
+                          <span>⚠️ Tất toán trước hạn (Rút sớm)</span>
                         </button>
-                        <button
-                          onClick={() => {
-                            setNewPrincipal(activeBook.principal);
-                            setNewPrincipalMillionsStr((activeBook.principal / 1_000_000).toString());
-                            setShowRolloverForm(true);
-                          }}
-                          className="px-3.5 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs transition-colors cursor-pointer"
-                        >
-                          Tái tục (Mở sổ mới) 🔄
-                        </button>
-                      </>
-                    )}
-                  </div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={() => {
+                              setIsEarlySettle(false);
+                              setShowSettleConfirm(true);
+                            }}
+                            className="px-3.5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-colors cursor-pointer"
+                          >
+                            {daysToMaturity < 0 ? '✅ Tất toán quá hạn' : '✅ Tất toán đúng hạn'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setNewPrincipal(activeBook.principal);
+                              setNewPrincipalMillionsStr((activeBook.principal / 1_000_000).toString());
+                              setShowRolloverForm(true);
+                            }}
+                            className="px-3.5 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs transition-colors cursor-pointer"
+                          >
+                            Tái tục (Mở sổ mới) 🔄
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 

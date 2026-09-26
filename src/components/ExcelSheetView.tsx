@@ -8,7 +8,7 @@ import {
   CartesianGrid,
   Tooltip,
 } from 'recharts';
-import { SavingsBook, AppSettings, SettlementAdjustment } from '../types';
+import { SavingsBook, AppSettings, SettlementAdjustment, canEditData } from '../types';
 import { getBankById } from '../data/banks';
 import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory } from '../data/historicalGrowth';
 import {
@@ -51,6 +51,7 @@ import {
   ChevronRight,
   Sparkles,
   AlertTriangle,
+  Eye,
 } from 'lucide-react';
 
 interface ExcelSheetViewProps {
@@ -1138,39 +1139,46 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
 
                       {/* Nút thao tác trực tiếp */}
                       {!showSettleConfirm && !showRolloverConfig && (
-                        <div className="space-y-2">
-                          {daysToMaturity > 0 ? (
-                            /* Sổ CHƯA ĐẾN HẠN: Chỉ hiện nút Tất toán trước hạn (Rút sớm) */
-                            <button
-                              onClick={() => setShowSettleConfirm(true)}
-                              className="w-full py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
-                            >
-                              <AlertTriangle className="w-4 h-4" />
-                              <span>⚠️ Tất toán trước hạn (Rút sớm)</span>
-                            </button>
-                          ) : (
-                            /* Sổ ĐÃ ĐẾN HẠN / QUÁ HẠN: Hiện nút Tất toán đúng/quá hạn và Nút Tái tục sổ */
-                            <div className="space-y-2">
+                        !canEditData(settings.currentRole) ? (
+                          <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-800 rounded-xl text-xs font-semibold flex items-center space-x-2">
+                            <Eye className="w-4 h-4 text-amber-600 shrink-0" />
+                            <span>Tài khoản ở vai trò <strong>Chỉ xem (Viewer)</strong> — Bạn không có quyền tất toán, tái tục hay tác động dữ liệu.</span>
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {daysToMaturity > 0 ? (
+                              /* Sổ CHƯA ĐẾN HẠN: Chỉ hiện nút Tất toán trước hạn (Rút sớm) */
                               <button
                                 onClick={() => setShowSettleConfirm(true)}
-                                className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                                className="w-full py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
                               >
-                                <CheckCircle2 className="w-4 h-4" />
-                                <span>
-                                  {daysToMaturity === 0 ? '✅ Tất toán đúng hạn' : '✅ Tất toán quá hạn'}
-                                </span>
+                                <AlertTriangle className="w-4 h-4" />
+                                <span>⚠️ Tất toán trước hạn (Rút sớm)</span>
                               </button>
+                            ) : (
+                              /* Sổ ĐÃ ĐẾN HẠN / QUÁ HẠN: Hiện nút Tất toán đúng/quá hạn và Nút Tái tục sổ */
+                              <div className="space-y-2">
+                                <button
+                                  onClick={() => setShowSettleConfirm(true)}
+                                  className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                                >
+                                  <CheckCircle2 className="w-4 h-4" />
+                                  <span>
+                                    {daysToMaturity === 0 ? '✅ Tất toán đúng hạn' : '✅ Tất toán quá hạn'}
+                                  </span>
+                                </button>
 
-                              <button
-                                onClick={() => setShowRolloverConfig(true)}
-                                className="w-full py-2.5 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
-                              >
-                                <RefreshCw className="w-4 h-4" />
-                                <span>Tái tục (Mở sổ mới) 🔄</span>
-                              </button>
-                            </div>
-                          )}
-                        </div>
+                                <button
+                                  onClick={() => setShowRolloverConfig(true)}
+                                  className="w-full py-2.5 px-3 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-98 text-white font-extrabold text-xs sm:text-sm shadow-xs flex items-center justify-center space-x-2 transition-all cursor-pointer"
+                                >
+                                  <RefreshCw className="w-4 h-4" />
+                                  <span>Tái tục (Mở sổ mới) 🔄</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )
                       )}
 
                       {/* Khung xác nhận Tất toán (Khi bấm nút Tất toán) */}

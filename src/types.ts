@@ -209,23 +209,27 @@ export interface AppSettings {
   updateServerUrl?: string; // URL server kiểm tra và tải cập nhật APK (ví dụ: https://domain.com)
 }
 
-export function canEditData(role?: UserRole): boolean {
+export function canEditData(role?: string | null): boolean {
   if (!role) return true; // Mặc định khi chưa phân quyền là Admin/chủ máy
-  return role === 'ADMIN' || role === 'EDITOR';
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN' || normalized === 'EDITOR';
 }
 
-export function canManageMembers(role?: UserRole): boolean {
+export function canManageMembers(role?: string | null): boolean {
   if (!role) return true;
-  return role === 'ADMIN';
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN';
 }
 
-export function canPushToDrive(role?: UserRole): boolean {
+export function canPushToDrive(role?: string | null): boolean {
   if (!role) return true;
-  return role === 'ADMIN' || role === 'EDITOR';
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN' || normalized === 'EDITOR';
 }
 
-export function canChangeDriveFile(role?: UserRole): boolean {
+export function canChangeDriveFile(role?: string | null): boolean {
   if (!role) return true;
-  return role === 'ADMIN';
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN';
 }
 

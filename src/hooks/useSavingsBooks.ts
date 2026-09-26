@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { SavingsBook, SettlementAdjustment, BookStatus } from '../types';
+import { SavingsBook, SettlementAdjustment, BookStatus, canEditData } from '../types';
 import { sortAndReindexBooks, normalizeOwner, deduplicateSettlementAdjustments, normalizeDateToISO } from '../utils/dataTranslator';
 import { formatDateVN, getOwnerLabel } from '../utils/formatters';
 import { calculateInterest, getDaysBetween } from '../utils/calculator';
@@ -8,11 +8,12 @@ import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
 
 interface UseSavingsBooksProps {
+  currentRole?: string;
   onPushToDrive?: (books: SavingsBook[], adjustments?: SettlementAdjustment[]) => void;
   onShowSyncStatus?: (msg: string) => void;
 }
 
-export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsBooksProps = {}) {
+export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }: UseSavingsBooksProps = {}) {
   const [books, setBooks] = useState<SavingsBook[]>(() => {
     try {
       const isCleared = localStorage.getItem('savings_books_cleared');
@@ -141,6 +142,10 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
 
   const handleUpdateBook = useCallback(
     (updatedBook: SavingsBook) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền chỉnh sửa hoặc tác động vào dữ liệu.');
+        return;
+      }
       const updated = books.map((b) => (b.id === updatedBook.id ? updatedBook : b));
       const nextBooks = sortAndReindexBooks(updated);
       setBooks(nextBooks);
@@ -148,11 +153,15 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
         onPushToDriveRef.current(nextBooks, settlementAdjustments);
       }
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleSaveBook = useCallback(
     (savedBook: SavingsBook) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền lưu hoặc thêm dữ liệu.');
+        return;
+      }
       const exists = books.some((b) => b.id === savedBook.id);
       const updated = exists
         ? books.map((b) => (b.id === savedBook.id ? savedBook : b))
@@ -163,11 +172,15 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
         onPushToDriveRef.current(nextBooks, settlementAdjustments);
       }
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleDeleteBook = useCallback(
     (bookId: string) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa dữ liệu.');
+        return false;
+      }
       if (window.confirm('Bạn có chắc muốn xóa sổ tiết kiệm này khỏi danh mục không?')) {
         const updated = books.filter((b) => b.id !== bookId);
         const nextBooks = sortAndReindexBooks(updated);
@@ -179,7 +192,7 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
       }
       return false;
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleSettleBook = useCallback(
@@ -187,6 +200,10 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
       bookId: string,
       extra?: { isEarlySettled: boolean; settlementDate: string; actualInterestVND: number }
     ) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền tất toán sổ tiết kiệm.');
+        return;
+      }
       const now = Date.now();
       if (actionLockRef.current[bookId] && now - actionLockRef.current[bookId] < 1200) {
         return;
@@ -293,6 +310,10 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
         newMaturityDate: string;
       }
     ) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền tái tục sổ tiết kiệm.');
+        return;
+      }
       const now = Date.now();
       if (actionLockRef.current[oldBookId] && now - actionLockRef.current[oldBookId] < 1200) {
         return;
@@ -399,6 +420,10 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
 
   const handleImportBooks = useCallback(
     (newBooks: SavingsBook[], mode: 'replace' | 'merge' = 'replace') => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền nhập hoặc thay thế dữ liệu.');
+        return;
+      }
       let finalBooks = newBooks;
       if (mode === 'merge') {
         const existingMap = new Map<string, SavingsBook>(books.map((b) => [b.id, b]));
@@ -410,11 +435,15 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
         onPushToDriveRef.current(finalBooks, settlementAdjustments);
       }
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleDeleteSettlementAdjustment = useCallback(
     (id: string) => {
+      if (!canEditData(currentRole)) {
+        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa nhật ký tất toán.');
+        return;
+      }
       setSettlementAdjustments((prev) => {
         const next = prev.filter((a) => a.id !== id);
         try {
@@ -427,10 +456,14 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
       });
       onShowSyncStatusRef.current?.('Đã xóa 1 bản ghi nhật ký tất toán.');
     },
-    [books]
+    [books, currentRole]
   );
 
   const handleDeleteAllAppData = useCallback(() => {
+    if (!canEditData(currentRole)) {
+      alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa toàn bộ dữ liệu.');
+      return;
+    }
     setBooks([]);
     setSettlementAdjustments([]);
     try {
@@ -442,7 +475,7 @@ export function useSavingsBooks({ onPushToDrive, onShowSyncStatus }: UseSavingsB
       // ignore
     }
     onShowSyncStatus?.('Đã xóa toàn bộ dữ liệu trên ứng dụng.');
-  }, [onShowSyncStatus]);
+  }, [onShowSyncStatus, currentRole]);
 
   return {
     books,

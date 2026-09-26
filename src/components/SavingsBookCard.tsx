@@ -12,7 +12,7 @@ import {
   AlertCircle,
   Sparkles,
 } from 'lucide-react';
-import { SavingsBook } from '../types';
+import { SavingsBook, canEditData } from '../types';
 import { getBankById } from '../data/banks';
 import {
   formatVND,
@@ -32,6 +32,7 @@ interface SavingsBookCardProps {
   privacyMode: boolean;
   husbandName: string;
   wifeName: string;
+  userRole?: string;
   onSelectForAnalysis: (book: SavingsBook) => void;
   onEdit: (book: SavingsBook) => void;
   onDelete: (bookId: string) => void;
@@ -43,6 +44,7 @@ export const SavingsBookCard: React.FC<SavingsBookCardProps> = ({
   privacyMode,
   husbandName,
   wifeName,
+  userRole,
   onSelectForAnalysis,
   onEdit,
   onDelete,
@@ -279,24 +281,26 @@ export const SavingsBookCard: React.FC<SavingsBookCardProps> = ({
           <ArrowRight className="w-3 h-3 ml-0.5" />
         </button>
 
-        <div className="flex items-center space-x-1">
-          <button
-            id={`btn-edit-book-${book.id}`}
-            onClick={() => onEdit(book)}
-            title="Chỉnh sửa thông tin sổ"
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded-lg transition-colors"
-          >
-            <Edit2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            id={`btn-delete-book-${book.id}`}
-            onClick={() => onDelete(book.id)}
-            title="Xóa sổ này"
-            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        {canEditData(userRole) && (
+          <div className="flex items-center space-x-1">
+            <button
+              id={`btn-edit-book-${book.id}`}
+              onClick={() => onEdit(book)}
+              title="Chỉnh sửa thông tin sổ"
+              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/70 rounded-lg transition-colors cursor-pointer"
+            >
+              <Edit2 className="w-3.5 h-3.5" />
+            </button>
+            <button
+              id={`btn-delete-book-${book.id}`}
+              onClick={() => onDelete(book.id)}
+              title="Xóa sổ này"
+              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

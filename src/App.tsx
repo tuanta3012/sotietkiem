@@ -369,6 +369,7 @@ export default function App() {
     handleDeleteSettlementAdjustment,
     handleDeleteAllAppData,
   } = useSavingsBooks({
+    currentRole: settings.currentRole,
     onPushToDrive: (b, a) => pushBooksToDriveRef.current?.(b, a),
     onShowSyncStatus: (msg) => showSyncStatusRef.current?.(msg),
   });
