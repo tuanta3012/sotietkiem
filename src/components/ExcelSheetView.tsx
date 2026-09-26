@@ -887,7 +887,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                           )}
                         </td>
                         <td className={`py-2 px-3 text-right font-mono font-bold ${row.year >= 2026 ? 'text-amber-800' : 'text-emerald-700'}`}>
-                          {row.interestEarnedMillion.toLocaleString('vi-VN')}
+                          {settings.privacyMode ? '••••••' : row.interestEarnedMillion.toLocaleString('vi-VN')}
                         </td>
                       </tr>
                     );
@@ -895,7 +895,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                   <tr className="bg-slate-900 text-white font-bold border-t-2 border-slate-800">
                     <td className="py-2.5 px-3 uppercase text-amber-300">Tổng Cộng Lãi</td>
                     <td className="py-2.5 px-3 text-right font-mono text-emerald-300">
-                      {dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')}
+                      {settings.privacyMode ? '••••••' : dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')}
                     </td>
                   </tr>
                 </tbody>
@@ -937,10 +937,10 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                           )}
                         </td>
                         <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
-                          {row.balanceMillion.toLocaleString('vi-VN')}
+                          {settings.privacyMode ? '••••••' : row.balanceMillion.toLocaleString('vi-VN')}
                         </td>
                         <td className="py-2 px-3 text-right font-mono font-bold text-indigo-700">
-                          {row.annualIncomeMillion ? row.annualIncomeMillion.toLocaleString('vi-VN') : ''}
+                          {settings.privacyMode ? (row.annualIncomeMillion ? '••••••' : '') : (row.annualIncomeMillion ? row.annualIncomeMillion.toLocaleString('vi-VN') : '')}
                         </td>
                       </tr>
                     );

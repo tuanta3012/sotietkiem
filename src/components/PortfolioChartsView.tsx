@@ -819,9 +819,9 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(val) => `${(val / 1000).toFixed(0)}T`} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(val) => (settings.privacyMode ? '••' : `${(val / 1000).toFixed(0)}T`)} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    formatter={(val: any) => [`${(Number(val) / 1000).toFixed(1)} Tỷ VNĐ`, 'Số dư cuối năm']}
+                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${(Number(val) / 1000).toFixed(1)} Tỷ VNĐ`, 'Số dư cuối năm']}
                     contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '12px' }}
                   />
                   <Area type="monotone" dataKey="balanceMillion" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#balanceGrad)" />
@@ -846,9 +846,9 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                 <BarChart data={dynamicAnnualInterest}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(val) => `${val.toLocaleString('vi-VN')} Tr`} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(val) => (settings.privacyMode ? '••' : `${val.toLocaleString('vi-VN')} Tr`)} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    formatter={(val: any) => [`${Number(val).toLocaleString('vi-VN')} Triệu VNĐ`, 'Tiền lãi thực nhận']}
+                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${Number(val).toLocaleString('vi-VN')} Triệu VNĐ`, 'Tiền lãi thực nhận']}
                     contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '12px' }}
                   />
                   <Bar dataKey="interestEarnedMillion" fill="#f59e0b" radius={[6, 6, 0, 0]}>

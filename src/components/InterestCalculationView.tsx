@@ -972,7 +972,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                 <XAxis dataKey="year" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toLocaleString('vi-VN')} Tr`} />
                 <Tooltip
-                  formatter={(val: any) => [`${Number(val).toLocaleString('vi-VN')} Tr`, 'Tiền Lãi']}
+                  formatter={(val: any) => [settings.privacyMode ? '••••••' : `${Number(val).toLocaleString('vi-VN')} Tr`, 'Tiền Lãi']}
                   contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '10px', fontSize: '11px' }}
                 />
                 <Bar dataKey="interestEarnedMillion" fill="#f59e0b" radius={[4, 4, 0, 0]} />
@@ -1001,9 +1001,9 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="year" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${v.toLocaleString('vi-VN')} Tr`} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => (settings.privacyMode ? '••' : `${v.toLocaleString('vi-VN')} Tr`)} />
                 <Tooltip
-                  formatter={(val: any) => [`${Number(val).toLocaleString('vi-VN')} Tr`, 'Số Dư']}
+                  formatter={(val: any) => [settings.privacyMode ? '••••••' : `${Number(val).toLocaleString('vi-VN')} Tr`, 'Số Dư']}
                   contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '10px', fontSize: '11px' }}
                 />
                 <Area type="monotone" dataKey="balanceMillion" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#balanceGradUnified)" />

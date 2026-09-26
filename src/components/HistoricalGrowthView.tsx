@@ -134,7 +134,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               {formatVND(startBalance, settings.privacyMode)}
             </span>
             <span className="text-[11px] text-indigo-300">
-              {Math.round(startBalance / 1_000_000).toLocaleString('vi-VN')} Triệu VNĐ
+              {settings.privacyMode ? '••••••' : `${Math.round(startBalance / 1_000_000).toLocaleString('vi-VN')} Triệu VNĐ`}
             </span>
           </div>
 
@@ -146,7 +146,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               {formatVND(currentBalance, settings.privacyMode)}
             </span>
             <span className="text-[11px] text-emerald-400 font-semibold">
-              {totalWealthGained >= 0 ? '+' : ''}{formatVND(totalWealthGained, settings.privacyMode)} ({percentageGained >= 0 ? '+' : ''}{percentageGained.toFixed(0)}%)
+              {settings.privacyMode ? '••••••' : `${totalWealthGained >= 0 ? '+' : ''}${formatVND(totalWealthGained, settings.privacyMode)} (${percentageGained >= 0 ? '+' : ''}${percentageGained.toFixed(0)}%)`}
             </span>
           </div>
 
@@ -158,7 +158,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               {formatVND(totalInterest5Years, settings.privacyMode)}
             </span>
             <span className="text-[11px] text-amber-400 font-semibold">
-              {dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')} Triệu VNĐ
+              {settings.privacyMode ? '••••••' : `${dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')} Triệu VNĐ`}
             </span>
           </div>
 
@@ -170,7 +170,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               {formatVND(averageInterestPerYear, settings.privacyMode)}
             </span>
             <span className="text-[11px] text-indigo-300">
-              ~{Math.round(averageInterestPerYear / 1_000_000).toLocaleString('vi-VN')} Triệu VNĐ / năm
+              {settings.privacyMode ? '••••••' : `~${Math.round(averageInterestPerYear / 1_000_000).toLocaleString('vi-VN')} Triệu VNĐ / năm`}
             </span>
           </div>
         </div>
@@ -207,7 +207,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
                   <span className={`text-[10px] sm:text-xs font-bold mb-1.5 transition-colors ${
                     isSelected ? 'text-indigo-600 font-black scale-110' : 'text-slate-500 group-hover:text-slate-800'
                   }`}>
-                    {(item.balanceMillion / 1000).toFixed(1)}T
+                    {settings.privacyMode ? '••••' : `${(item.balanceMillion / 1000).toFixed(1)}T`}
                   </span>
 
                   {/* Column Bar */}
@@ -236,7 +236,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-            <span>{dynamicBalanceGrowth[0]?.year}: {((dynamicBalanceGrowth[0]?.balanceMillion || 0) / 1000).toFixed(1)} Tỷ VNĐ</span>
+            <span>{dynamicBalanceGrowth[0]?.year}: {settings.privacyMode ? '••••••' : `${((dynamicBalanceGrowth[0]?.balanceMillion || 0) / 1000).toFixed(1)} Tỷ VNĐ`}</span>
             <span className="text-[10px] text-emerald-600 font-semibold">* Số liệu Thực tế chốt số</span>
             <span className="font-bold text-emerald-700">{lastYear}: {formatShortVND(currentBalance, settings.privacyMode)}</span>
           </div>
@@ -276,7 +276,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
                   <span className={`text-[10px] sm:text-xs font-bold mb-1.5 transition-colors ${
                     isSelected ? 'text-amber-600 font-black scale-110' : 'text-slate-500 group-hover:text-slate-800'
                   }`}>
-                    {item.interestEarnedMillion.toLocaleString('vi-VN')}
+                    {settings.privacyMode ? '••••' : item.interestEarnedMillion.toLocaleString('vi-VN')}
                   </span>
 
                   {/* Column Bar */}
@@ -305,7 +305,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-            <span>{dynamicAnnualInterest[0]?.year}: {dynamicAnnualInterest[0]?.interestEarnedMillion?.toLocaleString('vi-VN')} Triệu</span>
+            <span>{dynamicAnnualInterest[0]?.year}: {settings.privacyMode ? '••••••' : `${dynamicAnnualInterest[0]?.interestEarnedMillion?.toLocaleString('vi-VN')} Triệu`}</span>
             <span className="text-[10px] text-emerald-600 font-semibold">* Số liệu chốt sổ</span>
             <span className="font-bold text-amber-700">
               Năm &gt;= 2027: Tạm tính

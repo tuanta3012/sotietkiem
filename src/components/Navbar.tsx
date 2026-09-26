@@ -34,7 +34,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { SyncAuditLogModal } from './SyncAuditLogModal';
-import { AppSettings, AuthUser } from '../types';
+import { AppSettings, AuthUser, canEditData } from '../types';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
 import { Capacitor } from '@capacitor/core';
 import { formatVND, formatShortVND } from '../utils/formatters';
@@ -230,7 +230,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
               {/* Hamburger Dropdown Drawer */}
               {showMenu && (
-                <div className="absolute right-0 mt-2 w-72 sm:w-80 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 space-y-2 z-50 animate-in fade-in zoom-in-95 duration-150">
+                <div className="absolute right-0 mt-2 w-72 sm:w-80 max-h-[85vh] overflow-y-auto bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-3 space-y-2 z-50 animate-in fade-in zoom-in-95 duration-150">
                   {/* User Profile / Info */}
                   <div className="p-3 bg-slate-800/95 rounded-xl border border-slate-700 space-y-2">
                     <div className="flex items-center justify-between">
@@ -296,7 +296,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <button
                       onClick={() => {
                         setShowMenu(false);
-                        onOpenSyncModal();
+                        if (onOpenSyncModal) onOpenSyncModal();
                       }}
                       className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-emerald-950/60 hover:text-emerald-300 text-slate-200 transition-colors text-left"
                     >
