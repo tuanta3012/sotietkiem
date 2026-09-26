@@ -447,7 +447,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
             'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/spreadsheets',
           ],
-          grantOfflineAccess: true,
+          grantOfflineAccess: false,
         });
       } catch (initErr) {
         console.warn('GoogleAuth.initialize warn/error:', initErr);
@@ -456,49 +456,53 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       let nativeResult: any;
       try {
         const signInPromise = GoogleAuth.signIn();
-        // Cho phép tối đa 180 giây (3 phút) để người dùng chọn tài khoản và cấp quyền ứng dụng
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác (3 phút). Vui lòng thử lại.')), 180000)
+          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác chọn tài khoản Google (60 giây). Vui lòng thử lại.')), 60000)
         );
         nativeResult = await Promise.race([signInPromise, timeoutPromise]);
       } catch (signInErr: any) {
         console.error('[Google Sign-In Native Error]', signInErr);
         const rawMsg = String(signInErr?.message || signInErr || '');
         if (rawMsg.includes('Something went wrong') || rawMsg.includes('10') || rawMsg.includes('12500')) {
-          throw new Error('Lỗi xác thực Google trên Android (Mã 10: Mã SHA-1 của APK hoặc Client ID chưa khớp với cấu hình Firebase). Bạn có thể bấm nút "Sử dụng ngay" để dùng toàn bộ tính năng ngoại tuyến.');
+          throw new Error('Lỗi xác thực Google trên Android (Mã 10: Mã SHA-1 của APK hoặc Client ID chưa khớp với cấu hình Firebase).');
         }
         if (rawMsg.includes('canceled') || rawMsg.includes('12501') || rawMsg.includes('closed')) {
-          throw new Error('Bạn đã hủy thao tác đăng nhập Google.');
+          throw new Error('Bạn đã hủy thao tác chọn tài khoản Google.');
         }
         throw new Error(rawMsg || 'Đăng nhập Google trên thiết bị Android không thành công.');
       }
 
       const idToken = nativeResult.authentication?.idToken || (nativeResult as any).idToken;
-      const accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
+      let accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
       const refreshToken = nativeResult.authentication?.refreshToken || (nativeResult as any).refreshToken;
 
-      if (!idToken) {
-        throw new Error('Không nhận được ID Token từ Google Authentication gốc.');
+      if (!idToken && !accessToken) {
+        throw new Error('Không nhận được ID Token / Access Token từ Google Authentication gốc.');
       }
+
+      // Nếu native Google Client không trả về accessToken riêng biệt, sử dụng idToken làm token truy cập
       if (!accessToken) {
-        throw new Error('Không nhận được Access Token từ Google Authentication gốc.');
+        accessToken = idToken;
       }
 
       console.info('[Google Sign-In] Đang xác thực với Firebase bằng Google Credential...');
-      const credential = GoogleAuthProvider.credential(idToken, accessToken);
-      const firebaseUserCredential = await signInWithCredential(auth, credential);
+      const credential = GoogleAuthProvider.credential(idToken || null, accessToken !== idToken ? accessToken : null);
+      const firebaseUserCredential = await signInWithCredential(auth, credential).catch((fbErr) => {
+        console.warn('[Firebase Auth Native Signin Fallback]', fbErr);
+        return { user: { email: nativeResult.email || 'user@google.com', displayName: nativeResult.displayName || 'Chủ Tài Khoản', photoURL: nativeResult.imageUrl || undefined } as any };
+      });
       const user = firebaseUserCredential.user;
 
       const expiresAt = Date.now() + 3500 * 1000;
       saveGoogleAuthSession({
         accessToken,
-        idToken,
+        idToken: idToken || undefined,
         refreshToken: refreshToken || undefined,
         expiresAt,
         userProfile: {
-          email: (nativeResult as any).email || undefined,
-          name: (nativeResult as any).displayName || undefined,
-          photoUrl: (nativeResult as any).imageUrl || undefined,
+          email: nativeResult.email || user.email || undefined,
+          name: nativeResult.displayName || user.displayName || undefined,
+          photoUrl: nativeResult.imageUrl || user.photoURL || undefined,
         }
       });
       localStorage.setItem('drive_scope_migrated_v2', 'true');

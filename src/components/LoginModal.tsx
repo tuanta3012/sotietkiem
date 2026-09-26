@@ -201,19 +201,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLogin }) => {
               <div className="pt-2.5 flex flex-col gap-2 border-t border-rose-900/60">
                 <button
                   type="button"
-                  onClick={handleUseOffline}
-                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
+                  onClick={handleOpenInNewTab}
+                  className="w-full py-2.5 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
                 >
-                  <HardDrive className="w-4 h-4" />
-                  <span>Vào ứng dụng ngay (Chế độ Ngoại tuyến)</span>
+                  <ExternalLink className="w-4 h-4" />
+                  <span>Đăng nhập Google qua Trình duyệt Web</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowShaHelp(true)}
-                  className="w-full py-2 px-3 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-800/60 rounded-xl font-medium text-[11px] flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
+                  onClick={handleUseOffline}
+                  className="w-full py-2 px-3 bg-emerald-700 hover:bg-emerald-600 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
                 >
-                  <Info className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Xem cách Khắc phục mã SHA-1</span>
+                  <HardDrive className="w-4 h-4" />
+                  <span>Vào ứng dụng ngay (Chế độ Ngoại tuyến)</span>
                 </button>
               </div>
             ) : (

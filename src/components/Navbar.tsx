@@ -340,83 +340,83 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
 
                     {/* Cài đặt Thông báo tự động */}
-                    <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 mt-1">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <Bell className="w-4 h-4 text-amber-400 shrink-0" />
-                          <span className="font-semibold text-slate-200 text-xs">Thông báo</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const nextState = !settings.notificationsEnabled;
-                            if (nextState) {
-                              const granted = await requestNotificationPermission();
-                              if (!granted) {
-                                showToast('Vui lòng cấp quyền thông báo trên thiết bị.', 'error');
-                                return;
-                              }
-                              // Phát ngay âm thanh chuông & rung thử nghiệm 1 lần khi BẬT
-                              triggerTestNotification();
-                            }
-                            setSettings((prev) => ({
-                              ...prev,
-                              notificationsEnabled: nextState,
-                            }));
-                          }}
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
-                            settings.notificationsEnabled
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                          }`}
-                        >
-                          {settings.notificationsEnabled ? 'BẬT (08:30)' : 'TẮT'}
-                        </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nextState = !settings.notificationsEnabled;
+                        if (nextState) {
+                          const granted = await requestNotificationPermission();
+                          if (!granted) {
+                            showToast('Vui lòng cấp quyền thông báo trên thiết bị.', 'error');
+                            return;
+                          }
+                          // Phát ngay âm thanh chuông & rung thử nghiệm 1 lần khi BẬT
+                          triggerTestNotification();
+                        }
+                        setSettings((prev) => ({
+                          ...prev,
+                          notificationsEnabled: nextState,
+                        }));
+                      }}
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <Bell className="w-4 h-4 text-amber-400 shrink-0 group-hover:scale-110 transition-transform" />
+                        <span className="font-semibold text-xs text-slate-200">Thông báo</span>
                       </div>
-                    </div>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                          settings.notificationsEnabled
+                            ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                            : 'bg-slate-700/80 text-slate-300'
+                        }`}
+                      >
+                        {settings.notificationsEnabled ? 'BẬT' : 'TẮT'}
+                      </span>
+                    </button>
 
                     {/* Cài đặt Khóa vân tay */}
-                    <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 mt-1">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-2">
-                          <Fingerprint className="w-4 h-4 text-emerald-400 shrink-0" />
-                          <span className="font-semibold text-slate-200 text-xs">Khóa vân tay</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const nextState = !settings.enableBiometricLogin;
-                            if (nextState) {
-                              let isSupported = false;
-                              try {
-                                if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && 'Capacitor' in window)) {
-                                  const res = await NativeBiometric.isAvailable();
-                                  isSupported = res.isAvailable;
-                                } else if (window.PublicKeyCredential) {
-                                  isSupported = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-                                }
-                              } catch {
-                                isSupported = false;
-                              }
-                              if (!isSupported) {
-                                showToast('Thiết bị chưa kích hoạt sinh trắc học hoặc mở khóa màn hình.', 'error');
-                              }
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const nextState = !settings.enableBiometricLogin;
+                        if (nextState) {
+                          let isSupported = false;
+                          try {
+                            if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && 'Capacitor' in window)) {
+                              const res = await NativeBiometric.isAvailable();
+                              isSupported = res.isAvailable;
+                            } else if (window.PublicKeyCredential) {
+                              isSupported = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
                             }
-                            setSettings((prev) => ({
-                              ...prev,
-                              enableBiometricLogin: nextState,
-                            }));
-                          }}
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
-                            settings.enableBiometricLogin
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                          }`}
-                        >
-                          {settings.enableBiometricLogin ? 'BẬT' : 'TẮT'}
-                        </button>
+                          } catch {
+                            isSupported = false;
+                          }
+                          if (!isSupported) {
+                            showToast('Thiết bị chưa kích hoạt sinh trắc học hoặc mở khóa màn hình.', 'error');
+                          }
+                        }
+                        setSettings((prev) => ({
+                          ...prev,
+                          enableBiometricLogin: nextState,
+                        }));
+                      }}
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <Fingerprint className="w-4 h-4 text-emerald-400 shrink-0 group-hover:scale-110 transition-transform" />
+                        <span className="font-semibold text-xs text-slate-200">Khóa vân tay</span>
                       </div>
-                    </div>
+                      <span
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
+                          settings.enableBiometricLogin
+                            ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                            : 'bg-slate-700/80 text-slate-300'
+                        }`}
+                      >
+                        {settings.enableBiometricLogin ? 'BẬT' : 'TẮT'}
+                      </span>
+                    </button>
 
                     {/* Nhật Ký Kiểm Toán Đồng Bộ */}
                     <button
@@ -424,34 +424,40 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setShowMenu(false);
                         setIsAuditLogOpen(true);
                       }}
-                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-300 hover:text-blue-300 transition-colors text-left mt-1"
+                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-300 hover:text-blue-300 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >
-                      <FileText className="w-4 h-4 text-blue-400 shrink-0" />
+                      <FileText className="w-4 h-4 text-blue-400 shrink-0 group-hover:scale-110 transition-transform" />
                       <span className="font-semibold text-xs text-blue-200">Kiểm toán đồng bộ</span>
                     </button>
 
                     {/* Phiên bản & Cập nhật */}
-                    <div className="p-2.5 rounded-xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-between mt-1 space-x-2">
-                      <div className="flex items-center space-x-2 min-w-0">
-                        <span className="font-mono font-bold text-slate-200 text-xs">
-                          {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
-                        </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowMenu(false);
+                        if (onTriggerManualCheckUpdate) {
+                          onTriggerManualCheckUpdate();
+                        }
+                      }}
+                      className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2.5">
+                        <Smartphone className="w-4 h-4 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
+                        <div className="font-semibold text-xs text-slate-200 flex items-center space-x-1.5">
+                          <span>Phiên bản</span>
+                          <span className="font-mono text-cyan-300 font-bold">
+                            {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
+                          </span>
+                        </div>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setShowMenu(false);
-                          if (onTriggerManualCheckUpdate) {
-                            onTriggerManualCheckUpdate();
-                          }
-                        }}
+                      <div
                         title="Tải cập nhật mới"
-                        className="p-1.5 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-bold shrink-0 shadow-sm transition-all active:scale-95 cursor-pointer flex items-center justify-center"
+                        className="p-1.5 rounded-lg bg-teal-500/10 text-teal-400 border border-teal-500/30 group-hover:bg-gradient-to-r group-hover:from-teal-500 group-hover:to-emerald-500 group-hover:text-slate-950 group-hover:border-transparent font-bold shrink-0 shadow-sm transition-all flex items-center justify-center"
                       >
                         <Download className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                      </div>
+                    </button>
 
                     {/* Clear All App Data */}
                     <button
@@ -459,12 +465,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setShowMenu(false);
                         if (onOpenClearDataModal) onOpenClearDataModal();
                       }}
-                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 transition-colors text-left border-t border-slate-800/80 pt-2 mt-1"
+                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-rose-950/60 text-slate-300 hover:text-rose-300 transition-all text-left border-t border-slate-800/80 pt-2 group active:scale-[0.99] cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4 text-rose-400 shrink-0" />
-                      <div>
-                        <div className="font-semibold text-rose-300">Xóa dữ liệu</div>
-                      </div>
+                      <Trash2 className="w-4 h-4 text-rose-400 shrink-0 group-hover:scale-110 transition-transform" />
+                      <span className="font-semibold text-rose-300 text-xs">Xóa dữ liệu</span>
                     </button>
                   </div>
                 </div>

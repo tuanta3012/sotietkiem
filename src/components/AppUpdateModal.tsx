@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
+import { FileOpener } from '@capacitor-community/file-opener';
 import { Share } from '@capacitor/share';
 
 interface UpdateInfo {
@@ -85,21 +86,32 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         }
 
         setDownloadProgress(95);
-        setStatusMessage('Đã tải xong! Đang mở trình cài đặt Android...');
-
-        const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
-          ? savedUri
-          : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
+        setStatusMessage('Đã tải xong! Đang kích hoạt Trình Cài Đặt Android...');
 
         try {
-          await Share.share({
-            title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
-            url: formattedUri,
-            dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer) để nâng cấp',
+          // Attempt 1: Direct Native FileOpener to launch Android Package Installer
+          await FileOpener.open({
+            filePath: savedUri,
+            contentType: 'application/vnd.android.package-archive',
           });
-        } catch (shareErr) {
-          console.warn('Share intent error, opening HTTPS release link:', shareErr);
-          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+          setDownloadProgress(100);
+          setStatusMessage('Đang hiển thị màn hình cài đặt nâng cấp...');
+        } catch (fileOpenerErr) {
+          console.warn('FileOpener native trigger failed, trying Share intent fallback:', fileOpenerErr);
+          const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
+            ? savedUri
+            : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
+
+          try {
+            await Share.share({
+              title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
+              url: formattedUri,
+              dialogTitle: 'Mở bằng Trình Cài Đặt Gói (Package Installer) để nâng cấp',
+            });
+          } catch (shareErr) {
+            console.warn('Share intent error, opening HTTPS release link:', shareErr);
+            window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+          }
         }
 
         setIsDownloading(false);
