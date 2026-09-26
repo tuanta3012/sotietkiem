@@ -87,43 +87,38 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         setDownloadProgress(95);
         setStatusMessage('Đã tải xong! Đang mở trình cài đặt Android...');
 
-        setDownloadProgress(100);
-        setStatusMessage('Cho phép "Cài đặt ứng dụng từ nguồn này" nếu Android yêu cầu...');
+        const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
+          ? savedUri
+          : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
 
         try {
           await Share.share({
             title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
-            url: savedUri,
+            url: formattedUri,
             dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer) để nâng cấp',
           });
         } catch (shareErr) {
-          console.warn('Share intent error:', shareErr);
-          window.open(savedUri, '_system');
+          console.warn('Share intent error, opening HTTPS release link:', shareErr);
+          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
         }
 
         setIsDownloading(false);
         onClose();
       } else {
         setDownloadProgress(100);
-        const a = document.createElement('a');
-        a.href = targetLink;
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        window.open(targetLink, '_system') || window.open(targetLink, '_blank');
         setIsDownloading(false);
         onClose();
       }
     } catch (err: any) {
       console.error('Update download error:', err);
-      setStatusMessage('Lỗi tải về trực tiếp. Đang chuyển sang trình duyệt...');
+      setStatusMessage('Đang mở trình duyệt hệ thống để tải trực tiếp...');
       setTimeout(() => {
         try {
-          window.open(targetLink, '_system');
+          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
         } catch {}
         setIsDownloading(false);
-      }, 1500);
+      }, 1000);
     }
   };
 
@@ -171,7 +166,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
 
         {isDownloading ? (
           /* Download Progress Bar */
-          <div className="space-y-2 py-4">
+          <div className="space-y-3 py-3">
             <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
               <div 
                 className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-300"
@@ -181,6 +176,18 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             <div className="flex justify-between text-[11px] text-slate-400 font-medium">
               <span>{statusMessage}</span>
               <span className="text-emerald-400 font-bold">{downloadProgress}%</span>
+            </div>
+            <div className="text-center pt-2 border-t border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
+                  if (targetLink) window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+                }}
+                className="text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium"
+              >
+                Mở tải về trực tiếp bằng Trình duyệt
+              </button>
             </div>
           </div>
         ) : (
