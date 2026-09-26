@@ -134,8 +134,11 @@ jobs:
         run: |
           mkdir -p keystore ~/.android android/app
           
-          # Nếu chưa có file keystore trong repo, tạo mới và commit lưu lại vĩnh viễn
-          if [ ! -f "keystore/debug.keystore" ]; then
+          # 1. Ưu tiên giải mã Keystore vĩnh viễn từ file b64 trong Repo
+          if [ -f "keystore/debug.keystore.b64" ]; then
+            echo "Khôi phục Keystore cố định từ keystore/debug.keystore.b64..."
+            base64 -d keystore/debug.keystore.b64 > keystore/debug.keystore
+          elif [ ! -f "keystore/debug.keystore" ]; then
             echo "Khởi tạo Keystore cố định cho Repository..."
             keytool -genkeypair -v \
               -keystore keystore/debug.keystore \
@@ -146,12 +149,7 @@ jobs:
               -keysize 2048 \
               -validity 10000 \
               -dname "CN=Android Debug, O=Android, C=US"
-              
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add keystore/debug.keystore
-            git commit -m "chore: persist permanent debug keystore [skip ci]" || true
-            git push || true
+            base64 -w 0 keystore/debug.keystore > keystore/debug.keystore.b64
           fi
           
           # Đồng bộ keystore cố định vào các vị trí chuẩn của Android build
