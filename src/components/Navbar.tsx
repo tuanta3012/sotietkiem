@@ -29,6 +29,7 @@ import {
   Bell,
   FileText,
   Download,
+  Package,
   Globe,
   WifiOff,
 } from 'lucide-react';
@@ -317,12 +318,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setShowMenu(false);
                         if (onOpenUserManagement) onOpenUserManagement();
                       }}
-                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-teal-950/60 hover:text-teal-300 text-slate-200 transition-colors text-left pl-3"
+                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >
-                      <Users className="w-4 h-4 text-teal-400 shrink-0" />
-                      <div>
-                        <div className="font-bold">Quản Lý Thành Viên</div>
-                      </div>
+                      <Users className="w-4 h-4 text-teal-400 shrink-0 group-hover:scale-110 transition-transform" />
+                      <span className="font-semibold text-xs text-slate-200">Quản lý thành viên</span>
                     </button>
 
                     {/* Quản lý danh sách ngân hàng */}
@@ -331,12 +330,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                         setShowMenu(false);
                         if (onOpenManageBanks) onOpenManageBanks();
                       }}
-                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-colors text-left"
+                      className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >
-                      <Building2 className="w-4 h-4 text-teal-400 shrink-0" />
-                      <div>
-                        <div className="font-semibold">Danh sách ngân hàng</div>
-                      </div>
+                      <Building2 className="w-4 h-4 text-teal-400 shrink-0 group-hover:scale-110 transition-transform" />
+                      <span className="font-semibold text-xs text-slate-200">Danh sách ngân hàng</span>
                     </button>
 
                     {/* Cài đặt Thông báo tự động */}
@@ -350,7 +347,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                             showToast('Vui lòng cấp quyền thông báo trên thiết bị.', 'error');
                             return;
                           }
-                          // Phát ngay âm thanh chuông & rung thử nghiệm 1 lần khi BẬT
                           triggerTestNotification();
                         }
                         setSettings((prev) => ({
@@ -367,7 +363,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
                           settings.notificationsEnabled
-                            ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                            ? 'bg-emerald-500 text-slate-950 shadow-xs shadow-emerald-500/20'
                             : 'bg-slate-700/80 text-slate-300'
                         }`}
                       >
@@ -410,7 +406,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold transition-all ${
                           settings.enableBiometricLogin
-                            ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/20'
+                            ? 'bg-emerald-500 text-slate-950 shadow-xs shadow-emerald-500/20'
                             : 'bg-slate-700/80 text-slate-300'
                         }`}
                       >
@@ -427,7 +423,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       className="w-full flex items-center space-x-2.5 p-2.5 rounded-xl hover:bg-slate-800 text-slate-300 hover:text-blue-300 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >
                       <FileText className="w-4 h-4 text-blue-400 shrink-0 group-hover:scale-110 transition-transform" />
-                      <span className="font-semibold text-xs text-blue-200">Kiểm toán đồng bộ</span>
+                      <span className="font-semibold text-xs text-slate-200">Kiểm toán đồng bộ</span>
                     </button>
 
                     {/* Phiên bản & Cập nhật */}
