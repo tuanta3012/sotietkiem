@@ -245,6 +245,12 @@ export async function trySilentRefresh(): Promise<string | null> {
     return getGoogleAccessToken();
   }
 
+  // Prevent overlapping auth requests
+  if (isSigningIn) {
+    console.info('[Silent Auth] Tiến trình đăng nhập khác đang chạy, bỏ qua silent refresh.');
+    return null;
+  }
+
   // 1. Silent Refresh on Native Platforms (Android/iOS)
   if (Capacitor.isNativePlatform()) {
     console.info('[Silent Auth] Đang gia hạn phiên làm việc ngầm trên Native...');
@@ -284,35 +290,47 @@ export async function trySilentRefresh(): Promise<string | null> {
         console.warn('[Silent Auth] GoogleAuth.refresh() failed, trying silent signIn next...', refreshErr);
       }
 
-      // Fallback: GoogleAuth.signIn() automatically logs in silently if session is intact
-      const nativeResult = await GoogleAuth.signIn();
-      const idToken = nativeResult.authentication?.idToken || (nativeResult as any).idToken;
-      const accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
-      const refreshToken = nativeResult.authentication?.refreshToken || (nativeResult as any).refreshToken;
+      // Fallback: GoogleAuth.signIn() with 10s timeout for silent restore
+      if (isSigningIn) {
+        return null;
+      }
+      isSigningIn = true;
+      try {
+        const signInPromise = GoogleAuth.signIn();
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Silent auth timeout')), 10000)
+        );
+        const nativeResult: any = await Promise.race([signInPromise, timeoutPromise]);
+        const idToken = nativeResult.authentication?.idToken || (nativeResult as any).idToken;
+        const accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
+        const refreshToken = nativeResult.authentication?.refreshToken || (nativeResult as any).refreshToken;
 
-      if (accessToken && idToken) {
-        console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.signIn() ngầm');
-        const expiresAt = Date.now() + 3500 * 1000;
+        if (accessToken && idToken) {
+          console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.signIn() ngầm');
+          const expiresAt = Date.now() + 3500 * 1000;
 
-        // Sync with Firebase Auth in the background
-        const credential = GoogleAuthProvider.credential(idToken, accessToken);
-        await signInWithCredential(auth, credential).catch((fbErr) => {
-          console.warn('[Silent Auth] Firebase Auth silent sync failed:', fbErr);
-        });
+          // Sync with Firebase Auth in the background
+          const credential = GoogleAuthProvider.credential(idToken, accessToken);
+          await signInWithCredential(auth, credential).catch((fbErr) => {
+            console.warn('[Silent Auth] Firebase Auth silent sync failed:', fbErr);
+          });
 
-        saveGoogleAuthSession({
-          accessToken,
-          idToken,
-          refreshToken: refreshToken || getGoogleRefreshToken() || undefined,
-          expiresAt,
-          userProfile: {
-            email: (nativeResult as any).email || undefined,
-            name: (nativeResult as any).displayName || undefined,
-            photoUrl: (nativeResult as any).imageUrl || undefined,
-          }
-        });
+          saveGoogleAuthSession({
+            accessToken,
+            idToken,
+            refreshToken: refreshToken || getGoogleRefreshToken() || undefined,
+            expiresAt,
+            userProfile: {
+              email: (nativeResult as any).email || undefined,
+              name: (nativeResult as any).displayName || undefined,
+              photoUrl: (nativeResult as any).imageUrl || undefined,
+            }
+          });
 
-        return accessToken;
+          return accessToken;
+        }
+      } finally {
+        isSigningIn = false;
       }
     } catch (nativeErr) {
       console.warn('[Silent Auth] Native silent refresh/login failed:', nativeErr);
@@ -455,6 +473,8 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
 
       let nativeResult: any;
       try {
+        // Clear cached Native session before interactive sign-in to force account picker on Android
+        await GoogleAuth.signOut().catch(() => {});
         const signInPromise = GoogleAuth.signIn();
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác chọn tài khoản Google (60 giây). Vui lòng thử lại.')), 60000)
