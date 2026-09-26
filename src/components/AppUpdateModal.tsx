@@ -36,54 +36,73 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
     if (!targetLink) return;
 
     setIsDownloading(true);
-    setDownloadProgress(0);
-    setStatusMessage('Đang kết nối tải bản cập nhật...');
+    setDownloadProgress(10);
+    setStatusMessage('Đang khởi tạo kết nối tải APK...');
 
     try {
       if (Capacitor.isNativePlatform()) {
-        setStatusMessage('Đang tải tệp APK xuống thiết bị...');
+        const fileName = `sotietkiem_v${updateInfo.version}.apk`;
+        setStatusMessage('Đang tải tệp APK trực tiếp về bộ nhớ máy...');
         setDownloadProgress(25);
 
-        const response = await fetch(targetLink);
-        if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
-        
-        setDownloadProgress(50);
-        setStatusMessage('Đang lưu tệp cài đặt...');
-        const blob = await response.blob();
-        
-        const reader = new FileReader();
-        reader.readAsDataURL(blob);
-        reader.onloadend = async () => {
-          try {
-            const base64Data = (reader.result as string).split(',')[1];
-            const fileName = `sotietkiem_v${updateInfo.version}.apk`;
+        let savedUri = '';
+        try {
+          // Native download directly via Filesystem.downloadFile (bypasses WebView CORS & redirects)
+          const downloadRes = await Filesystem.downloadFile({
+            url: targetLink,
+            path: fileName,
+            directory: Directory.Cache,
+            progress: true,
+          });
+          savedUri = downloadRes.uri || downloadRes.path;
+          setDownloadProgress(85);
+        } catch (downloadErr) {
+          console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);
+          setDownloadProgress(40);
+          const response = await fetch(targetLink, { redirect: 'follow' });
+          if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
+          const blob = await response.blob();
+          
+          setDownloadProgress(70);
+          setStatusMessage('Đang lưu tệp cài đặt...');
+          
+          const reader = new FileReader();
+          const base64Data = await new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res.includes(',') ? res.split(',')[1] : res);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
 
-            setDownloadProgress(80);
-            setStatusMessage('Đang chuẩn bị cài đặt...');
+          const writeFileRes = await Filesystem.writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: Directory.Cache,
+          });
+          savedUri = writeFileRes.uri;
+        }
 
-            const savedFile = await Filesystem.writeFile({
-              path: fileName,
-              data: base64Data,
-              directory: Directory.Cache,
-            });
+        setDownloadProgress(95);
+        setStatusMessage('Đã tải xong! Đang mở trình cài đặt Android...');
 
-            setDownloadProgress(100);
-            setStatusMessage('Đã tải xong! Đang mở trình cài đặt...');
+        setDownloadProgress(100);
+        setStatusMessage('Cho phép "Cài đặt ứng dụng từ nguồn này" nếu Android yêu cầu...');
 
-            await Share.share({
-              title: `Cập nhật Sổ Tiết Kiệm v${updateInfo.version}`,
-              url: savedFile.uri,
-              dialogTitle: 'Cài đặt bản cập nhật mới',
-            });
+        try {
+          await Share.share({
+            title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
+            url: savedUri,
+            dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer) để nâng cấp',
+          });
+        } catch (shareErr) {
+          console.warn('Share intent error:', shareErr);
+          window.open(savedUri, '_system');
+        }
 
-            setIsDownloading(false);
-            onClose();
-          } catch (fsErr: any) {
-            console.warn('Filesystem / Share fallback error:', fsErr);
-            window.open(targetLink, '_system');
-            setIsDownloading(false);
-          }
-        };
+        setIsDownloading(false);
+        onClose();
       } else {
         setDownloadProgress(100);
         const a = document.createElement('a');
@@ -98,13 +117,13 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
       }
     } catch (err: any) {
       console.error('Update download error:', err);
-      setStatusMessage('Lỗi tải về. Đang chuyển sang trình duyệt...');
+      setStatusMessage('Lỗi tải về trực tiếp. Đang chuyển sang trình duyệt...');
       setTimeout(() => {
         try {
           window.open(targetLink, '_system');
         } catch {}
         setIsDownloading(false);
-      }, 1200);
+      }, 1500);
     }
   };
 
