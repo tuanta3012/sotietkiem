@@ -181,6 +181,8 @@ export default function App() {
     };
   });
 
+  const [isSessionRestored, setIsSessionRestored] = useState<boolean>(false);
+
   // 1. Cấu hình chống đè Status Bar trên thiết bị di động
   useEffect(() => {
     const initNativeStatusBar = async () => {
@@ -201,13 +203,47 @@ export default function App() {
   useEffect(() => {
     const restoreSessionFromPreferences = async () => {
       try {
+        // 1. Khôi phục settings từ Preferences trước
+        let hasBiometric = false;
+        const { value: prefSettings } = await Preferences.get({ key: 'savings_settings_v3' });
+        if (prefSettings) {
+          try {
+            const parsed = JSON.parse(prefSettings);
+            hasBiometric = !!parsed.enableBiometricLogin;
+            setSettings((prev) => ({
+              ...prev,
+              ...parsed,
+            }));
+          } catch (e) {
+            console.warn('Lỗi parse settings từ Preferences:', e);
+          }
+        }
+
+        // 2. Khôi phục user từ Preferences
+        let hasUser = false;
         if (!currentUser) {
           const { value: prefUser } = await Preferences.get({ key: 'savings_auth_user_v3' });
           if (prefUser) {
-            const user = JSON.parse(prefUser);
-            setCurrentUser(user);
+            try {
+              const user = JSON.parse(prefUser);
+              setCurrentUser(user);
+              hasUser = true;
+            } catch (e) {
+              console.warn('Lỗi parse user từ Preferences:', e);
+            }
+          }
+        } else {
+          hasUser = true;
+        }
+
+        // 3. Nếu khôi phục thành công user và thiết bị KHÔNG bật khóa vân tay, tự động mở khóa (isUnlocked = true)
+        if (hasUser) {
+          if (!hasBiometric) {
+            setIsUnlocked(true);
           }
         }
+
+        // 4. Khôi phục token
         const token = getGoogleAccessToken();
         if (!token) {
           const { value: prefToken } = await Preferences.get({ key: 'savings_google_access_token' });
@@ -215,14 +251,19 @@ export default function App() {
             setGoogleAccessToken(prefToken);
           }
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn('Lỗi khôi phục phiên từ Preferences:', err);
+      } finally {
+        // Đánh dấu đã khôi phục xong để cho phép ghi đè/lưu thay đổi
+        setIsSessionRestored(true);
       }
     };
     restoreSessionFromPreferences();
   }, []);
 
+  // Lưu settings khi thay đổi - Chỉ ghi đè sau khi đã hoàn thành khôi phục từ Preferences
   useEffect(() => {
+    if (!isSessionRestored) return;
     try {
       const json = JSON.stringify(settings);
       localStorage.setItem('savings_settings_v3', json);
@@ -233,9 +274,11 @@ export default function App() {
     } catch {
       // ignore
     }
-  }, [settings]);
+  }, [settings, isSessionRestored]);
 
+  // Lưu user khi thay đổi - Chỉ ghi đè sau khi đã hoàn thành khôi phục từ Preferences
   useEffect(() => {
+    if (!isSessionRestored) return;
     try {
       if (currentUser) {
         const json = JSON.stringify(currentUser);
@@ -248,7 +291,7 @@ export default function App() {
     } catch {
       // ignore
     }
-  }, [currentUser]);
+  }, [currentUser, isSessionRestored]);
 
   // 3. Tự động kiểm tra cập nhật APK từ xa
   const [updateInfo, setUpdateInfo] = useState<{
