@@ -55,7 +55,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             directory: Directory.Cache,
             progress: true,
           });
-          savedUri = downloadRes.uri || downloadRes.path;
+          savedUri = (downloadRes as any).uri || downloadRes.path || '';
           setDownloadProgress(85);
         } catch (downloadErr) {
           console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);

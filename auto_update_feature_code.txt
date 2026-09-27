@@ -1,0 +1,615 @@
+================================================================================
+HUONG DAN KIEN TRUC & MA NGUON HOAN CHINH TINH NANG TU DONG CAP NHAT (AUTO-UPDATE)
+================================================================================
+
+Tinh nang nay duoc thiet ke theo tu duy Native-First cho phep ung dung di dong tu dong
+phat hien phien ban moi, tai ngam tep APK kem thanh tien trinh va tu dong kich hoat
+trinh cai dat he thong Android de nang cap ngay trong ung dung.
+
+--------------------------------------------------------------------------------
+PART 1: CO CHE HOAT DONG MUOT MA CUA AUTO-UPDATE
+--------------------------------------------------------------------------------
+
+1. Khac phuc bo nho dem (Cache-Busting) khi kiem tra phien ban:
+Phia Frontend luon them tham so truy van thoi gian dong (?t=Timestamp) de bat buoc
+thiet bi keo du lieu moi nhat tu GitHub, khong bi luu cache phien ban cu:
+const response = await fetch(`https://.../version.json?t=${Date.now()}`);
+
+2. Tai ngam truc tiep bang Filesystem (Bypass CORS & Browser Redirects):
+S dung `@capacitor/filesystem` de tai tep APK nhi phan truc tiep bang luong Native
+he dieu hanh thong qua ham `Filesystem.downloadFile`, luu tam vao `Directory.Cache`.
+
+3. Kich hoat Trinh Cai Dat He Thong Android (Package Installer):
+S dung plugin `@capacitor-community/file-opener` voi kieu du lieu MIME la
+`application/vnd.android.package-archive` de Android tu dong mo trinh cai dat goi.
+De Android cho phep cai, can khai bao quyen nay trong AndroidManifest.xml:
+<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+4. Co che dong bo chu ky (Fixed Keystore) trong CI/CD:
+He dieu hanh Android se tu choi nang cap de neu chu ky (Keystore SHA-1) cua ban APK cu
+va moi khac nhau. CI/CD cua GitHub Actions tu dong giai ma tep Keystore vinh vien
+co dinh tu chuoi Base64 luu trong ma nguon de luon ky nhat quan cho moi ban build.
+
+================================================================================
+PART 2: TOAN BO MA NGUON HOAN CHINH (100% PRODUCTION-READY)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. Giao dien & Logic Tai/Cai dat APK (`src/components/AppUpdateModal.tsx`)
+--------------------------------------------------------------------------------
+import React, { useState } from 'react';
+import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { FileOpener } from '@capacitor-community/file-opener';
+import { Share } from '@capacitor/share';
+
+interface UpdateInfo {
+  version: string;
+  downloadUrl?: string;
+  apkUrl?: string;
+  changelog: string[];
+  releaseDate?: string;
+}
+
+interface AppUpdateModalProps {
+  isOpen: boolean;
+  currentVersion: string;
+  updateInfo: UpdateInfo | null;
+  onClose: () => void;
+}
+
+export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
+  isOpen,
+  currentVersion,
+  updateInfo,
+  onClose,
+}) => {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  if (!isOpen || !updateInfo) return null;
+
+  const handleUpdate = async () => {
+    const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
+    if (!targetLink) return;
+
+    setIsDownloading(true);
+    setDownloadProgress(10);
+    setStatusMessage('Đang khởi tạo kết nối tải APK...');
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const fileName = `sotietkiem_v${updateInfo.version}.apk`;
+        setStatusMessage('Đang tải tệp APK trực tiếp về bộ nhớ máy...');
+        setDownloadProgress(25);
+
+        let savedUri = '';
+        try {
+          const downloadRes = await Filesystem.downloadFile({
+            url: targetLink,
+            path: fileName,
+            directory: Directory.Cache,
+            progress: true,
+          });
+          savedUri = downloadRes.uri || downloadRes.path;
+          setDownloadProgress(85);
+        } catch (downloadErr) {
+          console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);
+          setDownloadProgress(40);
+          const response = await fetch(targetLink, { redirect: 'follow' });
+          if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
+          const blob = await response.blob();
+          
+          setDownloadProgress(70);
+          setStatusMessage('Đang lưu tệp cài đặt...');
+          
+          const reader = new FileReader();
+          const base64Data = await new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => {
+              const res = reader.result as string;
+              resolve(res.includes(',') ? res.split(',')[1] : res);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+
+          const writeFileRes = await Filesystem.writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: Directory.Cache,
+          });
+          savedUri = writeFileRes.uri;
+        }
+
+        setDownloadProgress(95);
+        setStatusMessage('Đã tải xong! Đang kích hoạt Trình Cài Đặt Android...');
+
+        try {
+          await FileOpener.open({
+            filePath: savedUri,
+            contentType: 'application/vnd.android.package-archive',
+          });
+          setDownloadProgress(100);
+          setStatusMessage('Đang hiển thị màn hình cài đặt nâng cấp...');
+        } catch (fileOpenerErr) {
+          console.warn('FileOpener native trigger failed, trying Share intent fallback:', fileOpenerErr);
+          const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
+            ? savedUri
+            : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
+
+          try {
+            await Share.share({
+              title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
+              url: formattedUri,
+              dialogTitle: 'Mở bằng Trình Cài Đặt Gói (Package Installer) để nâng cấp',
+            });
+          } catch (shareErr) {
+            console.warn('Share intent error, opening HTTPS release link:', shareErr);
+            window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+          }
+        }
+
+        setIsDownloading(false);
+        onClose();
+      } else {
+        setDownloadProgress(100);
+        window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+        setIsDownloading(false);
+        onClose();
+      }
+    } catch (err: any) {
+      console.error('Update download error:', err);
+      setStatusMessage('Đang mở trình duyệt hệ thống để tải trực tiếp...');
+      setTimeout(() => {
+        try {
+          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+        } catch {}
+        setIsDownloading(false);
+      }, 1000);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div 
+        className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity" 
+        onClick={!isDownloading ? onClose : undefined}
+      />
+
+      <div className="relative w-full max-w-md transform overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl transition-all p-6 text-slate-100 flex flex-col space-y-5">
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-500 via-emerald-500 to-blue-500" />
+
+        {!isDownloading && (
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 text-slate-400 hover:text-slate-100 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+            title="Bỏ qua"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+
+        <div className="flex flex-col items-center text-center space-y-2 pt-2">
+          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shadow-inner">
+            {isDownloading ? (
+              <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
+            ) : (
+              <ArrowUpCircle className="w-10 h-10 animate-bounce" />
+            )}
+          </div>
+          <h2 className="text-lg font-extrabold tracking-tight text-white px-2">
+            {isDownloading ? `Đang tải v${updateInfo.version}...` : `Đã có bản cập nhật mới (v${updateInfo.version})!`}
+          </h2>
+          <p className="text-xs text-slate-400 px-4">
+            {isDownloading ? statusMessage : 'Bạn có muốn tải về để vá lỗi và trải nghiệm tính năng tốt nhất không?'}
+          </p>
+        </div>
+
+        {isDownloading ? (
+          <div className="space-y-3 py-3">
+            <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
+              <div 
+                className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-300"
+                style={{ width: `${downloadProgress}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-[11px] text-slate-400 font-medium">
+              <span>{statusMessage}</span>
+              <span className="text-emerald-400 font-bold">{downloadProgress}%</span>
+            </div>
+            <div className="text-center pt-2 border-t border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
+                  if (targetLink) window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+                }}
+                className="text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium"
+              >
+                Mở tải về trực tiếp bằng Trình duyệt
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 text-center">
+              <div>
+                <span className="block text-[10px] text-slate-500 uppercase font-bold tracking-wider">Phiên bản hiện tại</span>
+                <span className="text-sm font-semibold text-slate-300">v{currentVersion}</span>
+              </div>
+              <div className="border-l border-slate-800">
+                <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-wider">Phiên bản mới nhất</span>
+                <span className="text-sm font-extrabold text-emerald-400">v{updateInfo.version}</span>
+              </div>
+            </div>
+
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-300 border-b border-slate-800 pb-1">
+                <span>Danh sách thay đổi &amp; sửa lỗi:</span>
+                {updateInfo.releaseDate && (
+                  <span className="flex items-center space-x-1 text-[10px] text-slate-500">
+                    <Calendar className="w-3 h-3" />
+                    <span>{updateInfo.releaseDate}</span>
+                  </span>
+                )}
+              </div>
+              <ul className="space-y-2 text-slate-300 text-xs">
+                {updateInfo.changelog && updateInfo.changelog.length > 0 ? (
+                  updateInfo.changelog.map((item, idx) => (
+                    <li key={idx} className="flex items-start space-x-2 text-slate-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{item}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-slate-500 italic text-center py-2">Nâng cấp hiệu năng và sửa lỗi hệ thống.</li>
+                )}
+              </ul>
+            </div>
+
+            <div className="flex space-x-3 pt-2">
+              <button
+                onClick={onClose}
+                className="flex-1 py-2.5 rounded-xl border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-slate-100 font-bold text-xs transition-all"
+              >
+                Để sau
+              </button>
+              <button
+                onClick={handleUpdate}
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-500/10 transition-all active:scale-[0.98]"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>Cập nhật ngay</span>
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+
+--------------------------------------------------------------------------------
+2. Cau hinh Capacitor du an (`capacitor.config.ts`)
+--------------------------------------------------------------------------------
+import { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.tietkiemgiadinh.app',
+  appName: 'Tiết Kiệm Gia Đình',
+  webDir: 'dist',
+  server: {
+    androidScheme: 'https',
+    hostname: 'localhost',
+  },
+  plugins: {
+    LocalNotifications: {
+      smallIcon: 'ic_stat_savings',
+      iconColor: '#10b981',
+      sound: 'beep.wav',
+    },
+    GoogleAuth: {
+      scopes: [
+        'profile',
+        'email',
+        'openid',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/spreadsheets',
+      ],
+      clientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
+      serverClientId: '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com',
+      forceCodeForRefreshToken: false,
+    },
+  },
+};
+
+export default config;
+
+
+--------------------------------------------------------------------------------
+3. Tep tin GitHub Actions tu dong build va Release (`.github/workflows/auto-release.yml`)
+--------------------------------------------------------------------------------
+name: Auto Build & Release APK from AI Studio Code
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      - name: Determine Auto Version
+        id: auto_version
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          PACKAGE_VERSION=$(node -p "require('./package.json').version || '1.0.0'")
+          echo "CODE=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "NAME=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "Auto Generated versionCode: $BUILD_NUMBER, versionName: $PACKAGE_VERSION"
+
+      - name: Create Gradle Init Script for BouncyCastle
+        run: |
+          mkdir -p ~/.gradle
+          cat << 'EOF' > ~/.gradle/init.gradle
+          allprojects {
+              buildscript {
+                  configurations.all {
+                      resolutionStrategy {
+                          force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                          dependencySubstitution {
+                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          }
+                      }
+                  }
+              }
+              configurations.all {
+                  resolutionStrategy {
+                      force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                      dependencySubstitution {
+                          substitute module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          dependencySubstitution {
+                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Generate Fresh Android Project
+        run: |
+          if [ ! -f "android/build.gradle" ]; then
+            echo "Thu muc android chua co. Tien hanh khoi tao moi..."
+            rm -rf android
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: Update Android Config, SDK & Strings
+        env:
+          VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
+          VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
+        run: |
+          mkdir -p android/app/src/main/res/values
+          cat << 'EOF' > android/app/src/main/res/values/strings.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <resources>
+              <string name="app_name">Tiết Kiệm Gia Đình</string>
+              <string name="title_activity_main">Tiết Kiệm Gia Đình</string>
+              <string name="package_name">com.tietkiemgiadinh.app</string>
+              <string name="custom_url_scheme">com.tietkiemgiadinh.app</string>
+              <string name="server_client_id">864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com</string>
+          </resources>
+          EOF
+
+          if [ -f "android/variables.gradle" ]; then
+            sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
+            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
+          fi
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
+          fi
+
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            if ! grep -q "REQUEST_INSTALL_PACKAGES" android/app/src/main/AndroidManifest.xml; then
+              sed -i '/<application/i \    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" \/>' android/app/src/main/AndroidManifest.xml
+            fi
+          fi
+
+      - name: Copy google-services.json
+        run: |
+          if [ -f "google-services.json" ]; then
+            mkdir -p android/app
+            cp google-services.json android/app/google-services.json
+          fi
+
+      - name: Generate App Icons
+        run: |
+          npx @capacitor/assets generate --android || true
+
+      - name: Setup Permanent Fixed Keystore
+        run: |
+          mkdir -p keystore ~/.android android/app
+          
+          if [ -f "keystore/debug.keystore.b64" ]; then
+            echo "Khoi phuc Keystore co dinh tu Base64..."
+            base64 -d keystore/debug.keystore.b64 > keystore/debug.keystore
+          elif [ ! -f "keystore/debug.keystore" ]; then
+            echo "Khoi tao Keystore co dinh moi cho du an..."
+            keytool -genkeypair -v \
+              -keystore keystore/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug, O=Android, C=US"
+            base64 -w 0 keystore/debug.keystore > keystore/debug.keystore.b64
+          fi
+          
+          cp keystore/debug.keystore ~/.android/debug.keystore
+          cp keystore/debug.keystore android/app/debug.keystore
+          
+          if [ -f "android/app/build.gradle" ]; then
+            python3 -c "
+          with open('android/app/build.gradle', 'r') as f:
+              content = f.read()
+          if 'signingConfigs' not in content:
+              content = content.replace('buildTypes {', '''signingConfigs {
+                  debug {
+                      storeFile file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+              buildTypes {''')
+              with open('android/app/build.gradle', 'w') as f:
+                  f.write(content)
+          "
+          fi
+          
+          SHA1_VAL=$(keytool -list -v -keystore keystore/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
+          echo "SHA-1 FINGERPRINT: $SHA1_VAL"
+
+      - name: Build Android APK
+        run: |
+          cd android
+          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: |
+          mv android/app/build/outputs/apk/debug/app-debug.apk sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.auto_version.outputs.NAME }}
+          name: Bản cập nhật v${{ steps.auto_version.outputs.NAME }}
+          body: |
+            Bản cập nhật tự động xuất bản từ AI Studio CI/CD.
+          files: sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update version.json
+        run: |
+          APK_URL="https://github.com/tuanta3012/sotietkiem/releases/download/v${{ steps.auto_version.outputs.NAME }}/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk"
+          cat <<EOF > version.json
+          {
+            "version": "${{ steps.auto_version.outputs.NAME }}",
+            "notes": "Bản cập nhật tự động v${{ steps.auto_version.outputs.NAME }}",
+            "apkUrl": "$APK_URL"
+          }
+          EOF
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "chore: auto-update version.json [skip ci]" || echo "No changes to commit"
+          git push
+
+
+--------------------------------------------------------------------------------
+4. Dinh dang tep tin `version.json`
+--------------------------------------------------------------------------------
+{
+  "version": "1.0.7",
+  "notes": "Bản cập nhật tự động v1.0.7",
+  "apkUrl": "https://github.com/tuanta3012/sotietkiem/releases/download/v1.0.7/sotietkiem_v1.0.7.apk"
+}
+
+
+--------------------------------------------------------------------------------
+5. Ma nguon Frontend tich hop goi API kiem tra phien ban (`src/App.tsx`)
+--------------------------------------------------------------------------------
+import React, { useState, useEffect, useCallback } from 'react';
+import { AppUpdateModal } from './components/AppUpdateModal';
+
+const CURRENT_APP_VERSION = '1.0.7';
+
+export const App: React.FC = () => {
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<any>(null);
+
+  const checkAppUpdate = useCallback(async (manual = false) => {
+    try {
+      // 1. Thêm tham số timestamp để phá bộ nhớ đệm (Cache-Busting)
+      const res = await fetch(`https://raw.githubusercontent.com/tuanta3012/sotietkiem/main/version.json?t=${Date.now()}`);
+      if (!res.ok) return;
+      
+      const data = await res.json();
+      
+      // 2. So sánh chuỗi phiên bản
+      if (data && data.version && data.version !== CURRENT_APP_VERSION) {
+        setUpdateInfo({
+          version: data.version,
+          apkUrl: data.apkUrl,
+          changelog: data.notes ? [data.notes] : ["Nâng cấp hiệu năng hệ thống và sửa đổi giao diện."]
+        });
+        setIsUpdateModalOpen(true);
+      } else if (manual) {
+        alert("Ứng dụng của bạn đã là phiên bản mới nhất!");
+      }
+    } catch (err) {
+      console.warn("Lỗi kiểm tra cập nhật ứng dụng:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAppUpdate(false);
+  }, [checkAppUpdate]);
+
+  return (
+    <div>
+      {/* Giao diện chính ứng dụng... */}
+
+      <AppUpdateModal
+        isOpen={isUpdateModalOpen}
+        currentVersion={CURRENT_APP_VERSION}
+        updateInfo={updateInfo}
+        onClose={() => setIsUpdateModalOpen(false)}
+      />
+    </div>
+  );
+};

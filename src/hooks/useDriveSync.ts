@@ -666,7 +666,7 @@ export function useDriveSync({
                 col_F_startDate: b.startDate,
                 col_G_maturityDate: b.maturityDate,
                 col_H_termMonths: b.termMonths,
-                col_J_termInterestMil: (b.estimatedInterest || 0) / 1_000_000,
+                col_J_termInterestMil: ((b as any).estimatedInterest || b.expectedTermInterest || 0) / 1_000_000,
                 col_K_annualInterestMil: (b.annualInterestEquivalent || 0) / 1_000_000,
                 col_L_maturityMonth: b.maturityMonthYear,
                 col_M_code: b.bookCode || `SO-${idx + 1}`,

@@ -256,7 +256,7 @@ export async function trySilentRefresh(): Promise<string | null> {
     console.info('[Silent Auth] Đang gia hạn phiên làm việc ngầm trên Native...');
     try {
       try {
-        await GoogleAuth.initialize({
+        await (GoogleAuth as any).initialize({
           clientId: firebaseConfig.oAuthClientId,
           serverClientId: firebaseConfig.oAuthClientId,
           scopes: [
@@ -454,7 +454,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
     if (Capacitor.isNativePlatform()) {
       console.info('[Google Sign-In] Khởi chạy GoogleAuth trên thiết bị Native App...');
       try {
-        await GoogleAuth.initialize({
+        await (GoogleAuth as any).initialize({
           clientId: firebaseConfig.oAuthClientId,
           serverClientId: firebaseConfig.oAuthClientId,
           scopes: [
