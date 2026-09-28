@@ -36,6 +36,12 @@ import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
 import { scheduleMaturityNotifications } from './utils/notificationService';
+import {
+  getBanksConfigFromFirestore,
+  saveBanksConfigToFirestore,
+  subscribeToBanksConfig,
+} from './utils/firebaseFirestoreService';
+import { getAllBanks, updateBanksFromRemote } from './data/banks';
 
 // Chuyển hai component có kích thước lớn và chứa biểu đồ thành dạng lazy load
 const MobilizationOptimizer = React.lazy(() =>
@@ -292,6 +298,37 @@ export default function App() {
       // ignore
     }
   }, [currentUser, isSessionRestored]);
+
+  // Đồng bộ cấu hình ngân hàng qua Firestore theo thời gian thực (Real-time Cross-Device Sync)
+  useEffect(() => {
+    // 1. Nạp cấu hình ngân hàng từ Firestore khi mở app
+    getBanksConfigFromFirestore()
+      .then((remoteBanks) => {
+        if (remoteBanks && remoteBanks.length > 0) {
+          updateBanksFromRemote(remoteBanks);
+        } else {
+          // Nếu Firestore chưa có danh sách ngân hàng nào, đẩy danh sách hiện hành lên làm Master
+          const current = getAllBanks();
+          if (current.length > 0) {
+            saveBanksConfigToFirestore(current).catch(() => {});
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Lỗi nạp cấu hình ngân hàng ban đầu từ Firestore:', err);
+      });
+
+    // 2. Lắng nghe thay đổi thời gian thực từ Firestore
+    const unsubscribe = subscribeToBanksConfig((remoteBanks) => {
+      if (remoteBanks && remoteBanks.length > 0) {
+        updateBanksFromRemote(remoteBanks);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // 3. Tự động kiểm tra cập nhật APK từ xa
   const [updateInfo, setUpdateInfo] = useState<{

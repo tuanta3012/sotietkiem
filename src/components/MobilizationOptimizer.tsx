@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -42,9 +42,10 @@ import {
   ListFilter,
   Check,
   Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { SavingsBook, AppSettings } from '../types';
-import { getBankById } from '../data/banks';
+import { getBankById, getAllBanks, saveBank } from '../data/banks';
 import {
   formatVND,
   formatShortVND,
@@ -74,6 +75,35 @@ interface MobilizationOptimizerProps {
 
 type MobilizationMode = 'SINGLE_MONTH' | 'MONTH_RANGE';
 
+interface MobilizationOptimizerCache {
+  mode?: MobilizationMode;
+  targetAmountMillion?: number;
+  targetAmountMillionStr?: string;
+  selectedYear?: number;
+  selectedMonth?: number;
+  selectedDayOverride?: number | null;
+  rangeStartYear?: number;
+  rangeStartMonth?: number;
+  rangeEndYear?: number;
+  rangeEndMonth?: number;
+  expandedRangeMonthKey?: string | null;
+  isBankConfigExpanded?: boolean;
+}
+
+const OPTIMIZER_CACHE_KEY = 'savings_mobilization_optimizer_cache_v1';
+
+const getInitialOptimizerCache = (): MobilizationOptimizerCache => {
+  try {
+    const saved = localStorage.getItem(OPTIMIZER_CACHE_KEY);
+    if (saved) {
+      return JSON.parse(saved);
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+};
+
 export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
   books,
   currentDateStr,
@@ -87,14 +117,23 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
     return [parts[0] || 2026, parts[1] || 9];
   }, [currentDateStr]);
 
+  const cachedState = useMemo(() => getInitialOptimizerCache(), []);
+
   // Mode: Chọn 1 tháng cụ thể HOẶC Chọn khoảng nhiều tháng
-  const [mode, setMode] = useState<MobilizationMode>('SINGLE_MONTH');
+  const [mode, setMode] = useState<MobilizationMode>(() => cachedState.mode || 'SINGLE_MONTH');
 
   // Số tiền muốn huy động (Đơn vị: Triệu VNĐ)
-  // Mặc định: 3.000 Tr (= 3 Tỷ VNĐ)
-  const [targetAmountMillion, setTargetAmountMillion] = useState<number>(3000);
-  const [targetAmountMillionStr, setTargetAmountMillionStr] = useState<string>('3.000');
-  const [debouncedTargetAmountVND, setDebouncedTargetAmountVND] = useState<number>(3000 * 1_000_000);
+  // Mặc định: 3.000 Tr (= 3 Tỷ VNĐ) hoặc lấy từ bộ nhớ lưu tạm
+  const initialAmount =
+    typeof cachedState.targetAmountMillion === 'number' && cachedState.targetAmountMillion >= 0
+      ? cachedState.targetAmountMillion
+      : 3000;
+
+  const [targetAmountMillion, setTargetAmountMillion] = useState<number>(initialAmount);
+  const [targetAmountMillionStr, setTargetAmountMillionStr] = useState<string>(
+    () => cachedState.targetAmountMillionStr || formatNumberWithDots(initialAmount)
+  );
+  const [debouncedTargetAmountVND, setDebouncedTargetAmountVND] = useState<number>(initialAmount * 1_000_000);
   const [isCalculating, setIsCalculating] = useState<boolean>(false);
 
   // Debounce 250ms cho việc tính toán tối ưu hoá nguồn vốn
@@ -109,57 +148,122 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
   }, [targetAmountMillion]);
 
   // Chế độ 1 tháng cụ thể:
-  const [selectedYear, setSelectedYear] = useState<number>(currYear);
-  const [selectedMonth, setSelectedMonth] = useState<number>(currMonth === 12 ? 1 : currMonth + 1); // Mặc định tháng kế tiếp
-  const [selectedDayOverride, setSelectedDayOverride] = useState<number | null>(null);
+  const [selectedYear, setSelectedYear] = useState<number>(() => cachedState.selectedYear || currYear);
+  const [selectedMonth, setSelectedMonth] = useState<number>(
+    () => cachedState.selectedMonth || (currMonth === 12 ? 1 : currMonth + 1)
+  );
+  const [selectedDayOverride, setSelectedDayOverride] = useState<number | null>(
+    () => (cachedState.selectedDayOverride !== undefined ? cachedState.selectedDayOverride : null)
+  );
 
   // Chế độ khoảng nhiều tháng (Từ tháng A đến tháng B):
-  const [rangeStartYear, setRangeStartYear] = useState<number>(currYear);
-  const [rangeStartMonth, setRangeStartMonth] = useState<number>(currMonth);
-  const [rangeEndYear, setRangeEndYear] = useState<number>(() => (currMonth + 6 > 12 ? currYear + 1 : currYear));
-  const [rangeEndMonth, setRangeEndMonth] = useState<number>(() => ((currMonth + 6 - 1) % 12) + 1);
-  const [expandedRangeMonthKey, setExpandedRangeMonthKey] = useState<string | null>(null);
+  const [rangeStartYear, setRangeStartYear] = useState<number>(() => cachedState.rangeStartYear || currYear);
+  const [rangeStartMonth, setRangeStartMonth] = useState<number>(() => cachedState.rangeStartMonth || currMonth);
+  const [rangeEndYear, setRangeEndYear] = useState<number>(
+    () => cachedState.rangeEndYear || (currMonth + 6 > 12 ? currYear + 1 : currYear)
+  );
+  const [rangeEndMonth, setRangeEndMonth] = useState<number>(
+    () => cachedState.rangeEndMonth || (((currMonth + 6 - 1) % 12) + 1)
+  );
+  const [expandedRangeMonthKey, setExpandedRangeMonthKey] = useState<string | null>(
+    () => cachedState.expandedRangeMonthKey || null
+  );
 
   // Cấu hình thu gọn/mở rộng block Vay thế chấp theo ngân hàng
-  const [isBankConfigExpanded, setIsBankConfigExpanded] = useState<boolean>(false);
-
-  // Cấu hình ngân hàng
-  const [bankMargins, setBankMargins] = useState<Record<string, number>>(
-    settings.bankLoanMargins || {
-      seabank: 1.5,
-      shb: 1.5,
-      sea2: 1.5,
-      vietcombank: 1.5,
-      techcombank: 1.8,
-      bidv: 1.5,
-      vpbank: 2.0,
-      mbbank: 1.5,
-      acb: 1.6,
-      agribank: 1.5,
-      hdbank: 2.0,
-      vib: 1.9,
-      tpbank: 1.8,
-    }
+  const [isBankConfigExpanded, setIsBankConfigExpanded] = useState<boolean>(
+    () => !!cachedState.isBankConfigExpanded
   );
+
+  // Tự động lưu phương án đang thực hiện vào bộ nhớ máy để không bị mất khi chuyển tab
+  useEffect(() => {
+    try {
+      const stateToSave: MobilizationOptimizerCache = {
+        mode,
+        targetAmountMillion,
+        targetAmountMillionStr,
+        selectedYear,
+        selectedMonth,
+        selectedDayOverride,
+        rangeStartYear,
+        rangeStartMonth,
+        rangeEndYear,
+        rangeEndMonth,
+        expandedRangeMonthKey,
+        isBankConfigExpanded,
+      };
+      localStorage.setItem(OPTIMIZER_CACHE_KEY, JSON.stringify(stateToSave));
+    } catch {
+      // ignore
+    }
+  }, [
+    mode,
+    targetAmountMillion,
+    targetAmountMillionStr,
+    selectedYear,
+    selectedMonth,
+    selectedDayOverride,
+    rangeStartYear,
+    rangeStartMonth,
+    rangeEndYear,
+    rangeEndMonth,
+    expandedRangeMonthKey,
+    isBankConfigExpanded,
+  ]);
+
+  // Đặt lại phương án về mặc định ban đầu
+  const handleResetPlan = () => {
+    setMode('SINGLE_MONTH');
+    setTargetAmountMillion(3000);
+    setTargetAmountMillionStr('3.000');
+    setSelectedYear(currYear);
+    setSelectedMonth(currMonth === 12 ? 1 : currMonth + 1);
+    setSelectedDayOverride(null);
+    setRangeStartYear(currYear);
+    setRangeStartMonth(currMonth);
+    setRangeEndYear(currMonth + 6 > 12 ? currYear + 1 : currYear);
+    setRangeEndMonth(((currMonth + 6 - 1) % 12) + 1);
+    setExpandedRangeMonthKey(null);
+    setBankMargins(getMasterBankMargins());
+    setBankLTVs(getMasterBankLTVs());
+    setMarginInputStrings({});
+    setLtvInputStrings({});
+    try {
+      localStorage.removeItem(OPTIMIZER_CACHE_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
+  // Lấy cấu hình mặc định trực tiếp từ Master Bank Configs (đã đồng bộ Firestore & LocalStorage)
+  const getMasterBankMargins = useCallback((): Record<string, number> => {
+    const all = getAllBanks();
+    const res: Record<string, number> = {};
+    for (const b of all) {
+      res[b.id.toLowerCase()] = b.defaultLoanMargin !== undefined ? b.defaultLoanMargin : 1.8;
+    }
+    return res;
+  }, []);
+
+  const getMasterBankLTVs = useCallback((): Record<string, number> => {
+    const all = getAllBanks();
+    const res: Record<string, number> = {};
+    for (const b of all) {
+      res[b.id.toLowerCase()] = b.maxLTV !== undefined ? Math.round(b.maxLTV * 100) : 95;
+    }
+    return res;
+  }, []);
+
+  // Cấu hình ngân hàng khởi tạo từ Master Bank Configs
+  const [bankMargins, setBankMargins] = useState<Record<string, number>>(() => {
+    const master = getMasterBankMargins();
+    return { ...master, ...(settings.bankLoanMargins || {}) };
+  });
   const [marginInputStrings, setMarginInputStrings] = useState<Record<string, string>>({});
 
-  const [bankLTVs, setBankLTVs] = useState<Record<string, number>>(
-    settings.bankLTVs || {
-      seabank: 100,
-      shb: 100,
-      sea2: 100,
-      vietcombank: 95,
-      techcombank: 95,
-      bidv: 95,
-      vpbank: 90,
-      mbbank: 95,
-      acb: 95,
-      agribank: 95,
-      hdbank: 90,
-      vib: 90,
-      tpbank: 95,
-    }
-  );
+  const [bankLTVs, setBankLTVs] = useState<Record<string, number>>(() => {
+    const master = getMasterBankLTVs();
+    return { ...master, ...(settings.bankLTVs || {}) };
+  });
   const [ltvInputStrings, setLtvInputStrings] = useState<Record<string, string>>({});
 
   const [bankSettlementTypes, setBankSettlementTypes] = useState<Record<string, 'UPFRONT' | 'MATURITY'>>(
@@ -179,6 +283,21 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
       tpbank: 'UPFRONT',
     }
   );
+
+  // Lắng nghe sự kiện cập nhật ngân hàng (từ menu Quản Lý Ngân Hàng hoặc đồng bộ Firestore từ thiết bị khác)
+  useEffect(() => {
+    const handleBanksUpdated = () => {
+      const latestMargins = getMasterBankMargins();
+      const latestLTVs = getMasterBankLTVs();
+      setBankMargins(latestMargins);
+      setBankLTVs(latestLTVs);
+      setMarginInputStrings({});
+      setLtvInputStrings({});
+    };
+
+    window.addEventListener('banks-updated', handleBanksUpdated);
+    return () => window.removeEventListener('banks-updated', handleBanksUpdated);
+  }, [getMasterBankMargins, getMasterBankLTVs]);
 
   const demandRate = settings.defaultDemandRate || 0.2;
   const autoRollover = true;
@@ -233,28 +352,36 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
     return list;
   }, [totalPrincipalMillion]);
 
-  // Handler cho ngân hàng
-  const handleBankMarginChange = (bankId: string, margin: number) => {
+  // Handler cho ngân hàng: Đồng bộ tức thì cả Optimizer và Master Configs
+  const handleBankMarginChange = (bankId: string, margin: number, persistToBankConfig = true) => {
     setBankMargins((prev) => ({ ...prev, [bankId]: margin }));
+    if (persistToBankConfig) {
+      const bank = getBankById(bankId);
+      saveBank({ id: bankId, name: bank.name, defaultLoanMargin: margin });
+    }
   };
 
   const handleMarginInputChange = (bankId: string, rawVal: string) => {
     setMarginInputStrings((prev) => ({ ...prev, [bankId]: rawVal }));
     const parsed = parseFloat(rawVal.replace(',', '.'));
     if (!isNaN(parsed) && parsed >= 0) {
-      handleBankMarginChange(bankId, parsed);
+      handleBankMarginChange(bankId, parsed, true);
     }
   };
 
-  const handleBankLtvChange = (bankId: string, ltv: number) => {
+  const handleBankLtvChange = (bankId: string, ltv: number, persistToBankConfig = true) => {
     setBankLTVs((prev) => ({ ...prev, [bankId]: ltv }));
+    if (persistToBankConfig) {
+      const bank = getBankById(bankId);
+      saveBank({ id: bankId, name: bank.name, maxLTV: ltv / 100 });
+    }
   };
 
   const handleLtvInputChange = (bankId: string, rawVal: string) => {
     setLtvInputStrings((prev) => ({ ...prev, [bankId]: rawVal }));
     const parsed = parseFloat(rawVal.replace(',', '.'));
     if (!isNaN(parsed) && parsed > 0 && parsed <= 100) {
-      handleBankLtvChange(bankId, parsed);
+      handleBankLtvChange(bankId, parsed, true);
     }
   };
 
@@ -733,7 +860,7 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
             className="w-full accent-emerald-600 h-2 bg-slate-100 rounded-lg cursor-pointer"
           />
 
-          {/* Quick presets for amounts */}
+          {/* Quick presets for amounts & Reset */}
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
             {presetAmountsMillion.map((p) => (
               <button
@@ -749,6 +876,15 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
                 {p.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={handleResetPlan}
+              title="Đặt lại các tiêu chí về mặc định ban đầu"
+              className="px-2.5 py-1.5 rounded-xl text-xs font-bold text-slate-500 hover:text-rose-600 hover:bg-rose-50 border border-dashed border-slate-300 transition-all cursor-pointer flex items-center gap-1 shrink-0 ml-auto"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Đặt lại</span>
+            </button>
           </div>
         </div>
 
@@ -1247,46 +1383,71 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
                       />
                     </div>
 
-                    {/* Thân thẻ tinh gọn: 1. Tiền gốc, 2. Tổng thu (Gốc+Lãi), 3. Ngày đáo hạn */}
-                    <div className="p-3 bg-white">
-                      <div className="grid grid-cols-3 gap-1.5 sm:gap-2 bg-slate-50/90 p-2 sm:p-2.5 rounded-xl border border-slate-100">
+                    {/* Thân thẻ 4 chỉ tiêu trên 1 hàng chuẩn kích thước text lớn dễ nhìn */}
+                    <div className="p-3 sm:p-4 bg-white">
+                      <div className="grid grid-cols-4 gap-1.5 sm:gap-4 items-start">
+                        {/* 1. SỐ TIỀN GỐC */}
                         <div className="min-w-0">
-                          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
+                          <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
                             Số tiền gốc
                           </span>
-                          <span className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight font-mono block truncate">
+                          <span className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight font-mono block truncate">
                             {(principalVal / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                           </span>
                         </div>
 
+                        {/* 2. TỔNG THU (GỐC+LÃI) */}
                         <div className="min-w-0">
-                          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
+                          <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
                             Tổng thu (Gốc+Lãi)
                           </span>
-                          <span className="text-xs sm:text-sm font-bold text-emerald-700 tracking-tight font-mono block truncate">
+                          <span className="text-sm sm:text-base md:text-lg font-bold text-emerald-600 tracking-tight font-mono block truncate">
                             +{(totalMaturityExpected / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                           </span>
                         </div>
 
-                        <div className="min-w-0 text-right">
-                          <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
-                            Ngày đáo hạn
+                        {/* 3. CHI PHÍ */}
+                        <div className="min-w-0">
+                          <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
+                            Chi phí
                           </span>
-                          <div className="flex flex-col items-end">
-                            <span className="font-bold text-slate-900 text-xs sm:text-sm font-mono tracking-tight leading-tight">
-                              {formatDateVN(maturityDateStr, false)}
+                          {cost === 0 ? (
+                            <span className="text-sm sm:text-base md:text-lg font-bold text-emerald-600 tracking-tight font-mono block truncate">
+                              0 đ
                             </span>
-                            <span
-                              className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded font-mono inline-block mt-0.5 ${
-                                isMatured
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : daysRemaining <= 45
-                                  ? 'bg-amber-100 text-amber-900'
-                                  : 'bg-indigo-50 text-indigo-800'
-                              }`}
-                            >
-                              {isMatured ? 'Đáo hạn' : `Còn ${daysRemaining}N`}
+                          ) : (
+                            <span className="text-sm sm:text-base md:text-lg font-bold text-rose-600 tracking-tight font-mono block truncate">
+                              -{(cost / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                             </span>
+                          )}
+                        </div>
+
+                        {/* 4. NGÀY ĐÁO HẠN HOẶC NGÀY GỬI (NẾU RÚT SỚM) */}
+                        <div className="min-w-0 text-right">
+                          <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
+                            {optimalAction === 'EARLY_BREAK' ? 'Ngày gửi' : 'Ngày đáo hạn'}
+                          </span>
+                          <span className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight font-mono block truncate">
+                            {formatDateVN(optimalAction === 'EARLY_BREAK' ? startDateStr : maturityDateStr, false)}
+                          </span>
+                          <div className="flex justify-end mt-0.5">
+                            {optimalAction === 'EARLY_BREAK' ? (
+                              <span className="text-[9.5px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded font-mono inline-block bg-amber-100 text-amber-900">
+                                Đã gửi {passedDays}N
+                              </span>
+                            ) : (
+                              <span
+                                className={`text-[9.5px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded font-mono inline-block ${
+                                  isMatured
+                                    ? 'bg-rose-100 text-rose-800'
+                                    : daysRemaining <= 45
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : 'bg-indigo-50 text-indigo-800'
+                                }`}
+                              >
+                                {isMatured ? 'Đáo hạn' : `Còn ${daysRemaining}N`}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1587,46 +1748,71 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
                                 />
                               </div>
 
-                              {/* Thân thẻ tinh gọn: 1. Tiền gốc, 2. Tổng thu (Gốc+Lãi), 3. Ngày đáo hạn */}
-                              <div className="p-3 bg-white">
-                                <div className="grid grid-cols-3 gap-1.5 sm:gap-2 bg-slate-50/90 p-2 sm:p-2.5 rounded-xl border border-slate-100">
+                              {/* Thân thẻ 4 chỉ tiêu trên 1 hàng chuẩn kích thước text lớn dễ nhìn */}
+                              <div className="p-3 sm:p-4 bg-white">
+                                <div className="grid grid-cols-4 gap-1.5 sm:gap-4 items-start">
+                                  {/* 1. SỐ TIỀN GỐC */}
                                   <div className="min-w-0">
-                                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
+                                    <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
                                       Số tiền gốc
                                     </span>
-                                    <span className="text-xs sm:text-sm font-bold text-slate-900 tracking-tight font-mono block truncate">
+                                    <span className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight font-mono block truncate">
                                       {(principalVal / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                                     </span>
                                   </div>
 
+                                  {/* 2. TỔNG THU (GỐC+LÃI) */}
                                   <div className="min-w-0">
-                                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
+                                    <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
                                       Tổng thu (Gốc+Lãi)
                                     </span>
-                                    <span className="text-xs sm:text-sm font-bold text-emerald-700 tracking-tight font-mono block truncate">
+                                    <span className="text-sm sm:text-base md:text-lg font-bold text-emerald-600 tracking-tight font-mono block truncate">
                                       +{(totalMaturityExpected / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                                     </span>
                                   </div>
 
-                                  <div className="min-w-0 text-right">
-                                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block truncate">
-                                      Ngày đáo hạn
+                                  {/* 3. CHI PHÍ */}
+                                  <div className="min-w-0">
+                                    <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
+                                      Chi phí
                                     </span>
-                                    <div className="flex flex-col items-end">
-                                      <span className="font-bold text-slate-900 text-xs sm:text-sm font-mono tracking-tight leading-tight">
-                                        {formatDateVN(maturityDateStr, false)}
+                                    {cost === 0 ? (
+                                      <span className="text-sm sm:text-base md:text-lg font-bold text-emerald-600 tracking-tight font-mono block truncate">
+                                        0 đ
                                       </span>
-                                      <span
-                                        className={`text-[9.5px] font-bold px-1.5 py-0.2 rounded font-mono inline-block mt-0.5 ${
-                                          isMatured
-                                            ? 'bg-rose-100 text-rose-800'
-                                            : daysRemaining <= 45
-                                            ? 'bg-amber-100 text-amber-900'
-                                            : 'bg-indigo-50 text-indigo-800'
-                                        }`}
-                                      >
-                                        {isMatured ? 'Đáo hạn' : `Còn ${daysRemaining}N`}
+                                    ) : (
+                                      <span className="text-sm sm:text-base md:text-lg font-bold text-rose-600 tracking-tight font-mono block truncate">
+                                        -{(cost / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} Tr
                                       </span>
+                                    )}
+                                  </div>
+
+                                  {/* 4. NGÀY ĐÁO HẠN HOẶC NGÀY GỬI (NẾU RÚT SỚM) */}
+                                  <div className="min-w-0 text-right">
+                                    <span className="text-[10px] sm:text-xs uppercase tracking-wider text-slate-400 font-bold block truncate">
+                                      {optimalAction === 'EARLY_BREAK' ? 'Ngày gửi' : 'Ngày đáo hạn'}
+                                    </span>
+                                    <span className="text-sm sm:text-base md:text-lg font-bold text-slate-900 tracking-tight font-mono block truncate">
+                                      {formatDateVN(optimalAction === 'EARLY_BREAK' ? startDateStr : maturityDateStr, false)}
+                                    </span>
+                                    <div className="flex justify-end mt-0.5">
+                                      {optimalAction === 'EARLY_BREAK' ? (
+                                        <span className="text-[9.5px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded font-mono inline-block bg-amber-100 text-amber-900">
+                                          Đã gửi {passedDays}N
+                                        </span>
+                                      ) : (
+                                        <span
+                                          className={`text-[9.5px] sm:text-[10px] font-bold px-1.5 py-0.5 rounded font-mono inline-block ${
+                                            isMatured
+                                              ? 'bg-rose-100 text-rose-800'
+                                              : daysRemaining <= 45
+                                              ? 'bg-amber-100 text-amber-900'
+                                              : 'bg-indigo-50 text-indigo-800'
+                                          }`}
+                                        >
+                                          {isMatured ? 'Đáo hạn' : `Còn ${daysRemaining}N`}
+                                        </span>
+                                      )}
                                     </div>
                                   </div>
                                 </div>

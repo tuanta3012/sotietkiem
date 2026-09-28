@@ -16,7 +16,7 @@ import {
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { SavingsBook, SettlementAdjustment, AppSettings, MasterSyncState, WorkspaceMember } from '../types';
+import { SavingsBook, SettlementAdjustment, AppSettings, MasterSyncState, WorkspaceMember, BankInfo } from '../types';
 import { SyncAuditLogEntry } from './syncAuditLog';
 
 // Khởi tạo Firebase App & Firestore Database
@@ -53,6 +53,8 @@ export async function getWorkspaceMasterStateFromFirestore(): Promise<MasterSync
       linkedAccountEmail: data.linkedAccountEmail || '',
       adminEmail: data.adminEmail || '',
       members: data.members || [],
+      settlements: data.settlements || [],
+      banksConfig: data.banksConfig || undefined,
       schemaVersion: data.schemaVersion || 1,
       updatedAt: data.updatedAt || '',
       updatedAtVi: data.updatedAtVi || '',
@@ -91,6 +93,8 @@ export async function saveWorkspaceMasterStateToFirestore(
       linkedAccountEmail: state.linkedAccountEmail || existing?.linkedAccountEmail || currentUserEmail,
       adminEmail: state.adminEmail || existing?.adminEmail || currentUserEmail,
       members: state.members !== undefined ? state.members : (existing?.members || []),
+      settlements: state.settlements !== undefined ? state.settlements : (existing?.settlements || []),
+      banksConfig: state.banksConfig !== undefined ? state.banksConfig : (existing?.banksConfig || undefined),
       schemaVersion: state.schemaVersion || existing?.schemaVersion || 1,
       updatedAt: nowIso,
       updatedAtVi: nowVi,
@@ -133,6 +137,8 @@ export function subscribeToWorkspaceMasterState(
           linkedAccountEmail: data.linkedAccountEmail || '',
           adminEmail: data.adminEmail || '',
           members: data.members || [],
+          settlements: data.settlements || [],
+          banksConfig: data.banksConfig || undefined,
           schemaVersion: data.schemaVersion || 1,
           updatedAt: data.updatedAt || '',
           updatedAtVi: data.updatedAtVi || '',
@@ -146,6 +152,72 @@ export function subscribeToWorkspaceMasterState(
     return () => {};
   }
 }
+
+/**
+ * Lấy cấu hình danh sách ngân hàng từ Firestore
+ */
+export async function getBanksConfigFromFirestore(): Promise<BankInfo[] | null> {
+  try {
+    const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
+    const docSnap = await getDoc(docRef);
+    if (!docSnap.exists()) return null;
+    const data = docSnap.data();
+    if (Array.isArray(data.banksConfig) && data.banksConfig.length > 0) {
+      return data.banksConfig as BankInfo[];
+    }
+    return null;
+  } catch (err) {
+    console.warn('[Firestore Banks] Lỗi khi nạp cấu hình ngân hàng từ Firestore:', err);
+    return null;
+  }
+}
+
+/**
+ * Lưu cấu hình danh sách ngân hàng lên Firestore (đồng bộ cho tất cả các thiết bị)
+ */
+export async function saveBanksConfigToFirestore(banks: BankInfo[]): Promise<boolean> {
+  try {
+    if (!Array.isArray(banks) || banks.length === 0) return false;
+    const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
+    const nowIso = new Date().toISOString();
+    const nowVi = new Date().toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) + ' (GMT+7)';
+    await setDoc(docRef, {
+      banksConfig: banks,
+      updatedAt: nowIso,
+      updatedAtVi: nowVi,
+    }, { merge: true });
+    console.info(`[Firestore Banks] Đã đồng bộ ${banks.length} ngân hàng lên Firestore thành công.`);
+    return true;
+  } catch (err) {
+    console.warn('[Firestore Banks] Lỗi khi lưu cấu hình ngân hàng lên Firestore:', err);
+    return false;
+  }
+}
+
+/**
+ * Lắng nghe thay đổi cấu hình ngân hàng thời gian thực từ Firestore
+ */
+export function subscribeToBanksConfig(callback: (banks: BankInfo[]) => void): Unsubscribe {
+  try {
+    const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
+    return onSnapshot(
+      docRef,
+      (docSnap) => {
+        if (!docSnap.exists()) return;
+        const data = docSnap.data();
+        if (Array.isArray(data.banksConfig) && data.banksConfig.length > 0) {
+          callback(data.banksConfig as BankInfo[]);
+        }
+      },
+      (err) => {
+        console.warn('[Firestore Banks] Lỗi lắng nghe realtime cấu hình ngân hàng:', err);
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
 
 /**
  * 2. ĐẨY NHẬT KÝ KIỂM TOÁN VÀ TỰ ĐỘNG GIỚI HẠN 50 BẢN GHI GẦN NHẤT

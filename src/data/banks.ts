@@ -1,4 +1,40 @@
 import { BankInfo, SavingsBook } from '../types';
+import { saveBanksConfigToFirestore } from '../utils/firebaseFirestoreService';
+
+/**
+ * Dispatch an event when banks are modified locally or synced remotely
+ */
+export function dispatchBanksUpdated(banks?: BankInfo[]) {
+  if (typeof window !== 'undefined') {
+    const list = banks || getAllBanks();
+    window.dispatchEvent(new CustomEvent('banks-updated', { detail: list }));
+  }
+}
+
+/**
+ * Cập nhật cấu hình danh sách ngân hàng từ nguồn đám mây (Firestore / Google Drive)
+ */
+export function updateBanksFromRemote(remoteBanks: BankInfo[]): boolean {
+  if (!Array.isArray(remoteBanks) || remoteBanks.length === 0) return false;
+  try {
+    const currentList = getAllBanks();
+    const cleanedRemote = remoteBanks.map(cleanStandardBank);
+    
+    // So sánh nhanh chuỗi JSON để tránh kích hoạt lại không cần thiết
+    const currentStr = JSON.stringify(currentList);
+    const remoteStr = JSON.stringify(cleanedRemote);
+    if (currentStr === remoteStr) {
+      return false;
+    }
+
+    localStorage.setItem(BANKS_STORAGE_KEY, remoteStr);
+    dispatchBanksUpdated(cleanedRemote);
+    return true;
+  } catch (err) {
+    console.warn('Lỗi khi cập nhật cấu hình ngân hàng từ Firestore:', err);
+    return false;
+  }
+}
 
 export function getBankShortCode(bankIdOrName: string = '', bookCode: string = ''): string {
   if (bookCode && bookCode.includes('-')) {
@@ -446,6 +482,8 @@ export function saveBank(bank: Partial<BankInfo> & { name: string; shortName?: s
     try {
       localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(currentList));
     } catch {}
+    dispatchBanksUpdated(currentList);
+    saveBanksConfigToFirestore(currentList).catch(() => {});
     return updatedBank;
   } else {
     // Thêm ngân hàng mới
@@ -472,6 +510,8 @@ export function saveBank(bank: Partial<BankInfo> & { name: string; shortName?: s
     try {
       localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(updatedList));
     } catch {}
+    dispatchBanksUpdated(updatedList);
+    saveBanksConfigToFirestore(updatedList).catch(() => {});
     return newBank;
   }
 }
@@ -485,6 +525,8 @@ export function deleteBank(bankId: string): boolean {
   try {
     localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(updatedList));
   } catch {}
+  dispatchBanksUpdated(updatedList);
+  saveBanksConfigToFirestore(updatedList).catch(() => {});
   return true;
 }
 
@@ -492,10 +534,13 @@ export function deleteBank(bankId: string): boolean {
  * Khôi phục danh sách ngân hàng về mặc định
  */
 export function resetBanksToDefault(): BankInfo[] {
+  const defaultCleaned = POPULAR_BANKS.map(cleanStandardBank);
   try {
-    localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(POPULAR_BANKS));
+    localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(defaultCleaned));
   } catch {}
-  return [...POPULAR_BANKS];
+  dispatchBanksUpdated(defaultCleaned);
+  saveBanksConfigToFirestore(defaultCleaned).catch(() => {});
+  return [...defaultCleaned];
 }
 
 // Giữ lại alias cho tính tương thích

@@ -167,6 +167,7 @@ export interface MasterSyncState {
   adminEmail?: string;
   members?: WorkspaceMember[];
   settlements?: SettlementAdjustment[];
+  banksConfig?: BankInfo[];
   updatedAt?: string;
   updatedAtVi?: string;
   appVersion?: string;

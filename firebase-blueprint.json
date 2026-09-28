@@ -13,6 +13,7 @@
         "adminEmail": { "type": "string" },
         "members": { "type": "array" },
         "settlements": { "type": "array" },
+        "banksConfig": { "type": "array" },
         "lastAction": { "type": "string" },
         "updatedAt": { "type": "string" },
         "createdAt": { "type": "string" }

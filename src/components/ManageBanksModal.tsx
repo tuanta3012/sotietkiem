@@ -73,6 +73,18 @@ export const ManageBanksModal: React.FC<ManageBanksModalProps> = ({
     }
   }, [isFormOpen]);
 
+  // Lắng nghe sự kiện cấu hình ngân hàng được cập nhật từ Firestore / thiết bị khác
+  useEffect(() => {
+    const handleRemoteUpdate = () => {
+      setVersion((v) => v + 1);
+      onBanksChanged?.();
+    };
+    window.addEventListener('banks-updated', handleRemoteUpdate);
+    return () => {
+      window.removeEventListener('banks-updated', handleRemoteUpdate);
+    };
+  }, [onBanksChanged]);
+
   // Danh sách ngân hàng được phân loại
   const { frequentBanks, allSorted } = useMemo(() => {
     return getSortedBanksByUsage(books);
