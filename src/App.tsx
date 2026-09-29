@@ -296,13 +296,18 @@ export default function App() {
 
   // Đồng bộ cấu hình ngân hàng qua Firestore theo thời gian thực (Real-time Cross-Device Sync)
   useEffect(() => {
+    // Nếu thiết bị không có kết nối internet, sử dụng cấu hình ngân hàng có sẵn trong bộ nhớ máy
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return;
+    }
+
     // 1. Nạp cấu hình ngân hàng từ Firestore khi mở app
     getBanksConfigFromFirestore()
       .then((remoteBanks) => {
         if (remoteBanks && remoteBanks.length > 0) {
           updateBanksFromRemote(remoteBanks);
-        } else {
-          // Nếu Firestore chưa có danh sách ngân hàng nào, đẩy danh sách hiện hành lên làm Master
+        } else if (remoteBanks && remoteBanks.length === 0) {
+          // Chỉ đẩy danh sách ngân hàng lên nếu Firestore đã kết nối thành công nhưng chưa có dữ liệu nào
           const current = getAllBanks();
           if (current.length > 0) {
             saveBanksConfigToFirestore(current).catch(() => {});
@@ -864,54 +869,69 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <LoginModal
-        isOpen={true}
-        onLogin={async (user, token) => {
-          setCurrentUser(user);
-          if (user.isOffline) {
-            setIsUnlocked(true);
-            setSyncDriveStatus(null);
-            // Tiếp tục sử dụng dữ liệu sổ cũ đã có sẵn trên máy
-          } else {
-            setIsUnlocked(true);
-            if (token) {
-              setGoogleAccessToken(token);
-              try {
-                // Kiểm tra xem tài khoản này đã có file liên kết trung tâm trên Google Drive chưa
-                const hub = await autoDiscoverLatestCentralHub(token, user.email);
-                if (hub && hub.id && (hub as any).status !== 'unlinked' && (hub as any).lastAction !== 'unlink') {
-                  const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-                  setSettings((prev) => ({
-                    ...prev,
-                    googleSheetUrl: hubUrl,
-                    googleSheetName: hub.name,
-                    lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-                  }));
-                  syncBooksFromDrive(false, token);
-                } else if (!settings.googleSheetUrl) {
-                  // Mở modal đồng bộ để hỗ trợ tạo file liên kết mới hoặc chọn file có sẵn
-                  setIsSyncModalOpen(true);
-                } else {
-                  syncBooksFromDrive(false, token);
+      <>
+        <LoginModal
+          isOpen={true}
+          onLogin={async (user, token) => {
+            setCurrentUser(user);
+            if (user.isOffline) {
+              setIsUnlocked(true);
+              setSyncDriveStatus(null);
+              // Tiếp tục sử dụng dữ liệu sổ cũ đã có sẵn trên máy
+            } else {
+              setIsUnlocked(true);
+              if (token) {
+                setGoogleAccessToken(token);
+                try {
+                  // Kiểm tra xem tài khoản này đã có file liên kết trung tâm trên Google Drive chưa
+                  const hub = await autoDiscoverLatestCentralHub(token, user.email);
+                  if (hub && hub.id && (hub as any).status !== 'unlinked' && (hub as any).lastAction !== 'unlink') {
+                    const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+                    setSettings((prev) => ({
+                      ...prev,
+                      googleSheetUrl: hubUrl,
+                      googleSheetName: hub.name,
+                      lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+                    }));
+                    syncBooksFromDrive(false, token);
+                  } else if (!settings.googleSheetUrl) {
+                    // Mở modal đồng bộ để hỗ trợ tạo file liên kết mới hoặc chọn file có sẵn
+                    setIsSyncModalOpen(true);
+                  } else {
+                    syncBooksFromDrive(false, token);
+                  }
+                } catch (err) {
+                  console.warn('Auto discover central hub failed on login:', err);
+                  if (!settings.googleSheetUrl) {
+                    setIsSyncModalOpen(true);
+                  } else {
+                    syncBooksFromDrive(false, token);
+                  }
                 }
-              } catch (err) {
-                console.warn('Auto discover central hub failed on login:', err);
+              } else {
                 if (!settings.googleSheetUrl) {
                   setIsSyncModalOpen(true);
                 } else {
-                  syncBooksFromDrive(false, token);
+                  syncBooksFromDrive(false);
                 }
               }
-            } else {
-              if (!settings.googleSheetUrl) {
-                setIsSyncModalOpen(true);
-              } else {
-                syncBooksFromDrive(false);
-              }
             }
-          }
-        }}
-      />
+          }}
+          currentVersion={CURRENT_APP_VERSION}
+          onCheckUpdate={() => checkAppUpdate(true)}
+          hasNewUpdate={!!updateInfo}
+          newVersion={updateInfo?.version}
+          onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
+        />
+
+        {/* APK Auto-Update Modal (Hiển thị đầy đủ ngay cả khi chưa đăng nhập) */}
+        <AppUpdateModal
+          isOpen={isUpdateModalOpen}
+          currentVersion={CURRENT_APP_VERSION}
+          updateInfo={updateInfo}
+          onClose={() => setIsUpdateModalOpen(false)}
+        />
+      </>
     );
   }
 

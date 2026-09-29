@@ -313,9 +313,13 @@ export async function trySilentRefresh(): Promise<string | null> {
         // ignore initialization warning
       }
 
-      // Try silent refresh using offline refresh token
+      // Try silent refresh using offline refresh token with a strict 8-second timeout to prevent native hangs
       try {
-        const refreshResult = await GoogleAuth.refresh();
+        const refreshPromise = GoogleAuth.refresh();
+        const timeoutPromise = new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('TIMEOUT_REFRESH: Quá thời gian gia hạn phiên Google (8 giây).')), 8000)
+        );
+        const refreshResult = await Promise.race([refreshPromise, timeoutPromise]);
         if (refreshResult && refreshResult.accessToken) {
           console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.refresh()');
           const expiresAt = Date.now() + 3500 * 1000;
@@ -327,7 +331,7 @@ export async function trySilentRefresh(): Promise<string | null> {
           return refreshResult.accessToken;
         }
       } catch (refreshErr) {
-        console.warn('[Silent Auth] GoogleAuth.refresh() failed:', refreshErr);
+        console.warn('[Silent Auth] GoogleAuth.refresh() failed or timed out:', refreshErr);
       }
     } catch (nativeErr) {
       console.warn('[Silent Auth] Native silent refresh failed:', nativeErr);
@@ -362,6 +366,24 @@ export const initGoogleAuth = (
       if (everLoggedIn) {
         console.info('[initGoogleAuth] User is not in Firebase Auth but everLoggedIn is true, attempting silent restore...');
         const silentToken = await trySilentRefresh();
+        
+        // Auto sign-in to Firebase Auth using stored idToken and silent refreshed accessToken
+        const savedIdToken = getGoogleIdToken();
+        if (silentToken && savedIdToken) {
+          try {
+            console.info('[initGoogleAuth] Re-authenticating Firebase Auth with Google Credentials...');
+            const credential = GoogleAuthProvider.credential(savedIdToken, silentToken);
+            const fbCredential = await signInWithCredential(auth, credential);
+            if (fbCredential?.user) {
+              console.info('[initGoogleAuth] Firebase Auth successfully re-authenticated silently.');
+              if (onSuccess) onSuccess(fbCredential.user, silentToken);
+              return;
+            }
+          } catch (fbErr) {
+            console.warn('[initGoogleAuth] Silent Firebase re-auth failed:', fbErr);
+          }
+        }
+
         if (silentToken && auth.currentUser) {
           if (onSuccess) onSuccess(auth.currentUser, silentToken);
           return;
@@ -470,8 +492,11 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
 
       let nativeResult: any;
       try {
-        // Clear cached Native session before interactive sign-in to force account picker on Android
-        await GoogleAuth.signOut().catch(() => {});
+        // Clear cached Native session before interactive sign-in with a strict 3-second timeout to prevent native hangs
+        const signOutPromise = GoogleAuth.signOut();
+        const signOutTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));
+        await Promise.race([signOutPromise, signOutTimeout]).catch(() => {});
+
         const signInPromise = GoogleAuth.signIn();
         const timeoutPromise = new Promise((_, reject) =>
           setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác chọn tài khoản Google (60 giây). Vui lòng thử lại.')), 60000)
@@ -504,8 +529,14 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
 
       console.info('[Google Sign-In] Đang xác thực với Firebase bằng Google Credential...');
       const credential = GoogleAuthProvider.credential(idToken || null, accessToken !== idToken ? accessToken : null);
-      const firebaseUserCredential = await signInWithCredential(auth, credential).catch((fbErr) => {
-        console.warn('[Firebase Auth Native Signin Fallback]', fbErr);
+      
+      const signInFirebasePromise = signInWithCredential(auth, credential);
+      const signInFirebaseTimeout = new Promise<any>((_, reject) =>
+        setTimeout(() => reject(new Error('TIMEOUT_FIREBASE: Quá thời gian xác thực với Firebase (15 giây).')), 15000)
+      );
+
+      const firebaseUserCredential = await Promise.race([signInFirebasePromise, signInFirebaseTimeout]).catch((fbErr) => {
+        console.warn('[Firebase Auth Native Signin Fallback] Sử dụng tài khoản offline tạm thời do lỗi kết nối Firebase:', fbErr);
         return { user: { email: nativeResult.email || 'user@google.com', displayName: nativeResult.displayName || 'Chủ Tài Khoản', photoURL: nativeResult.imageUrl || undefined } as any };
       });
       const user = firebaseUserCredential.user;

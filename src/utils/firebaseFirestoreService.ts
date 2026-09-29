@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
+  initializeFirestore,
   getFirestore,
   doc,
   setDoc,
@@ -19,10 +20,24 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import { SavingsBook, SettlementAdjustment, AppSettings, MasterSyncState, WorkspaceMember, BankInfo } from '../types';
 import { SyncAuditLogEntry } from './syncAuditLog';
 
-// Khởi tạo Firebase App & Firestore Database
+// Khởi tạo Firebase App & Firestore Database với cấu hình tự động thích ứng kết nối (Long-Polling)
+// để tránh lỗi ngắt kết nối backend WebChannel trên môi trường WebView và Proxy
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      experimentalForceLongPolling: true,
+      ignoreUndefinedProperties: true,
+    }, firebaseConfig.firestoreDatabaseId);
+  } catch (err) {
+    try {
+      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    } catch {
+      return getFirestore(app);
+    }
+  }
+})();
 
 const WORKSPACE_DOC_ID = 'family_vault';
 const MAX_LOGS_LIMIT = 50;
@@ -34,9 +49,16 @@ const MAX_LOGS_LIMIT = 50;
 export async function getWorkspaceMasterStateFromFirestore(): Promise<MasterSyncState | null> {
   try {
     const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
-    const docSnap = await getDoc(docRef);
+    
+    // Add strict 8-second timeout to prevent hangs when Firestore connection is unstable
+    const fetchPromise = getDoc(docRef);
+    const timeoutPromise = new Promise<any>((_, reject) =>
+      setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian tải dữ liệu từ Firestore (8 giây).')), 8000)
+    );
+    
+    const docSnap = await Promise.race([fetchPromise, timeoutPromise]);
 
-    if (!docSnap.exists()) {
+    if (!docSnap || !docSnap.exists()) {
       return null;
     }
 
@@ -116,6 +138,9 @@ export function subscribeToWorkspaceMasterState(
   callback: (state: MasterSyncState | null) => void
 ): Unsubscribe {
   try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return () => {};
+    }
     const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
     return onSnapshot(
       docRef,
@@ -153,19 +178,27 @@ export function subscribeToWorkspaceMasterState(
   }
 }
 
-/**
- * Lấy cấu hình danh sách ngân hàng từ Firestore
- */
 export async function getBanksConfigFromFirestore(): Promise<BankInfo[] | null> {
   try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return null;
+    }
+
     const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
-    const docSnap = await getDoc(docRef);
-    if (!docSnap.exists()) return null;
+    
+    // Add strict 6-second timeout to prevent hangs when Firestore connection is unstable
+    const fetchPromise = getDoc(docRef);
+    const timeoutPromise = new Promise<any>((_, reject) =>
+      setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian nạp cấu hình ngân hàng.')), 6000)
+    );
+    
+    const docSnap = await Promise.race([fetchPromise, timeoutPromise]);
+    if (!docSnap || !docSnap.exists()) return [];
     const data = docSnap.data();
     if (Array.isArray(data.banksConfig) && data.banksConfig.length > 0) {
       return data.banksConfig as BankInfo[];
     }
-    return null;
+    return [];
   } catch (err) {
     console.warn('[Firestore Banks] Lỗi khi nạp cấu hình ngân hàng từ Firestore:', err);
     return null;
@@ -199,6 +232,9 @@ export async function saveBanksConfigToFirestore(banks: BankInfo[]): Promise<boo
  */
 export function subscribeToBanksConfig(callback: (banks: BankInfo[]) => void): Unsubscribe {
   try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return () => {};
+    }
     const docRef = doc(db, 'workspaces', WORKSPACE_DOC_ID);
     return onSnapshot(
       docRef,
