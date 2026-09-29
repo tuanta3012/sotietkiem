@@ -19,6 +19,7 @@ import { AppModals } from './components/AppModals';
 import {
   getGoogleAccessToken,
   setGoogleAccessToken,
+  restoreGoogleAuthSession,
   signOutGoogle,
   signInWithGoogle,
   initGoogleAuth,
@@ -249,14 +250,8 @@ export default function App() {
           }
         }
 
-        // 4. Khôi phục token
-        const token = getGoogleAccessToken();
-        if (!token) {
-          const { value: prefToken } = await Preferences.get({ key: 'savings_google_access_token' });
-          if (prefToken) {
-            setGoogleAccessToken(prefToken);
-          }
-        }
+        // 4. Khôi phục token bảo mật dài hạn (Secure Storage)
+        await restoreGoogleAuthSession();
       } catch (err) {
         console.warn('Lỗi khôi phục phiên từ Preferences:', err);
       } finally {

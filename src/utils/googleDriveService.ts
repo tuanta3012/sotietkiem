@@ -15,6 +15,7 @@ import {
 import { Capacitor } from '@capacitor/core';
 import { Preferences } from '@capacitor/preferences';
 import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
+import { getSecureItem, setSecureItem, removeSecureItem } from './secureStorage';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { SavingsBook, SettlementAdjustment, WorkspaceMember, UserRole, AppSettings, MasterSyncState } from '../types';
 import { parseWorkbook, parseMatrixData, getSavingsExcelArrayBuffer, ParseExcelResult } from './excelParser';
@@ -186,6 +187,10 @@ export function setGoogleAccessToken(token: string | null, expiresAtMs?: number)
       Preferences.set({ key: TOKEN_KEY, value: token }).catch(() => {});
       Preferences.set({ key: TOKEN_EXPIRES_AT_KEY, value: expiresAt }).catch(() => {});
       Preferences.set({ key: 'google_drive_ever_logged_in', value: 'true' }).catch(() => {});
+
+      // Secure storage backup
+      setSecureItem(TOKEN_KEY, token).catch(() => {});
+      setSecureItem(TOKEN_EXPIRES_AT_KEY, expiresAt).catch(() => {});
     } else {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
@@ -193,6 +198,10 @@ export function setGoogleAccessToken(token: string | null, expiresAtMs?: number)
       Preferences.remove({ key: TOKEN_KEY }).catch(() => {});
       Preferences.remove({ key: TOKEN_EXPIRES_AT_KEY }).catch(() => {});
       Preferences.remove({ key: 'google_drive_ever_logged_in' }).catch(() => {});
+
+      // Secure storage clean
+      removeSecureItem(TOKEN_KEY).catch(() => {});
+      removeSecureItem(TOKEN_EXPIRES_AT_KEY).catch(() => {});
     }
   } catch {
     // ignore
@@ -220,19 +229,50 @@ export function saveGoogleAuthSession(session: {
     if (session.idToken) {
       localStorage.setItem(ID_TOKEN_KEY, session.idToken);
       Preferences.set({ key: ID_TOKEN_KEY, value: session.idToken }).catch(() => {});
+      setSecureItem(ID_TOKEN_KEY, session.idToken).catch(() => {});
     }
     if (session.refreshToken) {
       localStorage.setItem(REFRESH_TOKEN_KEY, session.refreshToken);
       Preferences.set({ key: REFRESH_TOKEN_KEY, value: session.refreshToken }).catch(() => {});
+      setSecureItem(REFRESH_TOKEN_KEY, session.refreshToken).catch(() => {});
     }
     if (session.userProfile) {
       const json = JSON.stringify(session.userProfile);
       localStorage.setItem(USER_PROFILE_KEY, json);
       Preferences.set({ key: USER_PROFILE_KEY, value: json }).catch(() => {});
+      setSecureItem(USER_PROFILE_KEY, json).catch(() => {});
     }
   } catch (err) {
     console.warn('Error saving Google Auth Session:', err);
   }
+}
+
+/**
+ * Restore Google Auth Session credentials from native secure storage (used at app startup)
+ */
+export async function restoreGoogleAuthSession(): Promise<boolean> {
+  try {
+    const token = await getSecureItem(TOKEN_KEY);
+    const expiresAt = await getSecureItem(TOKEN_EXPIRES_AT_KEY);
+    const refreshToken = await getSecureItem(REFRESH_TOKEN_KEY);
+    const idToken = await getSecureItem(ID_TOKEN_KEY);
+    const userProfile = await getSecureItem(USER_PROFILE_KEY);
+
+    if (token) {
+      cachedAccessToken = token;
+      localStorage.setItem(TOKEN_KEY, token);
+      if (expiresAt) localStorage.setItem(TOKEN_EXPIRES_AT_KEY, expiresAt);
+      if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+      if (idToken) localStorage.setItem(ID_TOKEN_KEY, idToken);
+      if (userProfile) localStorage.setItem(USER_PROFILE_KEY, userProfile);
+      localStorage.setItem('google_drive_ever_logged_in', 'true');
+      console.info('[SecureStorage] Successfully restored Google OAuth credentials from native secure storage.');
+      return true;
+    }
+  } catch (err) {
+    console.warn('[SecureStorage] Failed to restore session from secure storage:', err);
+  }
+  return false;
 }
 
 /**
@@ -465,7 +505,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
             'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/spreadsheets',
           ],
-          grantOfflineAccess: false,
+          grantOfflineAccess: true,
         });
       } catch (initErr) {
         console.warn('GoogleAuth.initialize warn/error:', initErr);
@@ -663,6 +703,13 @@ export async function signOutGoogle(): Promise<void> {
 
       sessionStorage.removeItem(TOKEN_KEY);
       sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+
+      // Secure storage clean
+      removeSecureItem(TOKEN_KEY).catch(() => {});
+      removeSecureItem(TOKEN_EXPIRES_AT_KEY).catch(() => {});
+      removeSecureItem(REFRESH_TOKEN_KEY).catch(() => {});
+      removeSecureItem(ID_TOKEN_KEY).catch(() => {});
+      removeSecureItem(USER_PROFILE_KEY).catch(() => {});
     } catch {
       // ignore
     }
