@@ -47,8 +47,39 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         setDownloadProgress(25);
 
         let savedUri = '';
+        let progressInterval: any = null;
+        let realProgressReceived = false;
+        let progressListener: any = null;
+
         try {
-          // Native download directly via Filesystem.downloadFile (bypasses WebView CORS & redirects)
+          // 1. Register native progress listener
+          try {
+            progressListener = await Filesystem.addListener('progress', (progress) => {
+              realProgressReceived = true;
+              if (progress.contentLength > 0) {
+                const percent = Math.round((progress.bytes / progress.contentLength) * 100);
+                // Map the real 0-100% to a visually smooth 25% - 85% range
+                const mappedPercent = Math.min(85, Math.max(25, 25 + Math.round(percent * 0.6)));
+                setDownloadProgress(mappedPercent);
+              }
+            });
+          } catch (listenerErr) {
+            console.warn('Could not register native progress listener:', listenerErr);
+          }
+
+          // 2. Start simulated smooth increment (fallback/backup in case server doesn't return contentLength)
+          let simulatedProgress = 25;
+          progressInterval = setInterval(() => {
+            if (!realProgressReceived) {
+              if (simulatedProgress < 82) {
+                // Smooth ease-out increment (slowing down as it approaches the limit)
+                simulatedProgress += Math.max(0.5, (85 - simulatedProgress) * 0.05);
+                setDownloadProgress(Math.round(simulatedProgress));
+              }
+            }
+          }, 150);
+
+          // 3. Run native download directly via Filesystem.downloadFile
           const downloadRes = await Filesystem.downloadFile({
             url: targetLink,
             path: fileName,
@@ -56,7 +87,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             progress: true,
           });
           savedUri = (downloadRes as any).uri || downloadRes.path || '';
-          setDownloadProgress(85);
         } catch (downloadErr) {
           console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);
           setDownloadProgress(40);
@@ -83,6 +113,18 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             directory: Directory.Cache,
           });
           savedUri = writeFileRes.uri;
+        } finally {
+          // 4. Clean up progress tracking
+          if (progressInterval) {
+            clearInterval(progressInterval);
+          }
+          if (progressListener) {
+            try {
+              await progressListener.remove();
+            } catch (err) {
+              console.warn('Error removing progress listener:', err);
+            }
+          }
         }
 
         setDownloadProgress(95);
