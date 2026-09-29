@@ -37,6 +37,8 @@ import { SyncAuditLogModal } from './SyncAuditLogModal';
 import { AppSettings, AuthUser, canEditData } from '../types';
 import { NativeBiometric } from '@capgo/capacitor-native-biometric';
 import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
+import { setSecureItem } from '../utils/secureStorage';
 import { formatVND, formatShortVND } from '../utils/formatters';
 import { useToast } from '../context/ToastContext';
 import {
@@ -353,6 +355,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                           ...prev,
                           notificationsEnabled: nextState,
                         }));
+                        // Lưu đồng thời vào cả 3 tầng: LocalStorage, Preferences (Android) và SecureStorage (Keystore)
+                        try {
+                          const val = String(nextState);
+                          localStorage.setItem('savings_setting_notifications', val);
+                          Preferences.set({ key: 'savings_setting_notifications', value: val }).catch(() => {});
+                          setSecureItem('savings_setting_notifications', val).catch(() => {});
+                        } catch (err) {
+                          console.warn('Lỗi ghi nhớ cài đặt thông báo:', err);
+                        }
                       }}
                       className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >
@@ -396,6 +407,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                           ...prev,
                           enableBiometricLogin: nextState,
                         }));
+                        // Lưu đồng thời vào cả 3 tầng: LocalStorage, Preferences (Android) và SecureStorage (Keystore)
+                        try {
+                          const val = String(nextState);
+                          localStorage.setItem('savings_setting_biometrics', val);
+                          Preferences.set({ key: 'savings_setting_biometrics', value: val }).catch(() => {});
+                          setSecureItem('savings_setting_biometrics', val).catch(() => {});
+                        } catch (err) {
+                          console.warn('Lỗi ghi nhớ cài đặt khóa vân tay:', err);
+                        }
                       }}
                       className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
                     >

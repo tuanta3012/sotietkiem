@@ -33,6 +33,7 @@ import {
   getDynamicBalanceGrowthHistory,
   clearStaticHistoryFromStorage,
 } from './data/historicalGrowth';
+import { getSecureItem, setSecureItem } from './utils/secureStorage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
@@ -98,7 +99,12 @@ export default function App() {
     try {
       const savedUser = localStorage.getItem('savings_auth_user_v3');
       const savedSettings = localStorage.getItem('savings_settings_v3');
+      const bioDirect = localStorage.getItem('savings_setting_biometrics');
+
       if (savedUser) {
+        if (bioDirect === 'true') {
+          return false;
+        }
         if (savedSettings) {
           const parsed = JSON.parse(savedSettings);
           if (parsed.enableBiometricLogin) {
@@ -117,10 +123,13 @@ export default function App() {
   const [showFileDeletedRecovery, setShowFileDeletedRecovery] = useState<boolean>(false);
   const [isClearDataModalOpen, setIsClearDataModalOpen] = useState<boolean>(false);
 
-  // App settings state
+  // App settings state - Hỗ trợ khôi phục đồng bộ đa tầng (Direct keys + JSON settings)
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem('savings_settings_v3');
+      const notiDirect = localStorage.getItem('savings_setting_notifications');
+      const bioDirect = localStorage.getItem('savings_setting_biometrics');
+
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
@@ -150,8 +159,39 @@ export default function App() {
           googleSheetUrl: parsed.googleSheetUrl || undefined,
           googleSheetName: parsed.googleSheetName || undefined,
           lastSyncTime: parsed.lastSyncTime ?? undefined,
-          notificationsEnabled: parsed.notificationsEnabled ?? false,
-          enableBiometricLogin: parsed.enableBiometricLogin ?? false,
+          notificationsEnabled: notiDirect !== null ? notiDirect === 'true' : (parsed.notificationsEnabled ?? false),
+          enableBiometricLogin: bioDirect !== null ? bioDirect === 'true' : (parsed.enableBiometricLogin ?? false),
+        };
+      } else if (notiDirect !== null || bioDirect !== null) {
+        return {
+          privacyMode: false,
+          isVipMode: true,
+          upfrontNetting: true,
+          defaultLoanMargin: 1.5,
+          bankLoanMargins: {
+            seabank: 1.5,
+            shb: 1.5,
+            sea2: 1.5,
+            vietcombank: 1.5,
+            techcombank: 1.8,
+            bidv: 1.5,
+            vpbank: 2.0,
+            mbbank: 1.5,
+            acb: 1.6,
+            agribank: 1.5,
+            hdbank: 2.0,
+            vib: 1.9,
+            tpbank: 1.8,
+          },
+          defaultDemandRate: 0.2,
+          defaultLTV: 1.0,
+          husbandName: 'Chồng',
+          wifeName: 'Vợ',
+          googleSheetUrl: undefined,
+          googleSheetName: undefined,
+          lastSyncTime: undefined,
+          notificationsEnabled: notiDirect === 'true',
+          enableBiometricLogin: bioDirect === 'true',
         };
       }
     } catch {
@@ -185,6 +225,7 @@ export default function App() {
       googleSheetName: undefined,
       lastSyncTime: undefined,
       notificationsEnabled: false,
+      enableBiometricLogin: false,
     };
   });
 
@@ -206,25 +247,62 @@ export default function App() {
     initNativeStatusBar();
   }, []);
 
-  // 2. Tự động khôi phục phiên làm việc ngầm từ Capacitor Preferences khi mở/khởi động lại app
+  // 2. Tự động khôi phục phiên làm việc ngầm từ Capacitor Preferences và SecureStorage khi mở/khởi động lại app
   useEffect(() => {
     const restoreSessionFromPreferences = async () => {
       try {
-        // 1. Khôi phục settings từ Preferences trước
         let hasBiometric = false;
-        const { value: prefSettings } = await Preferences.get({ key: 'savings_settings_v3' });
-        if (prefSettings) {
-          try {
-            const parsed = JSON.parse(prefSettings);
-            hasBiometric = !!parsed.enableBiometricLogin;
-            setSettings((prev) => ({
-              ...prev,
-              ...parsed,
-            }));
-          } catch (e) {
-            console.warn('Lỗi parse settings từ Preferences:', e);
-          }
+        let hasNotifications = false;
+
+        // Tầng 1: Đọc từ Keystore phần cứng SecureStorage (không bao giờ bị xóa khi cập nhật APK)
+        try {
+          const secBio = await getSecureItem('savings_setting_biometrics');
+          const secNoti = await getSecureItem('savings_setting_notifications');
+          if (secBio === 'true') hasBiometric = true;
+          if (secNoti === 'true') hasNotifications = true;
+        } catch (e) {
+          console.warn('Lỗi đọc SecureStorage settings:', e);
         }
+
+        // Tầng 2: Đọc từ Preferences riêng lẻ
+        try {
+          const { value: pBio } = await Preferences.get({ key: 'savings_setting_biometrics' });
+          const { value: pNoti } = await Preferences.get({ key: 'savings_setting_notifications' });
+          if (pBio === 'true') hasBiometric = true;
+          if (pNoti === 'true') hasNotifications = true;
+        } catch (e) {
+          console.warn('Lỗi đọc Preferences settings riêng lẻ:', e);
+        }
+
+        // Tầng 3: Đọc settings tổng thể từ Preferences
+        let parsedPref: any = null;
+        try {
+          const { value: prefSettings } = await Preferences.get({ key: 'savings_settings_v3' });
+          if (prefSettings) {
+            parsedPref = JSON.parse(prefSettings);
+            if (parsedPref.enableBiometricLogin) hasBiometric = true;
+            if (parsedPref.notificationsEnabled) hasNotifications = true;
+          }
+        } catch (e) {
+          console.warn('Lỗi parse settings từ Preferences:', e);
+        }
+
+        // Cập nhật state Settings với giá trị đã được khôi phục chắc chắn
+        setSettings((prev) => {
+          const updated = {
+            ...prev,
+            ...(parsedPref || {}),
+            enableBiometricLogin: hasBiometric || prev.enableBiometricLogin,
+            notificationsEnabled: hasNotifications || prev.notificationsEnabled,
+          };
+          try {
+            const json = JSON.stringify(updated);
+            localStorage.setItem('savings_settings_v3', json);
+            localStorage.setItem('savings_setting_biometrics', String(updated.enableBiometricLogin));
+            localStorage.setItem('savings_setting_notifications', String(updated.notificationsEnabled));
+          } catch {}
+          return updated;
+        });
 
         // 2. Khôi phục user từ Preferences
         let hasUser = false;
@@ -247,6 +325,8 @@ export default function App() {
         if (hasUser) {
           if (!hasBiometric) {
             setIsUnlocked(true);
+          } else {
+            setIsUnlocked(false);
           }
         }
 
@@ -269,6 +349,21 @@ export default function App() {
       const json = JSON.stringify(settings);
       localStorage.setItem('savings_settings_v3', json);
       Preferences.set({ key: 'savings_settings_v3', value: json }).catch(() => {});
+
+      // Đồng thời lưu độc lập vào SecureStorage (Keystore) và Preferences
+      if (settings.enableBiometricLogin !== undefined) {
+        const bioVal = String(settings.enableBiometricLogin);
+        localStorage.setItem('savings_setting_biometrics', bioVal);
+        Preferences.set({ key: 'savings_setting_biometrics', value: bioVal }).catch(() => {});
+        setSecureItem('savings_setting_biometrics', bioVal).catch(() => {});
+      }
+      if (settings.notificationsEnabled !== undefined) {
+        const notiVal = String(settings.notificationsEnabled);
+        localStorage.setItem('savings_setting_notifications', notiVal);
+        Preferences.set({ key: 'savings_setting_notifications', value: notiVal }).catch(() => {});
+        setSecureItem('savings_setting_notifications', notiVal).catch(() => {});
+      }
+
       if (!settings.googleSheetUrl) {
         clearStaticHistoryFromStorage();
       }
