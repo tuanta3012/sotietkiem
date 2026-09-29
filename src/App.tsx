@@ -395,6 +395,8 @@ export default function App() {
 
   // Giữ phiên Google OAuth và Firebase Auth luôn đồng bộ bền vững khi mở app hoặc refresh trang
   useEffect(() => {
+    if (!isSessionRestored) return; // Đợi khôi phục xong phiên từ Secure Storage mới lắng nghe Auth
+
     const unsubscribe = initGoogleAuth(
       (firebaseUser, token) => {
         if (token) {
@@ -408,7 +410,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, []);
+  }, [isSessionRestored]);
 
   // Ref callbacks for useSavingsBooks to push to Google Drive seamlessly
   const pushBooksToDriveRef = useRef<((b: SavingsBook[], a?: SettlementAdjustment[]) => void) | undefined>(undefined);

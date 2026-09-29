@@ -47,37 +47,39 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         setDownloadProgress(25);
 
         let savedUri = '';
+        let currentProgress = 25;
         let progressInterval: any = null;
-        let realProgressReceived = false;
         let progressListener: any = null;
 
         try {
-          // 1. Register native progress listener
+          // 1. Start simulated smooth increment (always runs as a minimum progress baseline, slowing down as it approaches 85%)
+          progressInterval = setInterval(() => {
+            if (currentProgress < 85) {
+              // Smooth ease-out curve: increment gets smaller as we approach 85%
+              const increment = Math.max(0.1, (85 - currentProgress) * 0.04);
+              currentProgress += increment;
+              setDownloadProgress(Math.round(currentProgress));
+            }
+          }, 120);
+
+          // 2. Register native progress listener
           try {
             progressListener = await Filesystem.addListener('progress', (progress) => {
-              realProgressReceived = true;
-              if (progress.contentLength > 0) {
+              if (progress && typeof progress.bytes === 'number' && typeof progress.contentLength === 'number' && progress.contentLength > 0) {
                 const percent = Math.round((progress.bytes / progress.contentLength) * 100);
                 // Map the real 0-100% to a visually smooth 25% - 85% range
-                const mappedPercent = Math.min(85, Math.max(25, 25 + Math.round(percent * 0.6)));
-                setDownloadProgress(mappedPercent);
+                const mappedPercent = 25 + Math.round(percent * 0.6); // 25 to 85
+                
+                // Only advance the progress if the real mapped percent is higher than our current simulated progress
+                if (mappedPercent > currentProgress) {
+                  currentProgress = mappedPercent;
+                  setDownloadProgress(Math.round(currentProgress));
+                }
               }
             });
           } catch (listenerErr) {
             console.warn('Could not register native progress listener:', listenerErr);
           }
-
-          // 2. Start simulated smooth increment (fallback/backup in case server doesn't return contentLength)
-          let simulatedProgress = 25;
-          progressInterval = setInterval(() => {
-            if (!realProgressReceived) {
-              if (simulatedProgress < 82) {
-                // Smooth ease-out increment (slowing down as it approaches the limit)
-                simulatedProgress += Math.max(0.5, (85 - simulatedProgress) * 0.05);
-                setDownloadProgress(Math.round(simulatedProgress));
-              }
-            }
-          }, 150);
 
           // 3. Run native download directly via Filesystem.downloadFile
           const downloadRes = await Filesystem.downloadFile({
@@ -89,11 +91,13 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           savedUri = (downloadRes as any).uri || downloadRes.path || '';
         } catch (downloadErr) {
           console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);
+          currentProgress = 40;
           setDownloadProgress(40);
           const response = await fetch(targetLink, { redirect: 'follow' });
           if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
           const blob = await response.blob();
           
+          currentProgress = 70;
           setDownloadProgress(70);
           setStatusMessage('Đang lưu tệp cài đặt...');
           

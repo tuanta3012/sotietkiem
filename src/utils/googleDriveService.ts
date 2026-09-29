@@ -327,53 +327,10 @@ export async function trySilentRefresh(): Promise<string | null> {
           return refreshResult.accessToken;
         }
       } catch (refreshErr) {
-        console.warn('[Silent Auth] GoogleAuth.refresh() failed, trying silent signIn next...', refreshErr);
-      }
-
-      // Fallback: GoogleAuth.signIn() with 10s timeout for silent restore
-      if (isSigningIn) {
-        return null;
-      }
-      isSigningIn = true;
-      try {
-        const signInPromise = GoogleAuth.signIn();
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Silent auth timeout')), 10000)
-        );
-        const nativeResult: any = await Promise.race([signInPromise, timeoutPromise]);
-        const idToken = nativeResult.authentication?.idToken || (nativeResult as any).idToken;
-        const accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
-        const refreshToken = nativeResult.authentication?.refreshToken || (nativeResult as any).refreshToken;
-
-        if (accessToken && idToken) {
-          console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.signIn() ngầm');
-          const expiresAt = Date.now() + 3500 * 1000;
-
-          // Sync with Firebase Auth in the background
-          const credential = GoogleAuthProvider.credential(idToken, accessToken);
-          await signInWithCredential(auth, credential).catch((fbErr) => {
-            console.warn('[Silent Auth] Firebase Auth silent sync failed:', fbErr);
-          });
-
-          saveGoogleAuthSession({
-            accessToken,
-            idToken,
-            refreshToken: refreshToken || getGoogleRefreshToken() || undefined,
-            expiresAt,
-            userProfile: {
-              email: (nativeResult as any).email || undefined,
-              name: (nativeResult as any).displayName || undefined,
-              photoUrl: (nativeResult as any).imageUrl || undefined,
-            }
-          });
-
-          return accessToken;
-        }
-      } finally {
-        isSigningIn = false;
+        console.warn('[Silent Auth] GoogleAuth.refresh() failed:', refreshErr);
       }
     } catch (nativeErr) {
-      console.warn('[Silent Auth] Native silent refresh/login failed:', nativeErr);
+      console.warn('[Silent Auth] Native silent refresh failed:', nativeErr);
     }
   }
 
