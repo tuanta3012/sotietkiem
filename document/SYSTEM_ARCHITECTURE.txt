@@ -385,29 +385,43 @@ Khi ứng dụng được mở lên (trên Web hoặc sau khi cài APK đè lên
 PHẦN 4: HƯỚNG DẪN BÊ CÁC MODULE SANG DỰ ÁN MỚI (REUSE CHEATSHEET)
 --------------------------------------------------------------------------------
 
-Nếu bạn muốn tạo một ứng dụng di động mới (ví dụ: Quản lý chi tiêu, Ghi chú, Quản lý tài sản):
+Hệ thống đã được đóng gói thành 17 Module độc lập chuẩn SDK tại thư mục `/document/`:
+Bạn chỉ cần gửi file tài liệu tương ứng cho AI Studio ở dự án mới để AI tự động hiểu và tích hợp ngay trong 3 bước:
 
-1. Muốn tái sử dụng Hệ Thống Tự Động Cập Nhật APK:
-   - Copy file: `src/components/AppUpdateModal.tsx` và `version.json`.
-   - Cài đặt: `npm i @capacitor/filesystem @capacitor-community/file-opener @capacitor/share lucide-react`.
-   - Copy workflow `.github/workflows/auto-release.yml` để GitHub tự build APK và tạo Release.
-
-2. Muốn tái sử dụng Xác Thực Google Native & Lưu Trữ An Toàn Phần Cứng:
-   - Copy các file: `src/utils/secureStorage.ts`, `src/utils/googleDriveService.ts`, `src/components/LoginModal.tsx`.
-   - Cài đặt: `npm i @codetrix-studio/capacitor-google-auth capacitor-secure-storage-plugin @capacitor/preferences firebase`.
-
-3. Muốn tái sử dụng Khóa Vân Tay / Face ID:
-   - Copy file: `src/components/BiometricUnlockModal.tsx`.
-   - Cài đặt: `npm i @capgo/capacitor-native-biometric`.
-
-4. Muốn tái sử dụng Thông Báo Toast & Bắt Lỗi:
-   - Copy thư mục: `src/context/ToastContext.tsx` và `src/components/ErrorBoundary.tsx`.
-   - Bọc ngoài ứng dụng tại `src/main.tsx`:
-     <ErrorBoundary>
-       <ToastProvider>
-         <App />
-       </ToastProvider>
-     </ErrorBoundary>
+  * MODULE 01: In-App APK Auto-Update System
+    -> /document/MODULE_01_AUTO_UPDATE_SYSTEM.txt
+  * MODULE 02: Biometric Security (Vân tay, Face ID, PIN máy)
+    -> /document/MODULE_02_BIOMETRIC_SECURITY.txt
+  * MODULE 03: Hardware Keystore & Multi-Tier Secure Persistence
+    -> /document/MODULE_03_HARDWARE_KEYSTORE_PERSISTENCE.txt
+  * MODULE 04: Google Drive & Google Sheets 2-Way Sync Engine (REST API)
+    -> /document/MODULE_04_GOOGLE_DRIVE_SHEETS_SYNC.txt
+  * MODULE 05: Native Local Notification Engine
+    -> /document/MODULE_05_LOCAL_NOTIFICATION_ENGINE.txt
+  * MODULE 06: Excel Engine Import/Export Matrix
+    -> /document/MODULE_06_EXCEL_ENGINE_IMPORT_EXPORT.txt
+  * MODULE 07: Centralized Audit Logging & Telemetry
+    -> /document/MODULE_07_CENTRALIZED_AUDIT_LOGGING_TELEMETRY.txt
+  * MODULE 08: Vietnamese Mobile DatePicker (dd/mm/yyyy)
+    -> /document/MODULE_08_VIETNAMESE_MOBILE_DATEPICKER.txt
+  * MODULE 09: Global Toast Notification System (Context API)
+    -> /document/MODULE_09_GLOBAL_TOAST_NOTIFICATION_SYSTEM.txt
+  * MODULE 10: Error Boundary & Crash Recovery
+    -> /document/MODULE_10_ERROR_BOUNDARY_CRASH_RECOVERY.txt
+  * MODULE 11: Multi-Role RBAC Workspace Management
+    -> /document/MODULE_11_MULTI_ROLE_RBAC_WORKSPACE_MANAGEMENT.txt
+  * MODULE 12: GitHub Actions CI/CD Auto-Build, APK Signing & Release Pipeline
+    -> /document/MODULE_12_GITHUB_ACTIONS_AUTO_RELEASE_CI_CD.txt
+  * MODULE 13: Multi-Platform Auth & Login Modal with SHA-1 Diagnostics
+    -> /document/MODULE_13_MULTI_PLATFORM_AUTH_AND_LOGIN_MODAL.txt
+  * MODULE 14: Mobile Touch-Friendly Searchable Select & Dropdown System
+    -> /document/MODULE_14_MOBILE_SEARCHABLE_SELECT_DROPDOWN.txt
+  * MODULE 15: Financial Math, Interest Accrual & Vietnamese Currency Formatters
+    -> /document/MODULE_15_FINANCIAL_CALCULATOR_AND_FORMATTERS.txt
+  * MODULE 16: Automated App Icon, Adaptive Mipmaps & Splash Screen Asset Pipeline
+    -> /document/MODULE_16_AUTOMATED_APP_ICON_AND_SPLASH_PIPELINE.txt
+  * MODULE 17: Modal Manager Architecture & Destructive Confirmation Dialog Suite
+    -> /document/MODULE_17_MODAL_MANAGER_AND_CONFIRMATION_DIALOGS.txt
 
 ================================================================================
 HẾT TÀI LIỆU - LƯU TRỮ TẠI: /document/SYSTEM_ARCHITECTURE.txt

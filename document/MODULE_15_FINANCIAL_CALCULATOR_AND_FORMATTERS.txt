@@ -1,0 +1,359 @@
+================================================================================
+MODULE 15: FINANCIAL MATH, INTEREST ACCRUAL & VIETNAMESE CURRENCY FORMATTERS
+================================================================================
+Phát triển: Google AI Studio Build - Reusable Mobile SDK
+Chuẩn tích hợp: Thuần TypeScript / JavaScript (Zero External Dependencies)
+
+--------------------------------------------------------------------------------
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+- Bộ công cụ toán tài chính & định dạng tiền tệ chuyên sâu chuẩn thị trường Việt Nam:
+  + Tính lãi suất tiết kiệm chuẩn ngân hàng Việt Nam (Quy ước ACT/365):
+    * Công thức chuẩn: `Lãi = (Gốc * Lãi suất * Số ngày thực tế) / 365`.
+  + Xử lý chính xác ngày đáo hạn theo kỳ hạn tháng:
+    * Chống lỗi nhảy tháng khi gửi vào ngày 31 của tháng (ví dụ: gửi 31/01 kỳ hạn 1 tháng -> tự động chốt 28/02 hoặc 29/02 thay vì tràn sang tháng 3).
+  + Xử lý quy tắc dời ngày đáo hạn cuối tuần của ngân hàng Việt Nam:
+    * Sổ Online: Tất toán tự động 24/7 kể cả cuối tuần / ngày lễ.
+    * Sổ Tại quầy: Nếu rơi vào Chủ Nhật -> dời sang Thứ Hai (+1 ngày); Nếu rơi vào Thứ Bảy của ngân hàng không làm việc Thứ Bảy (nhóm Big 4) -> dời sang Thứ Hai (+2 ngày).
+  + Thuật toán Tối ưu hóa Dòng tiền (Pledge Loan vs Break Deposit):
+    * So sánh giữa việc: (1) Rút sổ trước hạn (mất toàn bộ lãi kỳ hạn, chỉ nhận lãi không kỳ hạn 0.1% - 0.5%) vs (2) Vay thế chấp cầm cố sổ để chi tiêu tạm thời rồi trả nợ đúng ngày đáo hạn. Tính điểm hòa vốn (breakeven days) và đưa ra lời khuyên tối ưu.
+  + Bộ định dạng tiền tệ Việt Nam hiệu năng cao (Intl.NumberFormat Singleton Caching):
+    * Tự động điều chỉnh theo quy mô tài sản: Tự động chuyển đổi `X,XX Tỷ VNĐ` khi >= 1 Tỷ, `XXX,X Tr VNĐ` khi >= 1 Triệu, hoặc `XXX đ`.
+    * Chế độ bảo mật riêng tư: Hỗ trợ cờ `hideAmount` để che số dư (`•••••••• đ`) khi sử dụng ở nơi đông người.
+    * Mặt nạ nhập liệu (Input Masking): Tự động định dạng số có dấu chấm phân cách hàng nghìn kiểu Việt Nam (`200.000.000`) và hàm đảo ngược parse số nguyên sạch.
+    * Định dạng ngày tương đối tiếng Việt thân thiện: `"Đáo hạn hôm nay!"`, `"Còn 3 ngày nữa"`, `"Đã quá hạn 5 ngày"`.
+
+--------------------------------------------------------------------------------
+2. CÁC THƯ VIỆN NPM CẦN THIẾT (DEPENDENCIES)
+--------------------------------------------------------------------------------
+Không phụ thuộc bất kỳ thư viện nào! Sử dụng API chuẩn của trình duyệt và JavaScript engine.
+
+--------------------------------------------------------------------------------
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE - STANDALONE)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------
+File A: src/utils/financialCalculator.ts
+--------------------------------------------------
+```typescript
+/**
+ * Financial Calculation Engine (Vietnam Banking Standard - ACT/365)
+ */
+
+export interface SavingsBookItem {
+  id: string;
+  bankName: string;
+  principal: number; // Tiền gốc (VNĐ)
+  interestRate: number; // Lãi suất %/năm (ví dụ 6.5)
+  startDate: string; // YYYY-MM-DD
+  termMonths: number; // Kỳ hạn tháng (1, 3, 6, 12...)
+  depositType?: 'online' | 'counter';
+  nonTermRate?: number; // Lãi suất không kỳ hạn rút trước hạn (mặc định 0.2%)
+}
+
+/**
+ * Tính số ngày thực tế giữa 2 mốc ngày (YYYY-MM-DD)
+ */
+export function getDaysBetween(startDateStr: string, endDateStr: string): number {
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  start.setHours(12, 0, 0, 0);
+  end.setHours(12, 0, 0, 0);
+  const diffMs = end.getTime() - start.getTime();
+  return Math.round(diffMs / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Tính ngày đáo hạn chuẩn ngân hàng (kẹp ngày cuối tháng nếu tháng sau ngắn hơn)
+ */
+export function calculateMaturityDate(startDateStr: string, termMonths: number): string {
+  const [year, month, day] = startDateStr.replace(/\//g, '-').split('-').map(Number);
+  const targetMonth = month - 1 + termMonths;
+  const date = new Date(year, targetMonth, 1);
+  const daysInTargetMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  const clampedDay = Math.min(day, daysInTargetMonth);
+  date.setDate(clampedDay);
+
+  const y = date.getFullYear();
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Tiền lãi chuẩn ngân hàng Việt Nam: (Gốc * Lãi suất * Ngày thực tế) / 365
+ */
+export function calculateInterest(principal: number, annualRatePercent: number, days: number): number {
+  if (days <= 0 || principal <= 0 || annualRatePercent <= 0) return 0;
+  return Math.round((principal * (annualRatePercent / 100) * days) / 365);
+}
+
+/**
+ * Tính lãi dự kiến khi đáo hạn đúng hạn
+ */
+export function calculateFullTermInterest(principal: number, annualRatePercent: number, startDateStr: string, termMonths: number): {
+  maturityDate: string;
+  totalDays: number;
+  expectedInterest: number;
+} {
+  const maturityDate = calculateMaturityDate(startDateStr, termMonths);
+  const totalDays = getDaysBetween(startDateStr, maturityDate);
+  const expectedInterest = calculateInterest(principal, annualRatePercent, totalDays);
+  return { maturityDate, totalDays, expectedInterest };
+}
+
+/**
+ * Tính thiệt hại tài chính khi tất toán trước hạn tại ngày rút
+ */
+export function calculateEarlyWithdrawalPenalty(
+  principal: number,
+  contractRatePercent: number,
+  nonTermRatePercent: number = 0.2,
+  startDateStr: string,
+  termMonths: number,
+  withdrawalDateStr: string
+): {
+  daysHeld: number;
+  totalTermDays: number;
+  actualInterestReceived: number; // Lãi không kỳ hạn nhận được
+  contractInterestLost: number;   // Lãi dự kiến theo hợp đồng bị mất
+  penaltyLoss: number;            // Số tiền thiệt hại
+} {
+  const maturityDate = calculateMaturityDate(startDateStr, termMonths);
+  const totalTermDays = getDaysBetween(startDateStr, maturityDate);
+  const daysHeld = Math.max(0, getDaysBetween(startDateStr, withdrawalDateStr));
+
+  const contractInterestExpectedAtThisPoint = calculateInterest(principal, contractRatePercent, daysHeld);
+  const actualInterestReceived = calculateInterest(principal, nonTermRatePercent, daysHeld);
+  const penaltyLoss = Math.max(0, contractInterestExpectedAtThisPoint - actualInterestReceived);
+
+  return {
+    daysHeld,
+    totalTermDays,
+    actualInterestReceived,
+    contractInterestLost: contractInterestExpectedAtThisPoint,
+    penaltyLoss,
+  };
+}
+
+/**
+ * So sánh phương án: Vay thế chấp sổ (Pledge) vs Rút trước hạn (Break)
+ */
+export function compareLoanVsEarlyWithdrawal(
+  principal: number,
+  contractRate: number,
+  loanInterestRate: number, // Lãi suất vay (ví dụ contractRate + 1.5% đến 2.0%)
+  startDateStr: string,
+  termMonths: number,
+  currentDateStr: string
+): {
+  daysRemaining: number;
+  costIfBreak: number;      // Mất toàn bộ lãi kỳ hạn
+  costIfLoan: number;       // Tiền lãi phải trả cho khoản vay cầm cố
+  recommendation: 'loan' | 'break';
+  savingAmount: number;     // Số tiền chênh lệch tiết kiệm được
+} {
+  const maturityDate = calculateMaturityDate(startDateStr, termMonths);
+  const daysRemaining = Math.max(0, getDaysBetween(currentDateStr, maturityDate));
+  
+  // Chi phí nếu rút sớm = Lãi bị mất
+  const breakAnalysis = calculateEarlyWithdrawalPenalty(principal, contractRate, 0.2, startDateStr, termMonths, currentDateStr);
+  const costIfBreak = breakAnalysis.penaltyLoss;
+
+  // Chi phí nếu vay cầm cố cho số ngày còn lại
+  const costIfLoan = calculateInterest(principal, loanInterestRate, daysRemaining);
+
+  if (costIfLoan < costIfBreak) {
+    return {
+      daysRemaining,
+      costIfBreak,
+      costIfLoan,
+      recommendation: 'loan',
+      savingAmount: costIfBreak - costIfLoan,
+    };
+  } else {
+    return {
+      daysRemaining,
+      costIfBreak,
+      costIfLoan,
+      recommendation: 'break',
+      savingAmount: costIfLoan - costIfBreak,
+    };
+  }
+}
+```
+
+--------------------------------------------------
+File B: src/utils/formatters.ts
+--------------------------------------------------
+```typescript
+/**
+ * High-Performance Vietnamese Currency, Date and Number Formatters
+ */
+
+// Module-level Singleton Formatters
+const VND_CURRENCY_FORMATTER = new Intl.NumberFormat('vi-VN', {
+  style: 'currency',
+  currency: 'VND',
+  maximumFractionDigits: 0,
+});
+
+const VN_NUMBER_0DEC = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
+const VN_NUMBER_1DEC = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 1 });
+const VN_NUMBER_2DEC = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 2 });
+
+export function formatVND(amount: number, hideAmount: boolean = false): string {
+  if (hideAmount) return '•••••••• đ';
+  return VND_CURRENCY_FORMATTER.format(amount);
+}
+
+/**
+ * Định dạng tiền tệ thích ứng thông minh (Tỷ / Triệu VNĐ)
+ */
+export function formatAdaptiveVND(amount: number, hideAmount: boolean = false, maxDecimals: number = 2): string {
+  if (hideAmount) return '••••••';
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+
+  if (abs >= 1_000_000_000) {
+    const ty = abs / 1_000_000_000;
+    const fmt = maxDecimals === 1 ? VN_NUMBER_1DEC : (maxDecimals === 0 ? VN_NUMBER_0DEC : VN_NUMBER_2DEC);
+    return `${sign}${fmt.format(ty)} Tỷ VNĐ`;
+  }
+  if (abs >= 1_000_000) {
+    const mil = abs / 1_000_000;
+    return `${sign}${VN_NUMBER_1DEC.format(mil)} Tr VNĐ`;
+  }
+  if (abs >= 1_000) {
+    const k = abs / 1_000;
+    return `${sign}${VN_NUMBER_0DEC.format(k)} K VNĐ`;
+  }
+  return `${sign}${VN_NUMBER_0DEC.format(abs)} đ`;
+}
+
+/**
+ * Định dạng tiền tệ ngắn gọn (18,45 Tỷ / 450 Tr)
+ */
+export function formatAdaptiveShortVND(amount: number, hideAmount: boolean = false): string {
+  if (hideAmount) return '••••••';
+  const abs = Math.abs(amount);
+  const sign = amount < 0 ? '-' : '';
+
+  if (abs >= 1_000_000_000) {
+    return `${sign}${VN_NUMBER_2DEC.format(abs / 1_000_000_000)} Tỷ`;
+  }
+  if (abs >= 1_000_000) {
+    return `${sign}${VN_NUMBER_1DEC.format(abs / 1_000_000)} Tr`;
+  }
+  return `${sign}${VN_NUMBER_0DEC.format(abs)} đ`;
+}
+
+/**
+ * Định dạng ngày YYYY-MM-DD sang dd/mm/yyyy
+ */
+export function formatDateVN(dateStr: string, padZeros: boolean = true): string {
+  if (!dateStr) return '';
+  try {
+    const [year, month, day] = dateStr.replace(/\//g, '-').split('-').map(Number);
+    if (!year || !month || !day) return dateStr;
+    if (padZeros) {
+      return `${day.toString().padStart(2, '0')}/${month.toString().padStart(2, '0')}/${year}`;
+    }
+    return `${day}/${month}/${year}`;
+  } catch {
+    return dateStr;
+  }
+}
+
+/**
+ * Định dạng số ngày còn lại theo văn phong tiếng Việt tự nhiên
+ */
+export function formatRelativeDays(days: number): string {
+  if (days < 0) return `Đã quá hạn ${Math.abs(days)} ngày`;
+  if (days === 0) return 'Đáo hạn hôm nay!';
+  if (days === 1) return 'Đáo hạn ngày mai';
+  if (days < 30) return `Còn ${days} ngày nữa`;
+  const months = Math.floor(days / 30);
+  const remDays = days % 30;
+  if (remDays === 0) return `Còn ${months} tháng`;
+  return `Còn ~${months} tháng ${remDays} ngày (${days} ngày)`;
+}
+
+/**
+ * Mặt nạ phân cách hàng nghìn bằng dấu chấm (200000000 -> "200.000.000")
+ */
+export function formatNumberWithDots(val: number | string | null | undefined): string {
+  if (val === null || val === undefined || val === '') return '';
+  const digits = val.toString().replace(/\D/g, '');
+  if (!digits) return '';
+  const num = parseInt(digits, 10);
+  return isNaN(num) ? '' : VN_NUMBER_0DEC.format(num);
+}
+
+/**
+ * Parse chuỗi dấu chấm phân cách thành số nguyên ("200.000.000" -> 200000000)
+ */
+export function parseNumberFromDots(str: string | null | undefined): number {
+  if (!str) return 0;
+  const digits = str.toString().replace(/\D/g, '');
+  if (!digits) return 0;
+  const num = parseInt(digits, 10);
+  return isNaN(num) ? 0 : num;
+}
+```
+
+--------------------------------------------------------------------------------
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+
+Bước 1: Copy 2 file `src/utils/financialCalculator.ts` và `src/utils/formatters.ts` vào dự án mới.
+
+Bước 2: Sử dụng các hàm format trên giao diện người dùng:
+```tsx
+import { formatAdaptiveVND, formatDateVN, formatRelativeDays } from './utils/formatters';
+
+export function SavingsCard({ book }: { book: any }) {
+  const isHidden = false; // bật/tắt chế độ bảo mật số tiền
+  return (
+    <div className="p-4 bg-white rounded-2xl shadow-sm border border-slate-200">
+      <div className="text-sm font-bold text-slate-900">{formatAdaptiveVND(book.principal, isHidden)}</div>
+      <div className="text-xs text-slate-500">Đáo hạn: {formatDateVN(book.maturityDate)}</div>
+      <div className="text-xs font-semibold text-emerald-600">{formatRelativeDays(book.daysLeft)}</div>
+    </div>
+  );
+}
+```
+
+Bước 3: Sử dụng hàm định dạng ô nhập tiền tệ (Input Mask):
+```tsx
+import React, { useState } from 'react';
+import { formatNumberWithDots, parseNumberFromDots } from './utils/formatters';
+
+export function AmountInput() {
+  const [displayValue, setDisplayValue] = useState('');
+  const [actualNumber, setActualNumber] = useState(0);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const formatted = formatNumberWithDots(raw);
+    const num = parseNumberFromDots(raw);
+    setDisplayValue(formatted);
+    setActualNumber(num);
+  };
+
+  return (
+    <div>
+      <input
+        type="text"
+        inputMode="numeric"
+        value={displayValue}
+        onChange={handleChange}
+        placeholder="Nhập số tiền (VNĐ)..."
+        className="w-full px-4 py-2 border rounded-xl"
+      />
+      <p className="text-xs text-slate-400 mt-1">Giá trị số thực tế: {actualNumber}</p>
+    </div>
+  );
+}
+```
+================================================================================

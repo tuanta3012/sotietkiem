@@ -1,0 +1,315 @@
+================================================================================
+MODULE 08: VIETNAMESE MOBILE-FIRST DATEPICKER COMPONENT
+================================================================================
+Chuẩn tài liệu: SDK / Library Documentation
+Mục đích: Bê sang dự án mới bất kỳ và sử dụng ngay lập tức
+Tương thích: React 18/19, TypeScript 5+, Tailwind CSS, Mobile & Desktop
+================================================================================
+
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+Component Chọn Ngày (DatePicker) thiết kế chuyên biệt cho thị trường Việt Nam và
+tối ưu hóa màn hình cảm ứng di động (Mobile-First Touch Friendly):
+
+- Chuẩn hóa Ngôn ngữ & Lịch Việt Nam:
+  + Tháng 1 đến Tháng 12, Thứ 2 (T2) đến Chủ Nhật (CN).
+  + Định dạng lưu trữ chuẩn quốc tế `YYYY-MM-DD` (ISO), tự động hiển thị thân thiện
+    theo chuẩn Việt Nam `DD/MM/YYYY`.
+- Bộ chọn Năm & Tháng Nhanh (Quick Jumpers): Người dùng có thể nhảy nhanh qua các
+  năm và tháng mà không cần phải bấm nút Prev/Next hàng chục lần.
+- Độc lập 100% (Zero External Date Libraries): Không phụ thuộc vào các thư viện
+  nặng như Moment.js hay date-fns, chỉ sử dụng JavaScript Date thuần túy, dung lượng
+  siêu nhẹ (~3KB).
+- Tự động đóng khi bấm ra ngoài (Click Outside Handler), hỗ trợ giới hạn ngày min/max.
+
+2. CÁC THƯ VIỆN NPM PHỤ THUỘC (DEPENDENCIES)
+--------------------------------------------------------------------------------
+npm install lucide-react
+
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE)
+--------------------------------------------------------------------------------
+Lưu tệp này tại: /src/components/DatePickerVN.tsx
+
+```tsx
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+
+interface DatePickerVNProps {
+  value: string; // Định dạng 'YYYY-MM-DD'
+  onChange: (val: string) => void;
+  id?: string;
+  className?: string;
+  disabled?: boolean;
+  minYear?: number;
+  maxYear?: number;
+}
+
+const MONTH_NAMES = [
+  'Tháng 1', 'Tháng 2', 'Tháng 3', 'Tháng 4',
+  'Tháng 5', 'Tháng 6', 'Tháng 7', 'Tháng 8',
+  'Tháng 9', 'Tháng 10', 'Tháng 11', 'Tháng 12',
+];
+
+const WEEKDAY_NAMES = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
+
+export const DatePickerVN: React.FC<DatePickerVNProps> = ({
+  value,
+  onChange,
+  id,
+  className = '',
+  disabled = false,
+  minYear = 2000,
+  maxYear = 2050,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Phân tích giá trị hiện tại
+  const parsed = useMemo(() => {
+    if (!value || value.length < 10) {
+      const now = new Date();
+      return {
+        year: now.getFullYear(),
+        month: now.getMonth() + 1,
+        day: now.getDate(),
+      };
+    }
+    const [y, m, d] = value.split('-').map(Number);
+    return {
+      year: y || new Date().getFullYear(),
+      month: m || 1,
+      day: d || 1,
+    };
+  }, [value]);
+
+  const [viewYear, setViewYear] = useState<number>(parsed.year);
+  const [viewMonth, setViewMonth] = useState<number>(parsed.month);
+
+  useEffect(() => {
+    setViewYear(parsed.year);
+    setViewMonth(parsed.month);
+  }, [parsed.year, parsed.month]);
+
+  // Đóng lịch khi người dùng bấm ra ngoài
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [isOpen]);
+
+  const daysInMonth = new Date(viewYear, viewMonth, 0).getDate();
+  const firstDayOfWeek = (new Date(viewYear, viewMonth - 1, 1).getDay() + 6) % 7; // T2 là 0
+
+  const handleSelectDay = (day: number) => {
+    const mStr = String(viewMonth).padStart(2, '0');
+    const dStr = String(day).padStart(2, '0');
+    onChange(`${viewYear}-${mStr}-${dStr}`);
+    setIsOpen(false);
+  };
+
+  const handlePrevMonth = () => {
+    if (viewMonth === 1) {
+      setViewYear((y) => y - 1);
+      setViewMonth(12);
+    } else {
+      setViewMonth((m) => m - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (viewMonth === 12) {
+      setViewYear((y) => y + 1);
+      setViewMonth(1);
+    } else {
+      setViewMonth((m) => m + 1);
+    }
+  };
+
+  const displayDateStr = useMemo(() => {
+    if (!value) return 'Chọn ngày';
+    const [y, m, d] = value.split('-');
+    if (!y || !m || !d) return value;
+    return `${d}/${m}/${y}`;
+  }, [value]);
+
+  // Danh sách năm để nhảy nhanh
+  const years = useMemo(() => {
+    const list: number[] = [];
+    for (let y = minYear; y <= maxYear; y++) list.push(y);
+    return list;
+  }, [minYear, maxYear]);
+
+  return (
+    <div ref={containerRef} className={`relative inline-block w-full ${className}`}>
+      {/* Input Trigger Button */}
+      <button
+        id={id}
+        type="button"
+        disabled={disabled}
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-900 border border-slate-700 hover:border-slate-500 rounded-xl text-left text-sm text-slate-100 shadow-inner transition-colors disabled:opacity-50 cursor-pointer"
+      >
+        <span className={value ? 'font-medium text-white' : 'text-slate-500'}>
+          {displayDateStr}
+        </span>
+        <Calendar className="w-4 h-4 text-emerald-400 shrink-0 ml-2" />
+      </button>
+
+      {/* Dropdown Calendar Popup */}
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-2 z-[9999] w-[300px] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 text-slate-100 select-none animate-in fade-in zoom-in-95 duration-150">
+          
+          {/* Header Tháng & Năm */}
+          <div className="flex items-center justify-between mb-3">
+            <button
+              type="button"
+              onClick={handlePrevMonth}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+
+            {/* Quick selectors for Month & Year */}
+            <div className="flex items-center space-x-1.5">
+              <select
+                value={viewMonth}
+                onChange={(e) => setViewMonth(Number(e.target.value))}
+                className="bg-slate-800 text-white font-bold text-xs rounded-lg px-2 py-1 border border-slate-700 outline-hidden"
+              >
+                {MONTH_NAMES.map((mName, idx) => (
+                  <option key={idx + 1} value={idx + 1}>
+                    {mName}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={viewYear}
+                onChange={(e) => setViewYear(Number(e.target.value))}
+                className="bg-slate-800 text-white font-bold text-xs rounded-lg px-2 py-1 border border-slate-700 outline-hidden"
+              >
+                {years.map((y) => (
+                  <option key={y} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleNextMonth}
+              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Hàng Tiêu đề Thứ */}
+          <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-slate-400 mb-2">
+            {WEEKDAY_NAMES.map((w, idx) => (
+              <div key={w} className={idx >= 5 ? 'text-amber-400' : ''}>
+                {w}
+              </div>
+            ))}
+          </div>
+
+          {/* Lưới Ngày trong Tháng */}
+          <div className="grid grid-cols-7 gap-1">
+            {/* Khoảng trống đầu tháng */}
+            {Array.from({ length: firstDayOfWeek }).map((_, idx) => (
+              <div key={`empty-${idx}`} className="h-8" />
+            ))}
+
+            {/* Các ngày */}
+            {Array.from({ length: daysInMonth }).map((_, idx) => {
+              const day = idx + 1;
+              const isSelected =
+                parsed.year === viewYear &&
+                parsed.month === viewMonth &&
+                parsed.day === day;
+
+              const isToday =
+                new Date().getFullYear() === viewYear &&
+                new Date().getMonth() + 1 === viewMonth &&
+                new Date().getDate() === day;
+
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  onClick={() => handleSelectDay(day)}
+                  className={`h-8 w-8 mx-auto rounded-xl flex items-center justify-center text-xs font-semibold transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-emerald-500 text-slate-950 font-bold shadow-md shadow-emerald-500/30'
+                      : isToday
+                      ? 'border border-emerald-400 text-emerald-300 hover:bg-slate-800'
+                      : 'text-slate-200 hover:bg-slate-800'
+                  }`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Nút bấm chọn ngày Hôm nay */}
+          <div className="mt-3 pt-2 border-t border-slate-800 text-center">
+            <button
+              type="button"
+              onClick={() => {
+                const now = new Date();
+                const y = now.getFullYear();
+                const m = String(now.getMonth() + 1).padStart(2, '0');
+                const d = String(now.getDate()).padStart(2, '0');
+                onChange(`${y}-${m}-${d}`);
+                setIsOpen(false);
+              }}
+              className="text-xs text-emerald-400 hover:text-emerald-300 font-bold"
+            >
+              Hôm nay
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+```
+
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI CHỈ TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+Bước 1: Copy file trên vào `/src/components/DatePickerVN.tsx`.
+Bước 2: Cài đặt Lucide React: `npm install lucide-react`
+Bước 3: Sử dụng như một thẻ input tiêu chuẩn trong Form React:
+
+```tsx
+import React, { useState } from 'react';
+import { DatePickerVN } from './components/DatePickerVN';
+
+export function MyForm() {
+  const [startDate, setStartDate] = useState('2026-09-29');
+
+  return (
+    <div className="p-4 max-w-sm">
+      <label className="block text-xs font-bold text-slate-300 mb-1">
+        Ngày bắt đầu hợp đồng:
+      </label>
+      <DatePickerVN
+        value={startDate}
+        onChange={(newDate) => setStartDate(newDate)}
+      />
+      <p className="text-xs text-slate-400 mt-2">Giá trị ISO lưu trữ: {startDate}</p>
+    </div>
+  );
+}
+```
+================================================================================

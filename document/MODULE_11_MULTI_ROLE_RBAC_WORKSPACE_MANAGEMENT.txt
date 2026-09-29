@@ -1,0 +1,358 @@
+================================================================================
+MODULE 11: MULTI-ROLE RBAC & WORKSPACE MEMBER MANAGEMENT
+================================================================================
+Chuẩn tài liệu: SDK / Library Documentation
+Mục đích: Bê sang dự án mới bất kỳ và sử dụng ngay lập tức
+Tương thích: React 18/19, TypeScript 5+, Tailwind CSS, Web & Mobile
+================================================================================
+
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+Hệ thống Phân quyền Người dùng theo Vai trò (Role-Based Access Control - RBAC)
+và Quản lý Thành viên Không gian Làm việc (Workspace / Family / Team Sharing):
+
+- 3 cấp độ phân quyền chuẩn:
+  + `ADMIN` (Quản trị viên / Chủ sở hữu): Toàn quyền thêm, sửa, xóa thành viên,
+    chỉnh sửa dữ liệu, phân quyền và quản lý tài nguyên.
+  + `EDITOR` (Biên tập viên / Thành viên có quyền sửa): Có quyền nhập liệu, sửa và
+    xóa bản ghi của mình, nhưng không có quyền phân quyền hoặc xóa tài nguyên gốc.
+  + `VIEWER` (Người xem / Thành viên chỉ đọc): Chỉ xem bảng số liệu, không thể
+    sửa đổi, xóa hoặc ghi đè dữ liệu.
+- Bộ Hàm Trợ Lý Kiểm Tra Quyền (Permission Helpers): Cung cấp các hàm kiểm tra
+  rõ ràng như `canEditData(role)`, `canManageMembers(role)`, `canDeleteResource(role)`.
+- Giao diện Quản lý Thành viên (`UserManagementModal`):
+  + Thêm thành viên mới thông qua Email và chọn vai trò.
+  + Thay đổi quyền trực tiếp từ Admin sang Viewer hoặc ngược lại.
+  + Cơ chế Xóa thành viên hoặc Rời khỏi Không gian làm việc.
+
+2. CÁC THƯ VIỆN NPM PHỤ THUỘC (DEPENDENCIES)
+--------------------------------------------------------------------------------
+npm install lucide-react
+
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+TỆP 1: /src/utils/rbacHelper.ts (Logic kiểm tra quyền hạn)
+--------------------------------------------------------------------------------
+```typescript
+export type UserRole = 'ADMIN' | 'EDITOR' | 'VIEWER';
+
+export interface WorkspaceMember {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  addedAt: string;
+  avatarUrl?: string;
+}
+
+/**
+ * Kiểm tra xem người dùng có quyền chỉnh sửa / thêm mới dữ liệu hay không
+ */
+export function canEditData(role?: string | null): boolean {
+  if (!role) return true; // Mặc định chế độ cá nhân là toàn quyền
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN' || normalized === 'EDITOR';
+}
+
+/**
+ * Kiểm tra xem người dùng có quyền quản lý thành viên và phân quyền không
+ */
+export function canManageMembers(role?: string | null): boolean {
+  if (!role) return true;
+  const normalized = String(role).toUpperCase();
+  return normalized === 'ADMIN';
+}
+
+/**
+ * Trả về nhãn tiếng Việt và màu sắc đại diện cho từng vai trò
+ */
+export function getRoleBadgeInfo(role: UserRole): { label: string; bgClass: string; textClass: string } {
+  switch (role) {
+    case 'ADMIN':
+      return {
+        label: 'Quản trị viên (Admin)',
+        bgClass: 'bg-amber-500/20 border-amber-500/30',
+        textClass: 'text-amber-300',
+      };
+    case 'EDITOR':
+      return {
+        label: 'Biên tập viên (Editor)',
+        bgClass: 'bg-emerald-500/20 border-emerald-500/30',
+        textClass: 'text-emerald-300',
+      };
+    case 'VIEWER':
+    default:
+      return {
+        label: 'Chỉ xem (Viewer)',
+        bgClass: 'bg-slate-700/50 border-slate-600',
+        textClass: 'text-slate-300',
+      };
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+TỆP 2: /src/components/UserManagementModal.tsx (Giao diện Quản lý Thành viên)
+--------------------------------------------------------------------------------
+```tsx
+import React, { useState } from 'react';
+import {
+  X,
+  Users,
+  Shield,
+  ShieldAlert,
+  UserPlus,
+  Trash2,
+  Crown,
+  Edit3,
+  Eye,
+  LogOut,
+  Mail,
+} from 'lucide-react';
+import { WorkspaceMember, UserRole, canManageMembers, getRoleBadgeInfo } from '../utils/rbacHelper';
+
+interface UserManagementModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  members: WorkspaceMember[];
+  currentRole: UserRole;
+  currentUserEmail: string;
+  onUpdateMembers: (newMembers: WorkspaceMember[]) => void;
+  onLeaveWorkspace?: () => void;
+}
+
+export const UserManagementModal: React.FC<UserManagementModalProps> = ({
+  isOpen,
+  onClose,
+  members,
+  currentRole,
+  currentUserEmail,
+  onUpdateMembers,
+  onLeaveWorkspace,
+}) => {
+  const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState<UserRole>('EDITOR');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  if (!isOpen) return null;
+
+  const isAdmin = canManageMembers(currentRole);
+
+  const handleAddMember = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+    const cleanEmail = newEmail.trim().toLowerCase();
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMsg('Vui lòng nhập địa chỉ email hợp lệ.');
+      return;
+    }
+
+    if (members.some((m) => m.email.toLowerCase() === cleanEmail)) {
+      setErrorMsg('Thành viên với email này đã tồn tại trong nhóm.');
+      return;
+    }
+
+    const newMember: WorkspaceMember = {
+      id: `member_${Date.now()}`,
+      email: cleanEmail,
+      name: newName.trim() || cleanEmail.split('@')[0],
+      role: newRole,
+      addedAt: new Date().toISOString(),
+    };
+
+    onUpdateMembers([...members, newMember]);
+    setNewEmail('');
+    setNewName('');
+  };
+
+  const handleRemoveMember = (id: string, email: string) => {
+    if (email.toLowerCase() === currentUserEmail.toLowerCase()) {
+      alert('Bạn không thể tự xóa chính mình.');
+      return;
+    }
+    if (confirm(`Bạn có chắc muốn xóa thành viên ${email} khỏi nhóm?`)) {
+      onUpdateMembers(members.filter((m) => m.id !== id));
+    }
+  };
+
+  const handleChangeRole = (id: string, role: UserRole) => {
+    onUpdateMembers(
+      members.map((m) => (m.id === id ? { ...m, role } : m))
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-xs">
+      <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-lg overflow-hidden text-slate-100 shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95">
+        
+        {/* Header */}
+        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Users className="w-5 h-5 text-teal-400" />
+            <h2 className="font-bold text-sm sm:text-base text-white">Quản Lý Thành Viên</h2>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Form Thêm Thành Viên (Chỉ Admin mới có quyền) */}
+        {isAdmin && (
+          <form onSubmit={handleAddMember} className="p-4 bg-slate-950/40 border-b border-slate-800/80 space-y-3">
+            <div className="text-xs font-bold text-slate-300 flex items-center space-x-1.5">
+              <UserPlus className="w-4 h-4 text-emerald-400" />
+              <span>Mời thành viên mới</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="email"
+                placeholder="Địa chỉ Email Google..."
+                value={newEmail}
+                onChange={(e) => setNewEmail(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-hidden focus:border-emerald-500"
+                required
+              />
+              <input
+                type="text"
+                placeholder="Tên hiển thị (Tùy chọn)"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 outline-hidden focus:border-emerald-500"
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2">
+              <select
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value as UserRole)}
+                className="bg-slate-800 text-slate-200 border border-slate-700 rounded-xl px-3 py-2 text-xs outline-hidden"
+              >
+                <option value="ADMIN">Quản trị viên (Admin)</option>
+                <option value="EDITOR">Biên tập viên (Editor)</option>
+                <option value="VIEWER">Chỉ xem (Viewer)</option>
+              </select>
+
+              <button
+                type="submit"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
+              >
+                Thêm vào nhóm
+              </button>
+            </div>
+
+            {errorMsg && <p className="text-[11px] text-rose-400">{errorMsg}</p>}
+          </form>
+        )}
+
+        {/* Danh sách thành viên */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+          <div className="text-xs font-bold text-slate-400 mb-1">
+            Danh sách thành viên hiện hành ({members.length}):
+          </div>
+
+          {members.map((member) => {
+            const badge = getRoleBadgeInfo(member.role);
+            const isMe = member.email.toLowerCase() === currentUserEmail.toLowerCase();
+
+            return (
+              <div
+                key={member.id}
+                className="p-3 bg-slate-950/60 border border-slate-800 rounded-2xl flex items-center justify-between gap-2 text-xs"
+              >
+                <div className="flex items-center space-x-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-white shrink-0">
+                    {member.name.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-white truncate flex items-center space-x-1">
+                      <span>{member.name}</span>
+                      {isMe && <span className="text-[10px] text-teal-400 font-normal">(Tôi)</span>}
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate">{member.email}</div>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2 shrink-0">
+                  {isAdmin && !isMe ? (
+                    <select
+                      value={member.role}
+                      onChange={(e) => handleChangeRole(member.id, e.target.value as UserRole)}
+                      className="bg-slate-800 text-slate-200 border border-slate-700 rounded-lg px-2 py-1 text-[11px]"
+                    >
+                      <option value="ADMIN">Admin</option>
+                      <option value="EDITOR">Editor</option>
+                      <option value="VIEWER">Viewer</option>
+                    </select>
+                  ) : (
+                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${badge.bgClass} ${badge.textClass}`}>
+                      {member.role}
+                    </span>
+                  )}
+
+                  {isAdmin && !isMe && (
+                    <button
+                      onClick={() => handleRemoveMember(member.id, member.email)}
+                      className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800"
+                      title="Xóa thành viên"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer: Rời khỏi nhóm */}
+        {!isAdmin && onLeaveWorkspace && (
+          <div className="p-3 border-t border-slate-800 bg-slate-950/60 text-center">
+            <button
+              onClick={onLeaveWorkspace}
+              className="text-xs text-rose-400 hover:text-rose-300 font-medium inline-flex items-center space-x-1"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Rời khỏi Không gian làm việc này</span>
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+```
+
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI CHỈ TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+Bước 1: Copy 2 file trên vào thư mục `/src/utils/rbacHelper.ts` và `/src/components/UserManagementModal.tsx`.
+Bước 2: Cài đặt Lucide React: `npm install lucide-react`
+Bước 3: Sử dụng các hàm kiểm tra quyền để ẩn/hiện nút tính năng trên giao diện:
+```tsx
+import { canEditData, canManageMembers } from './utils/rbacHelper';
+
+export function ActionToolbar({ currentRole }: { currentRole: string }) {
+  return (
+    <div className="space-x-2">
+      {/* Chỉ Admin hoặc Editor mới thấy nút Thêm Dữ Liệu */}
+      {canEditData(currentRole) && (
+        <button className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs">
+          + Thêm bản ghi mới
+        </button>
+      )}
+
+      {/* Chỉ Admin mới có quyền Quản lý thành viên */}
+      {canManageMembers(currentRole) && (
+        <button className="px-3 py-1 bg-teal-600 text-white rounded-lg text-xs">
+          Quản lý thành viên
+        </button>
+      )}
+    </div>
+  );
+}
+```
+================================================================================

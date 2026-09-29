@@ -1,0 +1,146 @@
+================================================================================
+MODULE 10: ERROR BOUNDARY CRASH RECOVERY COMPONENT
+================================================================================
+Chuẩn tài liệu: SDK / Library Documentation
+Mục đích: Bê sang dự án mới bất kỳ và sử dụng ngay lập tức
+Tương thích: React 18/19, TypeScript 5+, Tailwind CSS, Web & Capacitor Mobile
+================================================================================
+
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+Trong môi trường di động thực tế (Android/iOS WebView), các sự cố như dữ liệu
+JSON trả về không đúng kiểu, kết nối mạng đột ngột ngắt hoặc lỗi render React
+có thể khiến ứng dụng bị "văng" hoặc xuất hiện "Màn hình Trắng Chết Chóc"
+(White Screen of Death - WSOD).
+
+Component `ErrorBoundary` này đóng vai trò như một "Chiếc Áo Giáp Bảo Vệ":
+- Bắt tất cả các lỗi ngoại lệ (Uncaught Exceptions) trong quá trình render của React.
+- Ngăn chặn triệt để màn hình trắng trên thiết bị di động.
+- Hiển thị giao diện phục hồi trang trọng, giải thích ngắn gọn nguyên nhân sự cố.
+- Cung cấp 2 lựa chọn phục hồi tức thì cho người dùng:
+  + Nút "Tải lại trang" (Soft Reset): Làm mới lại phiên làm việc mà không làm mất dữ liệu.
+  + Nút "Về trang chủ" (Hard Redirect): Chuyển hướng người dùng về trang chủ an toàn.
+- Ghi nhận lỗi và Stack Trace ra console hoặc tích hợp với hệ thống Audit Log để
+  quản trị viên điều tra nguồn gốc lỗi.
+
+2. CÁC THƯ VIỆN NPM PHỤ THUỘC (DEPENDENCIES)
+--------------------------------------------------------------------------------
+npm install lucide-react
+
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE)
+--------------------------------------------------------------------------------
+Lưu tệp này tại: /src/components/ErrorBoundary.tsx
+
+```tsx
+import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
+
+interface Props {
+  children: ReactNode;
+}
+
+interface State {
+  hasError: boolean;
+  error: Error | null;
+}
+
+export class ErrorBoundary extends Component<Props, State> {
+  override state: State = {
+    hasError: false,
+    error: null,
+  };
+
+  public static getDerivedStateFromError(error: Error): State {
+    // Cập nhật state để lần render tiếp theo hiển thị UI dự phòng
+    return { hasError: true, error };
+  }
+
+  override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('[ErrorBoundary] Sự cố ngoài dự kiến trong cây giao diện React:', error, errorInfo);
+  }
+
+  private handleReset = () => {
+    this.setState({ hasError: false, error: null });
+    window.location.reload();
+  };
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 text-center space-y-4 shadow-2xl animate-in zoom-in-95">
+            <div className="w-14 h-14 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl flex items-center justify-center mx-auto shadow-inner">
+              <AlertTriangle className="w-7 h-7" />
+            </div>
+
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-white tracking-tight">
+                Ứng dụng đã gặp sự cố tạm thời
+              </h2>
+              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed px-2">
+                Hệ thống đã tự động bảo vệ dữ liệu của bạn để ngăn ngừa xung đột bộ nhớ. Vui lòng tải lại trang.
+              </p>
+            </div>
+
+            {/* Chi tiết lỗi kỹ thuật */}
+            {this.state.error?.message && (
+              <div className="p-3 bg-slate-950 rounded-xl border border-slate-800/80 text-[11px] font-mono text-rose-300 text-left overflow-x-auto max-h-24">
+                {this.state.error.message}
+              </div>
+            )}
+
+            {/* Các nút hành động phục hồi */}
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={this.handleReset}
+                className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95 shadow-md shadow-emerald-950/40"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Tải lại trang</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  this.setState({ hasError: false, error: null });
+                  window.location.href = '/';
+                }}
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+              >
+                <Home className="w-4 h-4" />
+                <span>Về trang chủ</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+```
+
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI CHỈ TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+Bước 1: Copy file trên vào `/src/components/ErrorBoundary.tsx`.
+Bước 2: Cài đặt biểu tượng: `npm install lucide-react`
+Bước 3: Bọc Component `<ErrorBoundary>` ở tầng cao nhất trong file `src/main.tsx`:
+
+```tsx
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
+import './index.css';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  </StrictMode>
+);
+```
+================================================================================

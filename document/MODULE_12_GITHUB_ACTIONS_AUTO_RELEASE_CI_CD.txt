@@ -1,0 +1,310 @@
+================================================================================
+MODULE 12: GITHUB ACTIONS CI/CD AUTO-BUILD, APK SIGNING & RELEASE PIPELINE
+================================================================================
+Phát triển: Google AI Studio Build - Reusable Mobile SDK
+Chuẩn tích hợp: GitHub Actions, Ubuntu Runner, JDK 21 (Zulu), Gradle 8+, Capacitor 6/7
+
+--------------------------------------------------------------------------------
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+- Tự động hóa 100% quy trình đóng gói và phát hành ứng dụng Android (APK) từ mã nguồn Web React / Capacitor:
+  + Tự động kích hoạt khi có commit đẩy lên nhánh `main` hoặc kích hoạt thủ công qua `workflow_dispatch`.
+  + Tự động đồng bộ số phiên bản: Lấy `versionName` từ `package.json` và tự động tính `versionCode` tăng dần theo tổng số commit Git (`git rev-list --count HEAD`).
+  + Giải quyết triệt để lỗi xung đột thư viện kinh điển của Android Gradle: Tự động tạo `init.gradle` ghi đè (dependency substitution) module BouncyCastle (`bcprov-jdk15to18:1.70`).
+  + Tự động biên dịch Web Assets (`npm run build`) và đồng bộ native (`npx cap sync android`).
+  + Cấu hình động `strings.xml`, `variables.gradle` (minSdkVersion 23, compileSdkVersion 35, targetSdkVersion 35) và tự động cấp quyền `REQUEST_INSTALL_PACKAGES` cho tính năng tự cập nhật in-app.
+  + Cơ chế Keystore Vĩnh Viễn (Permanent Fixed Keystore): Tự động tạo hoặc giải mã keystore từ chuỗi Base64 (`keystore/debug.keystore.b64`), đảm bảo mã SHA-1 Fingerprint của APK KHÔNG BAO GIỜ bị thay đổi giữa các lần build, tránh làm hỏng xác thực Google Sign-in / Firebase.
+  + Đóng gói APK Release/Debug bằng Gradle Daemon, tự động đổi tên file theo định dạng chuẩn: `<app_name>_v<version>.apk`.
+  + Tự động tạo GitHub Release với release notes, đính kèm file APK trực tiếp.
+  + Tự động cập nhật file endpoint `version.json` trên nhánh `main` với commit `[skip ci]` để phục vụ hệ thống In-App Auto Update (Module 01).
+
+--------------------------------------------------------------------------------
+2. CÁC THIẾT LẬP CẦN THIẾT TRÊN GITHUB REPOSITORY
+--------------------------------------------------------------------------------
+1. Vào GitHub Repository > **Settings** > **Actions** > **General**:
+   - Mục **Workflow permissions**: Chọn **Read and write permissions** (bắt buộc để workflow có quyền tạo Release và commit file `version.json`).
+   - Tích chọn: **Allow GitHub Actions to create and approve pull requests**.
+2. Không cần cấu hình thêm secret phức tạp vì workflow sử dụng biến môi trường chuẩn `${{ secrets.GITHUB_TOKEN }}` được GitHub cấp sẵn.
+
+--------------------------------------------------------------------------------
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE - STANDALONE)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------
+File A: .github/workflows/auto-release.yml
+--------------------------------------------------
+```yaml
+name: Auto Build & Release APK from AI Studio Code
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1. Cấu hình môi trường Node.js và JDK 21
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '21'
+
+      # 2. Tự động lấy versionName từ package.json & versionCode từ Git Commit Count
+      - name: Determine Auto Version
+        id: auto_version
+        run: |
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          PACKAGE_VERSION=$(node -p "require('./package.json').version || '1.0.0'")
+          echo "CODE=$BUILD_NUMBER" >> $GITHUB_OUTPUT
+          echo "NAME=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+          echo "Auto Generated versionCode: $BUILD_NUMBER, versionName: $PACKAGE_VERSION"
+
+      # 3. Tạo init.gradle cấp hệ thống giải quyết triệt để lỗi BouncyCastle (bcprov)
+      - name: Create Gradle Init Script for BouncyCastle
+        run: |
+          mkdir -p ~/.gradle
+          cat << 'EOF' > ~/.gradle/init.gradle
+          allprojects {
+              buildscript {
+                  configurations.all {
+                      resolutionStrategy {
+                          force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                          dependencySubstitution {
+                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          }
+                      }
+                  }
+              }
+              configurations.all {
+                  resolutionStrategy {
+                      force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                      dependencySubstitution {
+                          substitute module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          dependencySubstitution {
+                              substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+
+      # 4. Cài đặt các thư viện cần thiết & Build Web
+      - name: Install Dependencies
+        run: |
+          npm install --legacy-peer-deps
+          npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+      - name: Build Web Assets
+        run: npm run build
+
+      # 5. Khởi tạo lại hoàn toàn thư mục Android nếu bị rỗng hoặc thiếu build.gradle
+      - name: Generate Fresh Android Project
+        run: |
+          if [ ! -f "android/build.gradle" ]; then
+            echo "Thư mục android bị rỗng hoặc chưa hoàn chỉnh. Tiến hành npx cap add android..."
+            rm -rf android
+            npx cap add android
+          fi
+          npx cap sync android
+
+      # 6. Cập nhật Android SDK, strings.xml & Quyền tự cài đặt APK
+      - name: Update Android Config, SDK & Strings
+        env:
+          VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
+          VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
+        run: |
+          mkdir -p android/app/src/main/res/values
+          cat << 'EOF' > android/app/src/main/res/values/strings.xml
+          <?xml version='1.0' encoding='utf-8'?>
+          <resources>
+              <string name="app_name">My App</string>
+              <string name="title_activity_main">My App</string>
+              <string name="package_name">com.mycompany.myapp</string>
+              <string name="custom_url_scheme">com.mycompany.myapp</string>
+          </resources>
+          EOF
+
+          if [ -f "android/variables.gradle" ]; then
+            sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
+            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
+          fi
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
+          fi
+
+          # Thêm quyền REQUEST_INSTALL_PACKAGES để cài đè APK tự động
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            if ! grep -q "REQUEST_INSTALL_PACKAGES" android/app/src/main/AndroidManifest.xml; then
+              sed -i '/<application/i \    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" \/>' android/app/src/main/AndroidManifest.xml
+            fi
+          fi
+
+      # 7. Copy file google-services.json (nếu có sử dụng Firebase) & Tạo icon
+      - name: Copy google-services.json & Assets
+        run: |
+          if [ -f "google-services.json" ]; then
+            mkdir -p android/app
+            cp google-services.json android/app/google-services.json
+          fi
+          npx @capacitor/assets generate --android || true
+
+      # 8. Khởi tạo & Khôi phục Keystore cố định vĩnh viễn (Không bao giờ đổi SHA-1)
+      - name: Setup Permanent Fixed Keystore
+        run: |
+          mkdir -p keystore ~/.android android/app
+          
+          # Ưu tiên giải mã Keystore từ file Base64 trong repository
+          if [ -f "keystore/debug.keystore.b64" ]; then
+            echo "Khôi phục Keystore cố định từ keystore/debug.keystore.b64..."
+            base64 -d keystore/debug.keystore.b64 > keystore/debug.keystore
+          elif [ ! -f "keystore/debug.keystore" ]; then
+            echo "Khởi tạo Keystore cố định cho Repository..."
+            keytool -genkeypair -v \
+              -keystore keystore/debug.keystore \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug, O=Android, C=US"
+            base64 -w 0 keystore/debug.keystore > keystore/debug.keystore.b64
+          fi
+          
+          # Đặt keystore vào vị trí build
+          cp keystore/debug.keystore ~/.android/debug.keystore
+          cp keystore/debug.keystore android/app/debug.keystore
+          
+          # Cấu hình tường minh signingConfig trong build.gradle
+          if [ -f "android/app/build.gradle" ]; then
+            python3 -c "
+          with open('android/app/build.gradle', 'r') as f:
+              content = f.read()
+          if 'signingConfigs' not in content:
+              content = content.replace('buildTypes {', '''signingConfigs {
+                  debug {
+                      storeFile file('debug.keystore')
+                      storePassword 'android'
+                      keyAlias 'androiddebugkey'
+                      keyPassword 'android'
+                  }
+              }
+              buildTypes {''')
+              with open('android/app/build.gradle', 'w') as f:
+                  f.write(content)
+          "
+          fi
+          
+          SHA1_VAL=$(keytool -list -v -keystore keystore/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
+          
+          echo "===================================================="
+          echo "=== PERMANENT SHA-1 FINGERPRINT FOR FIREBASE ======="
+          echo "SHA-1: $SHA1_VAL"
+          echo "===================================================="
+          
+          echo "### 🔑 Android APK Fingerprints (SHA-1)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Cố định SHA-1:** \`$SHA1_VAL\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Keystore được bảo toàn tại \`keystore/debug.keystore.b64\`." >> $GITHUB_STEP_SUMMARY
+
+      # 9. Đóng gói APK bằng Gradle Wrapper
+      - name: Build Android APK
+        run: |
+          cd android
+          echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      # 10. Đổi tên APK về chuẩn app_v[version].apk
+      - name: Rename APK
+        run: |
+          mv android/app/build/outputs/apk/debug/app-debug.apk myapp_v${{ steps.auto_version.outputs.NAME }}.apk
+
+      # 11. Tạo GitHub Release đính kèm file APK
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.auto_version.outputs.NAME }}
+          name: Bản cập nhật v${{ steps.auto_version.outputs.NAME }}
+          body: |
+            Bản phát hành tự động xuất bản từ GitHub Actions CI/CD.
+          files: myapp_v${{ steps.auto_version.outputs.NAME }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 12. Tự động cập nhật version.json phục vụ In-App Auto Update
+      - name: Update version.json
+        run: |
+          REPO_NAME="${{ github.repository }}"
+          APK_URL="https://github.com/${REPO_NAME}/releases/download/v${{ steps.auto_version.outputs.NAME }}/myapp_v${{ steps.auto_version.outputs.NAME }}.apk"
+          cat <<EOF > version.json
+          {
+            "version": "${{ steps.auto_version.outputs.NAME }}",
+            "notes": "Bản cập nhật tự động v${{ steps.auto_version.outputs.NAME }}",
+            "apkUrl": "$APK_URL"
+          }
+          EOF
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.json keystore/debug.keystore.b64 || true
+          git commit -m "chore: auto-update version.json and keystore [skip ci]" || echo "No changes to commit"
+          git push
+```
+
+--------------------------------------------------
+File B: version.json (Đặt tại thư mục gốc repository)
+--------------------------------------------------
+```json
+{
+  "version": "1.0.0",
+  "notes": "Phiên bản phát hành đầu tiên",
+  "apkUrl": "https://github.com/OWNER/REPO/releases/download/v1.0.0/myapp_v1.0.0.apk"
+}
+```
+
+--------------------------------------------------------------------------------
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+
+Bước 1: Tạo thư mục `.github/workflows/` trong dự án mới và dán file `auto-release.yml`.
+- Tùy chỉnh tên file APK và App ID trong workflow: Thay `myapp` thành tên app của bạn (ví dụ `sotietkiem`, `expense_manager`).
+- Đặt file `version.json` ở thư mục gốc của dự án.
+
+Bước 2: Cấu hình `capacitor.config.ts` để đồng bộ App ID:
+```typescript
+import { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.mycompany.myapp',
+  appName: 'My App',
+  webDir: 'dist',
+};
+
+export default config;
+```
+
+Bước 3: Đẩy code lên GitHub (`git push origin main`):
+- GitHub Actions sẽ tự động chạy toàn bộ quy trình: Build Web -> Sync Android -> Ký duyệt Keystore -> Biên dịch APK -> Tạo GitHub Release -> Tự động sinh link tải trong `version.json`.
+- Sau khi build xong, bạn vào tab **Releases** của GitHub tải APK về máy cài đặt ngay lập tức!
+================================================================================

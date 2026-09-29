@@ -1,0 +1,182 @@
+================================================================================
+MODULE 09: GLOBAL TOAST NOTIFICATION SYSTEM
+================================================================================
+Chuẩn tài liệu: SDK / Library Documentation
+Mục đích: Bê sang dự án mới bất kỳ và sử dụng ngay lập tức
+Tương thích: React 18/19, TypeScript 5+, Tailwind CSS, Web & Capacitor Mobile
+================================================================================
+
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+Hệ thống Thông báo Nổi (Toast Notification) toàn cục với thiết kế hiện đại,
+gọn gàng, tối ưu cho màn hình cảm ứng di động và chống tràn màn hình:
+
+- Không phụ thuộc thư viện bên ngoài nặng nề (Không dùng react-toastify hay sonner),
+  tiết kiệm dung lượng và hoàn toàn kiểm soát giao diện qua Tailwind CSS.
+- Giới hạn thông minh: Tại một thời điểm chỉ hiển thị 1 Toast duy nhất nổi ở mép
+  trên màn hình (`z-[9999]`), tự động thay thế toast cũ để tránh việc thông báo dồn
+  cục che khuất giao diện làm việc của người dùng.
+- Hiệu ứng Backdrop Blur mờ nền kính, gradient màu sắc theo ngữ cảnh:
+  + `success`: Màu xanh ngọc (Emerald / Teal).
+  + `error`: Màu đỏ hồng (Rose).
+  + `info`: Màu xanh dương đá phiến (Slate / Teal).
+- Tự động biến mất sau thời gian định sẵn (mặc định 3000ms), có nút đóng nhanh.
+
+2. CÁC THƯ VIỆN NPM PHỤ THUỘC (DEPENDENCIES)
+--------------------------------------------------------------------------------
+npm install lucide-react
+
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE)
+--------------------------------------------------------------------------------
+Lưu tệp này tại: /src/context/ToastContext.tsx
+
+```tsx
+import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+
+export type ToastType = 'success' | 'info' | 'error';
+
+export interface ToastMessage {
+  id: string;
+  message: string;
+  type: ToastType;
+}
+
+interface ToastContextType {
+  showToast: (message: string, type?: ToastType, duration?: number) => void;
+}
+
+const ToastContext = createContext<ToastContextType | undefined>(undefined);
+
+export const ToastProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const showToast = useCallback((message: string, type: ToastType = 'success', duration = 3000) => {
+    const id = Math.random().toString(36).substring(2, 9);
+    const newToast: ToastMessage = { id, message, type };
+
+    // Giới hạn hiển thị 1 toast duy nhất tại 1 thời điểm
+    setToasts([newToast]);
+
+    if (duration > 0) {
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, duration);
+    }
+  }, []);
+
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  return (
+    <ToastContext.Provider value={{ showToast }}>
+      {children}
+
+      {/* Floating Toast Container - Nổi cố định ở đầu màn hình phía trên Notch/Statusbar */}
+      <div className="fixed top-3.5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col items-center pointer-events-none w-[92%] max-w-md sm:w-auto">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl shadow-2xl border text-xs font-semibold backdrop-blur-md transition-all animate-in fade-in slide-in-from-top-6 duration-300 ${
+              toast.type === 'success'
+                ? 'bg-gradient-to-r from-emerald-950/95 via-slate-900/95 to-teal-950/95 text-white border-emerald-400/50 shadow-emerald-950/40'
+                : toast.type === 'error'
+                ? 'bg-rose-950/95 text-rose-100 border-rose-500/50 shadow-rose-950/30'
+                : 'bg-slate-900/95 text-slate-100 border-teal-500/30 shadow-slate-950/30'
+            }`}
+          >
+            <div className="flex items-center space-x-2">
+              {toast.type === 'success' && (
+                <div className="w-5 h-5 rounded-md bg-gradient-to-tr from-emerald-500 to-teal-400 text-slate-950 flex items-center justify-center shrink-0 shadow-sm shadow-emerald-500/20">
+                  <CheckCircle2 className="w-3.5 h-3.5 font-bold" />
+                </div>
+              )}
+              {toast.type === 'error' && (
+                <div className="w-5 h-5 rounded-md bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-3.5 h-3.5" />
+                </div>
+              )}
+              {toast.type === 'info' && (
+                <div className="w-5 h-5 rounded-md bg-teal-500/20 text-teal-300 border border-teal-500/30 flex items-center justify-center shrink-0">
+                  <Info className="w-3.5 h-3.5" />
+                </div>
+              )}
+              <span className="leading-snug">{toast.message}</span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => removeToast(toast.id)}
+              className="text-slate-400 hover:text-white p-1 rounded-md hover:bg-slate-800 transition-colors cursor-pointer shrink-0 ml-1.5"
+              title="Đóng thông báo"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+};
+
+/**
+ * Hook sử dụng Toast ở bất kỳ đâu trong Component con
+ */
+export const useToast = (): ToastContextType => {
+  const context = useContext(ToastContext);
+  if (!context) {
+    return {
+      showToast: (msg: string) => console.log('[Toast Fallback]:', msg),
+    };
+  }
+  return context;
+};
+```
+
+4. HƯỚNG DẪN TÍCH HỢP VÀO APP MỚI CHỈ TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+Bước 1: Copy file trên vào `/src/context/ToastContext.tsx`.
+Bước 2: Bọc `<ToastProvider>` bên ngoài `<App />` tại file `src/main.tsx`:
+```tsx
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App.tsx';
+import { ToastProvider } from './context/ToastContext.tsx';
+import './index.css';
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ToastProvider>
+      <App />
+    </ToastProvider>
+  </StrictMode>
+);
+```
+Bước 3: Gọi hàm `showToast` ở bất kỳ component con nào:
+```tsx
+import { useToast } from '../context/ToastContext';
+
+export function DemoComponent() {
+  const { showToast } = useToast();
+
+  return (
+    <div className="space-x-2">
+      <button 
+        onClick={() => showToast('Lưu dữ liệu thành công!', 'success')}
+        className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs"
+      >
+        Bấm Thành Công
+      </button>
+
+      <button 
+        onClick={() => showToast('Mật khẩu không chính xác!', 'error')}
+        className="px-3 py-1 bg-rose-600 text-white rounded-lg text-xs"
+      >
+        Bấm Báo Lỗi
+      </button>
+    </div>
+  );
+}
+```
+================================================================================
