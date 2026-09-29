@@ -1,0 +1,606 @@
+================================================================================
+MODULE 01: IN-APP APK AUTO-UPDATE SYSTEM (FOR CAPACITOR & REACT)
+================================================================================
+Phát triển: Google AI Studio Build - Reusable Mobile SDK
+Chuẩn tích hợp: React 18/19, Vite, Capacitor 6/7, Android Native
+
+--------------------------------------------------------------------------------
+1. MÔ TẢ CHỨC NĂNG & MỤC ĐÍCH SỬ DỤNG
+--------------------------------------------------------------------------------
+- Tự động kiểm tra phiên bản mới từ GitHub Release (hoặc máy chủ web tùy ý qua file version.json) khi khởi chạy ứng dụng hoặc khi bấm nút thủ công.
+- Tải file APK trực tiếp về máy Android trong nền với thanh tiến trình mượt mà (Progress Bar với thuật toán Ease-Out kết hợp Native Event Listener).
+- Tự động gọi trình cài đặt gói hệ thống Android (`FileOpener`) để cài đè APK phiên bản mới mà KHÔNG cần đưa app lên Google Play Store.
+- Cơ chế Fallback đa tầng:
+  + Tầng 1: Tải native qua `@capacitor/filesystem` (lưu vào Cache Directory).
+  + Tầng 2: Fallback qua Web Fetch Blob nếu phương thức native bị lỗi quyền đọc ghi.
+  + Tầng 3: Mở trình duyệt Web tải file nếu hệ điều hành chặn cài đặt trực tiếp.
+  + Tầng 4: Chia sẻ file APK qua `@capacitor/share` để người dùng có thể mở bằng trình quản lý tệp bất kỳ.
+- Hoạt động độc lập: Có thể hiển thị ở màn hình đăng nhập, màn hình khóa hoặc thanh cài đặt của mọi dự án.
+
+--------------------------------------------------------------------------------
+2. CÁC THƯ VIỆN NPM CẦN THIẾT (DEPENDENCIES)
+--------------------------------------------------------------------------------
+Chạy lệnh sau trong dự án mới:
+```bash
+npm install @capacitor/core @capacitor/filesystem @capacitor-community/file-opener @capacitor/share lucide-react
+```
+
+--------------------------------------------------------------------------------
+3. MÃ NGUỒN HOÀN CHỈNH (FULL SOURCE CODE - STANDALONE)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------
+File A: src/components/AppUpdateModal.tsx
+--------------------------------------------------
+```tsx
+import React, { useState } from 'react';
+import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2 } from 'lucide-react';
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory } from '@capacitor/filesystem';
+import { FileOpener } from '@capacitor-community/file-opener';
+import { Share } from '@capacitor/share';
+
+export interface AppUpdateInfo {
+  version: string;
+  downloadUrl?: string;
+  apkUrl?: string;
+  changelog: string[];
+  releaseDate?: string;
+}
+
+export interface AppUpdateModalProps {
+  isOpen: boolean;
+  currentVersion: string;
+  updateInfo: AppUpdateInfo | null;
+  onClose: () => void;
+}
+
+export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
+  isOpen,
+  currentVersion,
+  updateInfo,
+  onClose,
+}) => {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [statusMessage, setStatusMessage] = useState('');
+
+  if (!isOpen || !updateInfo) return null;
+
+  const handleUpdate = async () => {
+    const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
+    if (!targetLink) return;
+
+    setIsDownloading(true);
+    setDownloadProgress(10);
+    setStatusMessage('Đang khởi tạo kết nối tải APK...');
+
+    try {
+      if (Capacitor.isNativePlatform()) {
+        const fileName = `app_update_v${updateInfo.version}.apk`;
+        setStatusMessage('Đang tải tệp APK trực tiếp về bộ nhớ máy...');
+        setDownloadProgress(25);
+
+        let savedUri = '';
+        let currentProgress = 25;
+        let progressInterval: any = null;
+        let progressListener: any = null;
+
+        try {
+          // 1. Chạy tiến trình giả lập tăng mượt mà (Ease-out curve tiến dần về 85%)
+          progressInterval = setInterval(() => {
+            if (currentProgress < 85) {
+              const increment = Math.max(0.1, (85 - currentProgress) * 0.04);
+              currentProgress += increment;
+              setDownloadProgress(Math.round(currentProgress));
+            }
+          }, 120);
+
+          // 2. Lắng nghe tiến trình download thực từ plugin Filesystem của Capacitor
+          try {
+            progressListener = await Filesystem.addListener('progress', (progress) => {
+              if (progress && typeof progress.bytes === 'number' && typeof progress.contentLength === 'number' && progress.contentLength > 0) {
+                const percent = Math.round((progress.bytes / progress.contentLength) * 100);
+                const mappedPercent = 25 + Math.round(percent * 0.6); // Ánh xạ 0-100% về dải 25-85%
+                if (mappedPercent > currentProgress) {
+                  currentProgress = mappedPercent;
+                  setDownloadProgress(Math.round(currentProgress));
+                }
+              }
+            });
+          } catch (listenerErr) {
+            console.warn('Không thể đăng ký native progress listener:', listenerErr);
+          }
+
+          // 3. Tải file bằng native downloadFile
+          const downloadRes = await Filesystem.downloadFile({
+            url: targetLink,
+            path: fileName,
+            directory: Directory.Cache,
+            progress: true,
+          });
+          savedUri = (downloadRes as any).uri || downloadRes.path || '';
+        } catch (downloadErr) {
+          console.warn('Filesystem.downloadFile thất bại, chuyển sang phương án tải Blob:', downloadErr);
+          currentProgress = 40;
+          setDownloadProgress(40);
+          const response = await fetch(targetLink, { redirect: 'follow' });
+          if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
+          const blob = await response.blob();
+          
+          currentProgress = 70;
+          setDownloadProgress(70);
+          setStatusMessage('Đang xử lý gói cài đặt Android...');
+
+          const reader = new FileReader();
+          const base64Promise = new Promise<string>((resolve, reject) => {
+            reader.onloadend = () => {
+              const base64data = (reader.result as string).split(',')[1];
+              resolve(base64data);
+            };
+            reader.onerror = reject;
+          });
+          reader.readAsDataURL(blob);
+          const base64Data = await base64Promise;
+
+          const writeRes = await Filesystem.writeFile({
+            path: fileName,
+            data: base64Data,
+            directory: Directory.Cache,
+          });
+          savedUri = writeRes.uri;
+        } finally {
+          if (progressInterval) clearInterval(progressInterval);
+          if (progressListener && typeof progressListener.remove === 'function') {
+            try {
+              await progressListener.remove();
+            } catch {}
+          }
+        }
+
+        setDownloadProgress(95);
+        setStatusMessage('Đã tải xong APK! Đang mở trình cài đặt Android...');
+
+        let resolvedPath = savedUri;
+        try {
+          const uriRes = await Filesystem.getUri({
+            directory: Directory.Cache,
+            path: fileName,
+          });
+          if (uriRes?.uri) resolvedPath = uriRes.uri;
+        } catch (e) {
+          console.warn('Lỗi lấy getUri:', e);
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        setDownloadProgress(100);
+
+        try {
+          await FileOpener.open({
+            filePath: resolvedPath,
+            contentType: 'application/vnd.android.package-archive',
+          });
+          setIsDownloading(false);
+          onClose();
+        } catch (openErr: any) {
+          console.warn('FileOpener trực tiếp thất bại, thử chia sẻ mở file:', openErr);
+          try {
+            await Share.share({
+              title: 'Cài đặt bản cập nhật APK',
+              url: resolvedPath,
+              dialogTitle: 'Chọn Trình cài đặt gói để cập nhật',
+            });
+            setIsDownloading(false);
+            onClose();
+          } catch (shareErr) {
+            setStatusMessage('Mở trình duyệt để tải về trực tiếp...');
+            window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+            setIsDownloading(false);
+          }
+        }
+      } else {
+        // Nền tảng Web / Trình duyệt: Tải qua Tab mới
+        setStatusMessage('Đang mở liên kết tải về trên trình duyệt...');
+        setDownloadProgress(100);
+        window.open(targetLink, '_blank');
+        setTimeout(() => {
+          setIsDownloading(false);
+          onClose();
+        }, 1500);
+      }
+    } catch (err: any) {
+      console.error('Lỗi quy trình cập nhật APK:', err);
+      setStatusMessage('Gặp sự cố khi cài đặt tự động. Chuyển sang tải bằng trình duyệt...');
+      setTimeout(() => {
+        try {
+          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+        } catch {}
+        setIsDownloading(false);
+      }, 1000);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+      {/* Nền làm mờ */}
+      <div 
+        className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity" 
+        onClick={!isDownloading ? onClose : undefined}
+      />
+
+      {/* Hộp thoại Modal */}
+      <div className="relative w-full max-w-md transform overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl transition-all p-6 text-slate-100 flex flex-col space-y-5 animate-in fade-in-50 zoom-in-95 duration-150">
+        
+        {/* Dải gradient trang trí */}
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-500 via-emerald-500 to-blue-500" />
+
+        {/* Nút đóng */}
+        {!isDownloading && (
+          <button
+            onClick={onClose}
+            className="absolute top-4 right-4 text-slate-400 hover:text-slate-100 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
+            title="Bỏ qua"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+
+        {/* Icon & Tiêu đề */}
+        <div className="flex flex-col items-center text-center space-y-2 pt-2">
+          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shadow-inner">
+            {isDownloading ? (
+              <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
+            ) : (
+              <ArrowUpCircle className="w-10 h-10 animate-bounce" />
+            )}
+          </div>
+          <h2 className="text-lg font-extrabold tracking-tight text-white px-2">
+            {isDownloading ? `Đang tải v${updateInfo.version}...` : `Đã có bản cập nhật mới (v${updateInfo.version})!`}
+          </h2>
+          <p className="text-xs text-slate-400 px-4">
+            {isDownloading ? statusMessage : 'Bạn có muốn tải về để cập nhật tính năng mới nhất không?'}
+          </p>
+        </div>
+
+        {isDownloading ? (
+          /* Thanh tiến trình tải APK */
+          <div className="space-y-3 py-3">
+            <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
+              <div 
+                className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-300"
+                style={{ width: `${downloadProgress}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-[11px] text-slate-400 font-medium">
+              <span>{statusMessage}</span>
+              <span className="text-emerald-400 font-bold">{downloadProgress}%</span>
+            </div>
+            <div className="text-center pt-2 border-t border-slate-800/60">
+              <button
+                type="button"
+                onClick={() => {
+                  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
+                  if (targetLink) window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+                }}
+                className="text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium cursor-pointer"
+              >
+                Mở tải về trực tiếp bằng Trình duyệt
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Hộp so sánh phiên bản */}
+            <div className="grid grid-cols-2 gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 text-center">
+              <div>
+                <span className="block text-[10px] text-slate-500 uppercase font-bold tracking-wider">Phiên bản hiện tại</span>
+                <span className="text-sm font-semibold text-slate-300">v{currentVersion}</span>
+              </div>
+              <div className="border-l border-slate-800">
+                <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-wider">Phiên bản mới nhất</span>
+                <span className="text-sm font-bold text-emerald-400">v{updateInfo.version}</span>
+              </div>
+            </div>
+
+            {/* Chi tiết nội dung cập nhật (Changelog) */}
+            <div className="space-y-2 bg-slate-950/40 rounded-xl p-3.5 border border-slate-800/60 max-h-44 overflow-y-auto">
+              <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
+                <span className="font-semibold text-slate-300">Nội dung thay đổi:</span>
+                {updateInfo.releaseDate && (
+                  <span className="flex items-center gap-1 text-[11px] text-slate-400">
+                    <Calendar className="w-3 h-3 text-slate-400" />
+                    {updateInfo.releaseDate}
+                  </span>
+                )}
+              </div>
+              <ul className="space-y-1.5 text-xs text-slate-300 pt-1">
+                {updateInfo.changelog && updateInfo.changelog.length > 0 ? (
+                  updateInfo.changelog.map((item, index) => (
+                    <li key={index} className="flex items-start gap-2 leading-relaxed">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                      <span>{item}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="flex items-start gap-2 text-slate-400">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                    <span>Nâng cấp hiệu năng và sửa lỗi hệ thống.</span>
+                  </li>
+                )}
+              </ul>
+            </div>
+
+            {/* Các nút bấm hành động */}
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleUpdate}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 transition-all active:scale-[0.98] cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Cập nhật ngay bây giờ</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+              >
+                Để sau (Nhắc tôi lần sau)
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+```
+
+--------------------------------------------------
+File B: src/hooks/useAppUpdate.ts
+--------------------------------------------------
+```ts
+import { useState, useCallback, useEffect } from 'react';
+import { AppUpdateInfo } from '../components/AppUpdateModal';
+
+export function isNewerVersion(current: string, latest: string): boolean {
+  const parse = (v: string) => v.replace(/^v/i, '').split('.').map(Number);
+  const currParts = parse(current);
+  const lateParts = parse(latest);
+  for (let i = 0; i < Math.max(currParts.length, lateParts.length); i++) {
+    const c = currParts[i] || 0;
+    const l = lateParts[i] || 0;
+    if (l > c) return true;
+    if (c > l) return false;
+  }
+  return false;
+}
+
+export interface UseAppUpdateOptions {
+  currentVersion: string;
+  updateServerUrl: string; // Đường dẫn URL raw tới file version.json trên GitHub
+  autoCheckDelayMs?: number; // Tự động kiểm tra sau N milliseconds (mặc định 2000ms)
+  onNotification?: (msg: string, type: 'info' | 'success' | 'error') => void;
+}
+
+export function useAppUpdate({
+  currentVersion,
+  updateServerUrl,
+  autoCheckDelayMs = 2000,
+  onNotification,
+}: UseAppUpdateOptions) {
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
+  const [isChecking, setIsChecking] = useState<boolean>(false);
+
+  const checkAppUpdate = useCallback(async (manual: boolean = false) => {
+    setIsChecking(true);
+    if (manual && onNotification) {
+      onNotification('Đang kiểm tra phiên bản mới từ máy chủ...', 'info');
+    }
+    try {
+      const res = await fetch(`${updateServerUrl}?_t=${Date.now()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const latestVersion = data.version || data.versionName;
+        if (data && latestVersion) {
+          const isNewer = isNewerVersion(currentVersion, latestVersion);
+          if (isNewer) {
+            setUpdateInfo({
+              version: latestVersion,
+              downloadUrl: data.downloadUrl || data.apkUrl,
+              apkUrl: data.apkUrl || data.downloadUrl,
+              changelog: Array.isArray(data.changelog)
+                ? data.changelog
+                : (data.notes ? [data.notes] : ['Nâng cấp tính năng và cải thiện hiệu năng.']),
+              releaseDate: data.releaseDate || data.date,
+            });
+            setIsUpdateModalOpen(true);
+            if (manual && onNotification) {
+              onNotification(`Đã tìm thấy bản cập nhật mới v${latestVersion}!`, 'success');
+            }
+          } else {
+            if (manual && onNotification) {
+              onNotification(`Bạn đang dùng phiên bản mới nhất (v${currentVersion}).`, 'success');
+            }
+          }
+        }
+      } else {
+        if (manual && onNotification) {
+          onNotification(`Không thể kết nối máy chủ cập nhật (Mã lỗi ${res.status}).`, 'error');
+        }
+      }
+    } catch (err: any) {
+      console.warn('Lỗi kiểm tra cập nhật:', err);
+      if (manual && onNotification) {
+        onNotification('Không thể kết nối máy chủ. Vui lòng kiểm tra lại mạng.', 'error');
+      }
+    } finally {
+      setIsChecking(false);
+    }
+  }, [currentVersion, updateServerUrl, onNotification]);
+
+  useEffect(() => {
+    if (autoCheckDelayMs > 0) {
+      const timer = setTimeout(() => {
+        checkAppUpdate(false);
+      }, autoCheckDelayMs);
+      return () => clearTimeout(timer);
+    }
+  }, [checkAppUpdate, autoCheckDelayMs]);
+
+  return {
+    updateInfo,
+    isUpdateModalOpen,
+    setIsUpdateModalOpen,
+    isChecking,
+    checkAppUpdate,
+  };
+}
+```
+
+--------------------------------------------------
+File C: version.json (Mẫu đặt tại root repo GitHub)
+--------------------------------------------------
+```json
+{
+  "version": "1.0.1",
+  "notes": "Bản cập nhật tự động vá lỗi và cải tiến tốc độ.",
+  "apkUrl": "https://github.com/<USERNAME>/<REPO>/releases/download/v1.0.1/app-release.apk",
+  "changelog": [
+    "Cải tiến giao diện người dùng",
+    "Tối ưu hóa tốc độ tải dữ liệu",
+    "Sửa lỗi đăng nhập và bảo mật"
+  ]
+}
+```
+
+--------------------------------------------------
+File D: .github/workflows/auto-release.yml (CI/CD Tự động Build APK & Tạo Release)
+--------------------------------------------------
+```yaml
+name: Auto Build & Release APK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'package.json' # Chỉ kích hoạt khi tăng version trong package.json
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Read Version from package.json
+        id: pkg_version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Build Web Assets
+        run: npm run build
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Build Android Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK (Optional nếu có Keystore Secret, hoặc dùng file APK chưa ký / debug)
+        run: |
+          cp android/app/build/outputs/apk/release/app-release-unsigned.apk ./app_v${{ steps.pkg_version.outputs.VERSION }}.apk || cp android/app/build/outputs/apk/release/app-release.apk ./app_v${{ steps.pkg_version.outputs.VERSION }}.apk
+
+      - name: Create GitHub Release & Upload APK
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.pkg_version.outputs.VERSION }}
+          name: Release v${{ steps.pkg_version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: ./app_v${{ steps.pkg_version.outputs.VERSION }}.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+--------------------------------------------------------------------------------
+4. HƯỚNG DẪN TÍCH HỢP VÀO DỰ ÁN MỚI CHỈ TRONG 3 BƯỚC
+--------------------------------------------------------------------------------
+
+### BƯỚC 1: Cài đặt thư viện
+```bash
+npm install @capacitor/filesystem @capacitor-community/file-opener @capacitor/share lucide-react
+```
+
+### BƯỚC 2: Copy 2 file mã nguồn
+Copy 2 file:
+- `src/components/AppUpdateModal.tsx`
+- `src/hooks/useAppUpdate.ts`
+vào dự án mới.
+
+### BƯỚC 3: Nhúng vào App.tsx
+Trong file `App.tsx` của dự án mới:
+```tsx
+import React from 'react';
+import { useAppUpdate } from './hooks/useAppUpdate';
+import { AppUpdateModal } from './components/AppUpdateModal';
+import pkg from '../package.json';
+
+const UPDATE_URL = 'https://raw.githubusercontent.com/<OWNER>/<REPO>/main/version.json';
+
+export default function App() {
+  // 1. Kích hoạt hook kiểm tra cập nhật (tự động chạy sau 2s khi mở app)
+  const {
+    updateInfo,
+    isUpdateModalOpen,
+    setIsUpdateModalOpen,
+    checkAppUpdate
+  } = useAppUpdate({
+    currentVersion: pkg.version,
+    updateServerUrl: UPDATE_URL,
+    onNotification: (msg, type) => console.log(`[${type}]`, msg),
+  });
+
+  return (
+    <div>
+      <h1>My Awesome Mobile App</h1>
+      <button onClick={() => checkAppUpdate(true)}>Kiểm tra cập nhật</button>
+
+      {/* 2. Đặt Modal này ở tầng ngoài cùng của ứng dụng */}
+      <AppUpdateModal
+        isOpen={isUpdateModalOpen}
+        currentVersion={pkg.version}
+        updateInfo={updateInfo}
+        onClose={() => setIsUpdateModalOpen(false)}
+      />
+    </div>
+  );
+}
+```
+Xong! Khi bạn tăng version trong `package.json` và cập nhật `version.json`, người dùng mở ứng dụng sẽ lập tức thấy thông báo cập nhật, bấm tải về là APK tự cài đè lên máy Android.
+================================================================================

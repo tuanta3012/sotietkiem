@@ -1,0 +1,414 @@
+================================================================================
+                    TÀI LIỆU KIẾN TRÚC HỆ THỐNG DẠNG MODULAR
+               (SYSTEM ARCHITECTURE & REUSABLE MODULES CATALOG)
+================================================================================
+Dự án tham chiếu: Sổ Tiết Kiệm Gia Đình (Family Savings Portfolio App)
+Phiên bản kiến trúc: v1.0.15
+Môi trường triển khai: Mobile-First Android (Capacitor) & Web SPA (Vite React)
+Ngày lập: 29/09/2026
+
+--------------------------------------------------------------------------------
+PHẦN 1: TỔNG QUAN DỰ ÁN & TECH STACK
+--------------------------------------------------------------------------------
+
+1.1. Công nghệ cốt lõi (Core Tech Stack)
+* Frontend Framework: React 19 (Functional Components, Custom Hooks)
+* Build Tooling & Bundler: Vite 6 (ESM, Fast HMR, Rollup optimized build)
+* Ngôn ngữ: TypeScript 5.8 (Strict type checking, Interface-driven design)
+* Giao diện & Styling: Tailwind CSS v4 (@import "tailwindcss", Material 3 mobile UI)
+* Bộ icon: Lucide React (vector icon siêu nhẹ, tối ưu hóa bundle)
+* Native Mobile Bridge: Capacitor JS v6 (@capacitor/core, @capacitor/android)
+* Bảo mật & Mã hóa thiết bị: capacitor-secure-storage-plugin (Android KeyStore hardware-backed)
+* Sinh trắc học: @capgo/capacitor-native-biometric (Vân tay / Face ID / Mã PIN máy)
+* Xác thực Google: @codetrix-studio/capacitor-google-auth (Native Google Play Services SDK)
+* Cơ sở dữ liệu đám mây: Firebase v12 (Cloud Firestore, HTTP Long-Polling)
+* Lưu trữ đám mây: Google Drive v3 REST API & Google Sheets v4 REST API
+* Xử lý bảng tính: SheetJS (xlsx) xử lý đọc/ghi file Excel nhị phân trực tiếp trên client
+* CI/CD & Auto Release: GitHub Actions (Ubuntu runner, JDK 21, Gradle, Auto Tag & GitHub Releases)
+
+1.2. Kiến trúc phân tầng (Layered Architecture)
+Hệ thống được thiết kế theo mô hình 4 tầng tách biệt hoàn toàn:
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │ 1. PRESENTATION LAYER (Giao diện người dùng - React Components)        │
+  │    - Views: BookListView, InterestCalculationView, MobilizationOpt...  │
+  │    - Modals: LoginModal, AppUpdateModal, BiometricUnlockModal...       │
+  │    - Atoms: DatePickerVN, BankSelectDropdown, CustomSelect...          │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+  ┌───────────────────────────────────▼────────────────────────────────────┐
+  │ 2. HOOKS & CONTROLLER LAYER (Quản lý nghiệp vụ & State Management)     │
+  │    - useSavingsBooks: Quản lý danh sách sổ, tính toán, bộ lọc, CRUD    │
+  │    - useDriveSync: Điều phối đồng bộ 2 chiều Google Drive / Sheets     │
+  │    - ToastContext: Hệ thống thông báo toast toàn cục                   │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+  ┌───────────────────────────────────▼────────────────────────────────────┐
+  │ 3. SERVICE / INTEGRATION LAYER (Dịch vụ & Giao tiếp ngoài)             │
+  │    - googleDriveService: OAuth, Token Refresh ngầm, Drive/Sheets API   │
+  │    - firebaseFirestoreService: Real-time Master Pointer, Sync Audit Log│
+  │    - secureStorage: Đọc/ghi KeyStore, Preferences, LocalStorage        │
+  │    - notificationService: Lập lịch thông báo native nhắc đáo hạn sổ    │
+  │    - excelParser & dataTranslator: Chuyển đổi định dạng dữ liệu        │
+  │    - calculator & formatters: Công thức tài chính, định dạng tiền VNĐ  │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+  ┌───────────────────────────────────▼────────────────────────────────────┐
+  │ 4. STORAGE & NATIVE DEVICE LAYER (Phần cứng & Lưu trữ)                 │
+  │    - Android Keystore Hardware / SharedPreferences / WebView Storage   │
+  │    - Google Drive Cloud / Firebase Cloud Firestore                     │
+  └────────────────────────────────────────────────────────────────────────┘
+
+1.3. Cấu trúc thư mục dự án (Directory Structure)
+/
+├── .github/workflows/       # Kịch bản CI/CD GitHub Actions tự động build APK
+│   └── auto-release.yml     # Auto Build APK, ký duyệt, tạo GitHub Release
+├── android/                 # Dự án Android Native sinh bởi Capacitor
+├── capacitor.config.ts      # Cấu hình Capacitor (App ID, Plugins, GoogleAuth)
+├── document/                # Thư mục chứa tài liệu kiến trúc & hướng dẫn
+├── firebase-applet-config.json # Khóa API và Project ID kết nối Firebase
+├── firebase-blueprint.json  # Định nghĩa lược đồ dữ liệu Firestore Schema
+├── firestore.rules          # Quy tắc bảo mật Cloud Firestore
+├── google-services.json     # Cấu hình Google Play Services cho Android
+├── index.html               # Entry point HTML của Vite
+├── package.json             # Danh mục thư viện & dependencies
+├── version.json             # File endpoint phục vụ tự động kiểm tra bản cập nhật APK
+├── vite.config.ts           # Cấu hình build Vite
+└── src/
+    ├── main.tsx             # Entry point React (Strict mode, ErrorBoundary, ToastProvider)
+    ├── App.tsx              # Component trung tâm điều phối và nạp dữ liệu
+    ├── types.ts             # Định nghĩa toàn bộ TypeScript Interfaces & Types
+    ├── version.ts           # Quản lý số phiên bản ứng dụng đồng bộ package.json
+    ├── components/          # Toàn bộ React UI Components (Modals, Views, Controls)
+    ├── context/             # React Context Providers (ToastContext)
+    ├── data/                # Dữ liệu tĩnh mặc định (banks.ts, historicalGrowth.ts)
+    ├── hooks/               # Custom React Hooks nghiệp vụ (useSavingsBooks, useDriveSync)
+    └── utils/               # Bộ thư viện tiện ích, tính toán và tích hợp API
+
+
+--------------------------------------------------------------------------------
+PHẦN 2: DANH SÁCH CÁC MODULE CÓ THỂ TÁI SỬ DỤNG (REUSABLE MODULES)
+--------------------------------------------------------------------------------
+
+Dưới đây là danh mục chi tiết các module được thiết kế chuẩn mực, phân tách rõ ràng
+và sẵn sàng mang sang bất kỳ dự án React / Mobile Capacitor nào khác:
+
+================================================================================
+NHÓM A: CORE UI MODULES (Giao diện cốt lõi tái sử dụng cao)
+================================================================================
+
+1. Module: Tự Động Kiểm Tra & Tải Cập Nhật APK (In-App APK Updater)
+   - Tên file: src/components/AppUpdateModal.tsx
+   - Mục đích: Tự động phát hiện khi có bản APK mới trên GitHub/Server, hiển thị
+     changelog, tải file APK trực tiếp về máy có thanh tiến trình mượt mà (progress
+     bar) và tự động gọi trình cài đặt Android OS (FileOpener).
+   - Dependencies:
+     * lucide-react (Icons)
+     * @capacitor/core
+     * @capacitor/filesystem (Tải và ghi file APK)
+     * @capacitor-community/file-opener (Kích hoạt cài đặt APK trên Android)
+     * @capacitor/share (Fallback chia sẻ file nếu không mở được)
+   - Độc lập (Standalone): RẤT CAO (95%). Chỉ cần truyền isOpen, currentVersion,
+     updateInfo và onClose. Có thể mang nguyên file sang dự án mới kèm file version.json.
+
+2. Module: Đăng Nhập Đa Nền Tảng (Native Google + Web Popup/Redirect + Offline Mode)
+   - Tên file: src/components/LoginModal.tsx
+   - Mục đích: Màn hình chào mừng và đăng nhập thương hiệu. Hỗ trợ nút đăng nhập Google
+     qua Native SDK trên điện thoại, nút đăng nhập Web Popup/Redirect trên trình duyệt,
+     chế độ sử dụng Ngoại Tuyến (Offline Mode), hiển thị phiên bản hiện tại, nút
+     kiểm tra cập nhật nhanh và hộp thoại hướng dẫn cấu hình SHA-1 Fingerprint.
+   - Dependencies:
+     * lucide-react
+     * @capacitor/core
+     * src/utils/googleDriveService.ts (signInWithGoogle, signInWithGoogleRedirect)
+     * src/types.ts
+   - Độc lập (Standalone): CAO (85%). Cung cấp giao diện đăng nhập chuẩn mực cho mọi
+     app cần tài khoản Google hoặc chế độ Offline.
+
+3. Module: Khóa Bảo Mật Sinh Trắc Học (Biometric & Device PIN Screen)
+   - Tên file: src/components/BiometricUnlockModal.tsx
+   - Mục đích: Khóa ứng dụng bằng bảo mật vân tay, Face ID hoặc mã PIN của điện thoại.
+     Tự động gọi quét vân tay khi bật app, có chế độ fallback mật mã thiết bị,
+     chống bypass nếu chưa xác thực thành công.
+   - Dependencies:
+     * lucide-react
+     * @capgo/capacitor-native-biometric
+     * @capacitor/core
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%). Nhận userName, userEmail,
+     onSuccess, onCancel. Có thể nhúng vào bất kỳ ứng dụng nào cần bảo mật cao.
+
+4. Module: Hệ Thống Thông Báo Toast Toàn Cục (Toast Notification System)
+   - Tên file: src/context/ToastContext.tsx
+   - Mục đích: Hiển thị các thông báo nhanh (Success, Error, Warning, Info) nổi bật
+     dưới chân màn hình hoặc góc trên, tự động biến mất theo timeout, hỗ trợ hàng đợi.
+   - Dependencies: lucide-react, React Context API chuẩn.
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%). Không có dependency bên ngoài.
+     Bọc <ToastProvider> ở root và dùng qua hook useToast().
+
+5. Module: Bộ Chọn Ngày Tiếng Việt Tối Ưu Mobile (Vietnamese DatePicker)
+   - Tên file: src/components/DatePickerVN.tsx
+   - Mục đích: Ô chọn ngày định dạng dd/mm/yyyy chuẩn Việt Nam, có nút chọn nhanh
+     (Hôm nay, Đầu tháng, Cuối tháng), popup lịch đẹp mắt, chống lỗi timezone GMT+7.
+   - Dependencies: lucide-react.
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%).
+
+6. Module: Dropdown Lựa Chọn Tùy Biến (Custom Select Dropdown)
+   - Tên file: src/components/CustomSelect.tsx, BankSelectDropdown.tsx, OwnerSelectDropdown.tsx
+   - Mục đích: Bộ dropdown chọn lựa hỗ trợ tìm kiếm tức thì, icon trực quan,
+     tối ưu vùng chạm ngón tay trên mobile, không bị vỡ giao diện trên màn hình nhỏ.
+   - Dependencies: lucide-react.
+   - Độc lập (Standalone): RẤT CAO (90%).
+
+7. Module: Bộ Bắt Lỗi Ứng Dụng Cấp Toàn Cục (React Error Boundary)
+   - Tên file: src/components/ErrorBoundary.tsx
+   - Mục đích: Bắt các lỗi runtime crash không mong muốn, hiển thị màn hình phục hồi
+     thân thiện kèm nút tải lại trang hoặc khôi phục dữ liệu thay vì màn hình trắng.
+   - Dependencies: lucide-react, React Component Lifecycle chuẩn.
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%).
+
+8. Module: Container Tổng Hợp Hộp Thoại (Modal Manager Container)
+   - Tên file: src/components/AppModals.tsx
+   - Mục đích: Tách toàn bộ các dialog, popup xác nhận, modal nghiệp vụ ra khỏi file
+     chính App.tsx, giúp App.tsx luôn gọn gàng và dễ bảo trì.
+   - Dependencies: Các components modal con.
+   - Độc lập (Standalone): TRUNG BÌNH (70%). Dùng làm mẫu tổ chức modal cho các dự án lớn.
+
+================================================================================
+NHÓM B: CUSTOM HOOKS (Bộ điều phối nghiệp vụ tái sử dụng)
+================================================================================
+
+1. Hook: Điều Phối Đồng Bộ 2 Chiều Google Drive & Sheets
+   - Tên file: src/hooks/useDriveSync.ts
+   - Mục đích: Quản lý toàn bộ vòng đời đồng bộ đám mây:
+     * Tự động quét tìm file dữ liệu trung tâm (autoDiscoverLatestCentralHub).
+     * Tạo file Google Sheet mới hoặc liên kết file có sẵn qua Google Picker / URL.
+     * Đọc và ghi dữ liệu nhị phân / bảng tính lên Google Drive & Google Sheets API.
+     * Chống tranh chấp ghi đè (Anti-Desync & Conflict Detection) bằng mốc thời gian ISO.
+     * Xử lý lỗi token hết hạn (Renew Token) mượt mà mà không làm mất dữ liệu người dùng.
+   - Dependencies:
+     * src/utils/googleDriveService.ts
+     * src/utils/firebaseFirestoreService.ts
+     * src/utils/syncAuditLog.ts
+   - Độc lập (Standalone): CAO (80%). Có thể dùng làm bộ khung đồng bộ Google Drive
+     cho bất kỳ ứng dụng nào muốn dùng Google Sheets/Drive làm Database miễn phí.
+
+2. Hook: Quản Lý Danh Sách & Tính Toán Sổ Tiết Kiệm (State & Calculations)
+   - Tên file: src/hooks/useSavingsBooks.ts
+   - Mục đích: Quản lý danh sách sổ, thêm/sửa/xóa, tất toán, tái tục tự động,
+     phân loại tìm kiếm, tính tổng gốc và lãi dự kiến, kích hoạt đồng bộ nền.
+   - Dependencies:
+     * src/utils/calculator.ts, src/utils/dataTranslator.ts, src/data/banks.ts
+   - Độc lập (Standalone): GẮN LIỀN NGHIỆP VỤ (65%). Mẫu chuẩn để viết CRUD hook.
+
+================================================================================
+NHÓM C: SERVICE / API INTEGRATION MODULES (Dịch vụ nền & Tích hợp)
+================================================================================
+
+1. Service: Google OAuth & Google Drive / Sheets REST Engine
+   - Tên file: src/utils/googleDriveService.ts
+   - Mục đích: Động cơ giao tiếp Google toàn diện:
+     * Đăng nhập Native bằng @codetrix-studio/capacitor-google-auth trên Android.
+     * Đăng nhập Web Popup / Redirect bằng Firebase Auth trên trình duyệt.
+     * Tự động gia hạn Access Token ngầm (Silent Refresh) bằng Refresh Token dài hạn.
+     * Gọi Google Drive API v3 (Search, Upload multipart/form-data, Download, Metadata).
+     * Gọi Google Sheets API v4 (Read matrix values, BatchUpdate styling, auto format).
+   - Dependencies:
+     * @codetrix-studio/capacitor-google-auth
+     * firebase/auth
+     * @capacitor/core
+     * src/utils/secureStorage.ts
+   - Độc lập (Standalone): RẤT CAO (90%). Đây là module quý giá nhất để tích hợp Google
+     Drive vào ứng dụng Capacitor/Web mà không cần backend server trung gian.
+
+2. Service: Lưu Trữ An Toàn 3 Tầng Phần Cứng (Multi-Tier Secure Storage)
+   - Tên file: src/utils/secureStorage.ts
+   - Mục đích: Cung cấp API đọc/ghi dữ liệu an toàn nhất trên thiết bị di động:
+     * Tầng 1: Android Keystore / EncryptedSharedPreferences (capacitor-secure-storage-plugin).
+     * Tầng 2: Android Native SharedPreferences (@capacitor/preferences).
+     * Tầng 3: Web LocalStorage (Fallback trên Web).
+     * Đảm bảo KHÔNG BAO GIỜ bị mất dữ liệu đăng nhập, cài đặt hay token khi người dùng
+       cài đặt file APK mới đè lên bản cũ.
+   - Dependencies:
+     * capacitor-secure-storage-plugin
+     * @capacitor/preferences
+     * @capacitor/core
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%). Có thể copy sang mọi dự án Capacitor!
+
+3. Service: Firebase Cloud Firestore Đồng Bộ Thời Gian Thực (Real-time Cross-Device)
+   - Tên file: src/utils/firebaseFirestoreService.ts
+   - Mục đích:
+     * Đồng bộ Master Workspace Pointer giữa các thiết bị của vợ/chồng/thành viên.
+     * Cấu hình kết nối HTTP Long-Polling chống đứt kết nối trên Android WebView / Proxy.
+     * Đồng bộ bảng lãi suất ngân hàng và danh sách thành viên phân quyền RBAC.
+     * Đẩy nhật ký kiểm toán và tự động dọn dẹp giữ đúng 50 bản ghi gần nhất.
+   - Dependencies:
+     * firebase/firestore, firebase/app
+     * firebase-applet-config.json
+   - Độc lập (Standalone): RẤT CAO (85%). Bộ khung chuẩn cho kết nối Firestore an toàn.
+
+4. Service: Thông Báo Nhắc Nhở Đáo Hạn Thiết Bị (Native & Web Local Notifications)
+   - Tên file: src/utils/notificationService.ts
+   - Mục đích:
+     * Kiểm tra quyền và xin quyền gửi thông báo từ người dùng.
+     * Lập lịch thông báo cục bộ (@capacitor/local-notifications) trước ngày đáo hạn
+       1 ngày, 3 ngày, 7 ngày trên điện thoại mà không cần chạy server backend.
+     * Gửi thông báo kiểm tra (Test Notification) tức thì.
+   - Dependencies:
+     * @capacitor/local-notifications, @capacitor/core
+   - Độc lập (Standalone): CAO (90%). Dùng cho mọi app cần tính năng nhắc hẹn/lịch.
+
+5. Service: Đọc & Xuất File Excel Định Dạng Chuyên Nghiệp (Excel Engine)
+   - Tên file: src/utils/excelParser.ts & src/utils/dataTranslator.ts
+   - Mục đích:
+     * Đọc file .xlsx người dùng tải lên, tự động nhận diện các cột theo tên tiếng Việt
+       (Ngân hàng, Số tiền, Kỳ hạn, Lãi suất, Ngày gửi, Ngày đến hạn...).
+     * Xuất dữ liệu ra file Excel với nhiều Sheet: Danh sách sổ, Lịch sử tăng trưởng,
+       Bảng kê chi tiết có định dạng màu sắc, kẻ khung và căn lề chuyên nghiệp.
+   - Dependencies: xlsx (SheetJS).
+   - Độc lập (Standalone): CAO (85%).
+
+6. Service: Bộ Tính Toán Tài Chính & Tiền Tệ (Financial Math & Formatters)
+   - Tên file: src/utils/calculator.ts & src/utils/formatters.ts
+   - Mục đích:
+     * Tính toán chính xác số ngày thực tế theo lịch chuẩn ngân hàng (ACT/365).
+     * Tính lãi tiết kiệm, lãi không kỳ hạn khi rút trước hạn, thiệt hại tài chính.
+     * Tính phương án tối ưu: Vay cầm cố sổ (Pledge) vs Rút trước hạn (Break) kèm
+       cơ chế bù trừ ngay tại quầy (Upfront Netting cho khách VIP).
+     * Format tiền tệ Việt Nam (VNĐ, Tỷ, Triệu), định dạng ngày tháng tiếng Việt.
+   - Dependencies: Thuần JavaScript / TypeScript (Không phụ thuộc thư viện).
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%).
+
+7. Service: Nhật Ký Kiểm Toán Đồng Bộ (Sync Audit Logger)
+   - Tên file: src/utils/syncAuditLog.ts
+   - Mục đích: Theo dõi và ghi lại mọi thao tác đồng bộ: Thành công, Lỗi mạng, Cảnh báo
+     tranh chấp, Đổi file liên kết kèm thông tin thiết bị, email và vai trò người dùng.
+   - Dependencies: src/utils/firebaseFirestoreService.ts, @capacitor/preferences.
+   - Độc lập (Standalone): RẤT CAO (90%).
+
+8. Service: Phân Quyền Vai Trò Người Dùng (RBAC Helper)
+   - Tên file: src/utils/roleHelper.ts
+   - Mục đích: Kiểm tra quyền hạn chuẩn xác: ADMIN (Toàn quyền), EDITOR (Chỉnh sửa dữ
+     liệu), VIEWER (Chỉ xem). Ngăn chặn người xem vô tình sửa dữ liệu hoặc cấu hình.
+   - Dependencies: Thuần TypeScript.
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%).
+
+================================================================================
+NHÓM D: BUILD / CI-CD WORKFLOWS & NATIVE MOBILE CONFIGS
+================================================================================
+
+1. Workflow: Tự Động Build APK & Tạo Bản Phát Hành GitHub (Auto Build & Release)
+   - Tên file: .github/workflows/auto-release.yml
+   - Mục đích:
+     * Kích hoạt tự động mỗi khi đẩy mã nguồn lên nhánh `main` trên GitHub.
+     * Tự động sinh versionName từ `package.json` và versionCode từ số commit Git.
+     * Tự cấu hình JDK 21 (Zulu), Android SDK, Gradle Init Script (fix lỗi BouncyCastle).
+     * Build web `npm run build`, đồng bộ Capacitor `npx cap sync android`.
+     * Ký duyệt APK tự động bằng Keystore sẵn có.
+     * Tự động tạo GitHub Release và đính kèm file APK (`sotietkiem_vX.X.X.apk`) để người
+       dùng tải về hoặc phục vụ tính năng cập nhật tự động trong app.
+   - Dependencies: GitHub Actions (ubuntu-latest, softprops/action-gh-release).
+   - Độc lập (Standalone): RẤT CAO (95%). Chỉ cần đổi tên app và repository.
+
+2. Cấu hình: Capacitor Native Project Configuration
+   - Tên file: capacitor.config.ts
+   - Mục đích: Cấu hình App ID (com.tietkiemgiadinh.app), App Name, WebDir (dist),
+     cấu hình GoogleAuth clientId cho Android & Web, cấu hình LocalNotifications icon.
+   - Dependencies: @capacitor/cli.
+   - Độc lập (Standalone): CAO (90%).
+
+3. Cấu hình: Cơ Chế Cập Nhật Ứng Dụng Từ Xa (Remote Version Endpoint)
+   - Tên file: version.json
+   - Mục đích: Cung cấp endpoint JSON tĩnh trên GitHub chứa số phiên bản mới nhất,
+     đường dẫn tải file APK và ghi chú phát hành (changelog) để app kiểm tra định kỳ.
+   - Độc lập (Standalone): HOÀN TOÀN ĐỘC LẬP (100%).
+
+
+--------------------------------------------------------------------------------
+PHẦN 3: LUỒNG TÍCH HỢP & QUẢN LÝ DỮ LIỆU (INTEGRATION FLOW)
+--------------------------------------------------------------------------------
+
+3.1. Luồng Khởi Động & Khôi Phục Phiên Làm Việc (Startup Hydration Flow)
+Khi ứng dụng được mở lên (trên Web hoặc sau khi cài APK đè lên bản cũ trên Android):
+
+  [App.tsx khởi chạy]
+         │
+         ├──> 1. Đọc tức thì từ LocalStorage để render UI ngay (tránh màn hình trắng)
+         │
+         ├──> 2. Đặt cờ isSessionRestored = false (chặn ghi đè mặc định)
+         │
+         ├──> 3. Gọi restoreSessionFromPreferences() bất đồng bộ:
+         │       ├── Đọc KeyStore phần cứng (SecureStorage) & SharedPreferences
+         │       ├── Khôi phục cài đặt: Thông báo (notificationsEnabled), Khóa vân tay (enableBiometricLogin)
+         │       ├── Khôi phục tài khoản người dùng (currentUser)
+         │       └── Khôi phục Google OAuth Token & Refresh Token
+         │
+         ├──> 4. Kiểm tra khóa sinh trắc học:
+         │       ├── Nếu enableBiometricLogin == true: Hiện BiometricUnlockModal yêu cầu quét vân tay / PIN
+         │       └── Nếu không bật khóa vân tay: Tự động mở khóa (isUnlocked = true)
+         │
+         ├──> 5. Đặt isSessionRestored = true (bắt đầu cho phép ghi nhớ các thay đổi mới)
+         │
+         └──> 6. Kích hoạt hẹn giờ 2 giây: Gọi checkAppUpdate(false) kiểm tra phiên bản mới từ GitHub
+
+3.2. Luồng Đồng Bộ Hai Chiều Google Drive & Sheets (Drive Sync Flow)
+Ứng dụng sử dụng mô hình kết hợp giữa Google Drive và Cloud Firestore:
+
+  [Người dùng tạo/sửa/xóa sổ hoặc bấm Đồng Bộ]
+         │
+         ├──> [useDriveSync hook]
+         │       │
+         │       ├──> Đẩy bản ghi Excel/JSON lên Google Drive của người dùng (Google Drive API)
+         │       │    (Định dạng file: Sổ Tiết Kiệm Gia Đình - [Email].xlsx hoặc .json)
+         │       │
+         │       ├──> Cập nhật bảng dữ liệu thời gian thực lên Google Sheets (Google Sheets API)
+         │       │    (Giúp người dùng mở xem trực tiếp trên ứng dụng Google Sheets)
+         │       │
+         │       └──> Ghi nhật ký đồng bộ (Sync Audit Log)
+         │
+         └──> [firebaseFirestoreService]
+                 │
+                 ├──> Cập nhật "Master Workspace Pointer" lên Firestore:
+                 │    (Chứa link file active, thời gian đồng bộ mới nhất, danh sách thành viên)
+                 │
+                 └──> Các thiết bị khác của gia đình nhận được sự kiện onSnapshot
+                      và tự động kéo dữ liệu mới nhất về máy!
+
+3.3. Luồng Kiểm Tra Cập Nhật Độc Lập Không Phụ Thuộc Đăng Nhập
+Để tránh trường hợp người dùng gặp lỗi đăng nhập ở bản cũ mà không thể cập nhật:
+  - Component <AppUpdateModal> được render đồng thời ở cả ngoài màn hình LoginModal
+    lẫn bên trong màn hình chính.
+  - Ngay cả khi chưa đăng nhập, sau 2 giây ứng dụng vẫn fetch(`${UPDATE_SERVER_URL}?_t=${Date.now()}`).
+  - Nếu phát hiện bản mới, modal cập nhật lập tức nổi lên trên cùng (z-index: 70)
+    cho phép người dùng bấm "Cập nhật ngay" để tải và cài đặt APK ngay lập tức.
+
+
+--------------------------------------------------------------------------------
+PHẦN 4: HƯỚNG DẪN BÊ CÁC MODULE SANG DỰ ÁN MỚI (REUSE CHEATSHEET)
+--------------------------------------------------------------------------------
+
+Nếu bạn muốn tạo một ứng dụng di động mới (ví dụ: Quản lý chi tiêu, Ghi chú, Quản lý tài sản):
+
+1. Muốn tái sử dụng Hệ Thống Tự Động Cập Nhật APK:
+   - Copy file: `src/components/AppUpdateModal.tsx` và `version.json`.
+   - Cài đặt: `npm i @capacitor/filesystem @capacitor-community/file-opener @capacitor/share lucide-react`.
+   - Copy workflow `.github/workflows/auto-release.yml` để GitHub tự build APK và tạo Release.
+
+2. Muốn tái sử dụng Xác Thực Google Native & Lưu Trữ An Toàn Phần Cứng:
+   - Copy các file: `src/utils/secureStorage.ts`, `src/utils/googleDriveService.ts`, `src/components/LoginModal.tsx`.
+   - Cài đặt: `npm i @codetrix-studio/capacitor-google-auth capacitor-secure-storage-plugin @capacitor/preferences firebase`.
+
+3. Muốn tái sử dụng Khóa Vân Tay / Face ID:
+   - Copy file: `src/components/BiometricUnlockModal.tsx`.
+   - Cài đặt: `npm i @capgo/capacitor-native-biometric`.
+
+4. Muốn tái sử dụng Thông Báo Toast & Bắt Lỗi:
+   - Copy thư mục: `src/context/ToastContext.tsx` và `src/components/ErrorBoundary.tsx`.
+   - Bọc ngoài ứng dụng tại `src/main.tsx`:
+     <ErrorBoundary>
+       <ToastProvider>
+         <App />
+       </ToastProvider>
+     </ErrorBoundary>
+
+================================================================================
+HẾT TÀI LIỆU - LƯU TRỮ TẠI: /document/SYSTEM_ARCHITECTURE.txt
+================================================================================
