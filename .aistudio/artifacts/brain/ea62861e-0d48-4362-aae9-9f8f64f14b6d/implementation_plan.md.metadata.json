@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan for standardizing number formats, cleaning up temporary junk files, optimizing app performance and auto cache management, and preparing for public release.",
-  "updatedAt": "2026-09-30T08:52:56.448964073Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Revised plan to create public/privacy.html hosted on GitHub Pages with support email 'sotietkiem.support@gmail.com', adapt update warnings on Google Play vs standalone, and set up dual APK/AAB build workflows.",
+  "updatedAt":  "2026-09-30T11:43:11.006377110Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }

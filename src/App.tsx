@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { Smartphone, Loader2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Preferences } from '@capacitor/preferences';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment } from './types';
@@ -403,6 +404,20 @@ export default function App() {
     if (manual) {
       showToast('Đang kết nối tới máy chủ GitHub kiểm tra phiên bản mới...', 'info');
     }
+
+    // Tự động ẩn thông báo cập nhật in-app khi tải từ Google Play để tránh vi phạm chính sách đăng tải
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const info = await CapApp.getInfo();
+        if (info.installerPackageName === 'com.android.vending' && !manual) {
+          console.info('[Update Check] Ứng dụng chạy từ Google Play Store. Tự động ẩn thông báo cập nhật in-app.');
+          return;
+        }
+      } catch (e) {
+        console.warn('[Update Check] Không thể đọc installerPackageName:', e);
+      }
+    }
+
     try {
       const res = await fetch(`${UPDATE_SERVER_URL}?_t=${Date.now()}`);
       if (res.ok) {

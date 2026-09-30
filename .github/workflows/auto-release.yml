@@ -165,21 +165,23 @@ jobs:
           # Cấu hình tường minh signingConfig debug trong android/app/build.gradle
           if [ -f "android/app/build.gradle" ]; then
             python3 -c "
-          with open('android/app/build.gradle', 'r') as f:
-              content = f.read()
-          if 'signingConfigs' not in content:
-              content = content.replace('buildTypes {', '''signingConfigs {
-                  debug {
-                      storeFile file('debug.keystore')
-                      storePassword 'android'
-                      keyAlias 'androiddebugkey'
-                      keyPassword 'android'
-                  }
-              }
-              buildTypes {''')
-              with open('android/app/build.gradle', 'w') as f:
-                  f.write(content)
-          "
+with open('android/app/build.gradle', 'r') as f:
+    content = f.read()
+if 'signingConfigs' not in content:
+    content = content.replace('buildTypes {', '''signingConfigs {
+        debug {
+            storeFile file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {''')
+    content = content.replace('release {', '''release {
+        signingConfig signingConfigs.debug''')
+    with open('android/app/build.gradle', 'w') as f:
+        f.write(content)
+"
           fi
           
           SHA1_VAL=$(keytool -list -v -keystore keystore/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
@@ -189,26 +191,31 @@ jobs:
           echo "SHA-1: $SHA1_VAL"
           echo "===================================================="
           
-          echo "### 🔑 Android APK Fingerprints (SHA-1)" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔑 Android App Fingerprints (SHA-1)" >> $GITHUB_STEP_SUMMARY
           echo "- **Package Name:** \`com.tietkiemgiadinh.app\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Cố định SHA-1:** \`$SHA1_VAL\`" >> $GITHUB_STEP_SUMMARY
           echo "- Mã này được cố định vĩnh viễn trong file \`keystore/debug.keystore\`." >> $GITHUB_STEP_SUMMARY
           echo "- Hãy đối chiếu với Firebase Console: nếu chưa có mã trên, bấm **Add fingerprint** và dán vào." >> $GITHUB_STEP_SUMMARY
 
-      # 9. Đóng gói APK bằng Gradle
-      - name: Build Android APK
+      # 9. Đóng gói cả APK (Cài trực tiếp) và AAB (Đăng Google Play Store) bằng Gradle
+      - name: Build Android APK and AAB Bundle
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug bundleRelease --no-daemon
 
-      # 10. Đổi tên tệp APK về định dạng chuẩn sotietkiem_v[version].apk
-      - name: Rename APK
+      # 10. Đổi tên tệp APK và AAB về định dạng chuẩn
+      - name: Rename APK and AAB
         run: |
           mv android/app/build/outputs/apk/debug/app-debug.apk sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+          if [ -f "android/app/build/outputs/bundle/release/app-release.aab" ]; then
+            mv android/app/build/outputs/bundle/release/app-release.aab sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
+          elif [ -f "android/app/build/outputs/bundle/debug/app-debug.aab" ]; then
+            mv android/app/build/outputs/bundle/debug/app-debug.aab sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
+          fi
 
-      # 11. Tự động tạo GitHub Release & đính kèm APK
+      # 11. Tự động tạo GitHub Release & đính kèm cả file APK lẫn AAB
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -216,8 +223,12 @@ jobs:
           tag_name: v${{ steps.auto_version.outputs.NAME }}
           name: Bản cập nhật v${{ steps.auto_version.outputs.NAME }}
           body: |
-            Bản cập nhật tự động xuất bản từ AI Studio.
-          files: sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+            Bản cập nhật tự động xuất bản từ AI Studio:
+            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk**: Bản APK cài đặt trực tiếp bên ngoài.
+            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab**: File Android App Bundle để tải lên Google Play Console.
+          files: |
+            sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+            sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
