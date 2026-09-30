@@ -15,23 +15,22 @@ export function resolveUserRole(
   if (!userEmail) return 'ADMIN';
   const cleanEmail = userEmail.trim().toLowerCase();
 
-  // Chủ tài khoản mặc định luôn là ADMIN
-  if (cleanEmail === 'tuanta3012@gmail.com') {
-    return 'ADMIN';
-  }
-
+  // 1. Nếu là email chủ sở hữu Workspace (workspaceOwnerEmail) -> Luôn là ADMIN
   if (workspaceOwnerEmail && cleanEmail === workspaceOwnerEmail.trim().toLowerCase()) {
     return 'ADMIN';
   }
 
-  // Tra cứu trong danh sách thành viên được phân quyền
+  // 2. Tra cứu trong danh sách thành viên được phân quyền
   if (members && Array.isArray(members) && members.length > 0) {
     const matched = members.find((m) => m.email && m.email.trim().toLowerCase() === cleanEmail);
     if (matched && matched.role) {
       return matched.role.toUpperCase() as UserRole;
     }
+    // Nếu có danh sách members nhưng user không thuộc danh sách -> VIEWER
+    return 'VIEWER';
   }
 
+  // 3. Nếu chưa có danh sách thành viên (file riêng tư cá nhân) -> ADMIN
   if (currentRole) {
     const upper = currentRole.toUpperCase();
     if (upper === 'ADMIN' || upper === 'EDITOR' || upper === 'VIEWER') {

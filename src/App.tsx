@@ -38,11 +38,6 @@ import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
 import { scheduleMaturityNotifications } from './utils/notificationService';
-import {
-  getBanksConfigFromFirestore,
-  saveBanksConfigToFirestore,
-  subscribeToBanksConfig,
-} from './utils/firebaseFirestoreService';
 import { getAllBanks, updateBanksFromRemote } from './data/banks';
 
 // Chuyển hai component có kích thước lớn và chứa biểu đồ thành dạng lazy load
@@ -389,41 +384,7 @@ export default function App() {
     }
   }, [currentUser, isSessionRestored]);
 
-  // Đồng bộ cấu hình ngân hàng qua Firestore theo thời gian thực (Real-time Cross-Device Sync)
-  useEffect(() => {
-    // Nếu thiết bị không có kết nối internet, sử dụng cấu hình ngân hàng có sẵn trong bộ nhớ máy
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      return;
-    }
 
-    // 1. Nạp cấu hình ngân hàng từ Firestore khi mở app
-    getBanksConfigFromFirestore()
-      .then((remoteBanks) => {
-        if (remoteBanks && remoteBanks.length > 0) {
-          updateBanksFromRemote(remoteBanks);
-        } else if (remoteBanks && remoteBanks.length === 0) {
-          // Chỉ đẩy danh sách ngân hàng lên nếu Firestore đã kết nối thành công nhưng chưa có dữ liệu nào
-          const current = getAllBanks();
-          if (current.length > 0) {
-            saveBanksConfigToFirestore(current).catch(() => {});
-          }
-        }
-      })
-      .catch((err) => {
-        console.warn('Lỗi nạp cấu hình ngân hàng ban đầu từ Firestore:', err);
-      });
-
-    // 2. Lắng nghe thay đổi thời gian thực từ Firestore
-    const unsubscribe = subscribeToBanksConfig((remoteBanks) => {
-      if (remoteBanks && remoteBanks.length > 0) {
-        updateBanksFromRemote(remoteBanks);
-      }
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
 
   // 3. Tự động kiểm tra cập nhật APK từ xa
   const [updateInfo, setUpdateInfo] = useState<{

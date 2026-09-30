@@ -8,5 +8,11 @@ service cloud.firestore {
     match /audit_logs/{logId} {
       allow read, write: if true;
     }
+
+    match /user_feedbacks/{feedbackId} {
+      allow create: if true;
+      allow read: if true;
+      allow update, delete: if false;
+    }
   }
 }

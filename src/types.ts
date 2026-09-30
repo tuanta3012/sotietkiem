@@ -155,7 +155,7 @@ export interface WorkspaceMember {
 
 export interface MasterSyncState {
   schemaVersion?: number;
-  status: 'active' | 'unlinked';
+  status?: 'active' | 'unlinked';
   lastAction?: 'link' | 'switch' | 'unlink' | 'create_and_link';
   activeFileId?: string;
   activeFileName?: string;
@@ -168,6 +168,7 @@ export interface MasterSyncState {
   members?: WorkspaceMember[];
   settlements?: SettlementAdjustment[];
   banksConfig?: BankInfo[];
+  auditLogs?: any[];
   updatedAt?: string;
   updatedAtVi?: string;
   appVersion?: string;

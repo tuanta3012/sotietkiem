@@ -793,7 +793,8 @@ export async function buildSavingsWorkbook(
   books: SavingsBook[],
   annualHistory?: AnnualInterestRecord[],
   balanceHistory?: BalanceGrowthRecord[],
-  settlements?: SettlementAdjustment[]
+  settlements?: SettlementAdjustment[],
+  metadata?: Record<string, any>
 ): Promise<any> {
   const XLSX = await getXLSX();
   const matrix = translateBooksToSheetMatrix(books, annualHistory, balanceHistory, settlements);
@@ -822,7 +823,73 @@ export async function buildSavingsWorkbook(
     { wch: 14 }, // Q: Số cuối năm
     { wch: 12 }, // R: Số tiền (Gốc)
     { wch: 16 }, // S: Thu nhập năm
+    { wch: 4 },  // T: Separator
+    { wch: 14 }, // U: Nhật ký biến động
+    { wch: 14 }, // V: Ngày GD
+    { wch: 14 }, // W: Loại
+    { wch: 14 }, // X: Ngân hàng
+    { wch: 14 }, // Y: Mã sổ
+    { wch: 14 }, // Z: Tiền gốc
+    { wch: 14 }, // AA: Tiền lãi thực nhận
+    { wch: 14 }, // AB: Chủ sổ
+    { wch: 24 }, // AC: Ghi chú
   ];
+
+  // Định dạng số có dấu chấm phân cách hàng nghìn cho tất cả các cột tiền tệ
+  for (let r = 1; r < matrix.length; r++) {
+    // E (4): Tiền gửi (Triệu VNĐ)
+    const cellE = worksheet[XLSX.utils.encode_cell({ r, c: 4 })];
+    if (cellE && typeof cellE.v === 'number') cellE.z = '#,##0';
+
+    // J (9): Tiền lãi theo sổ
+    const cellJ = worksheet[XLSX.utils.encode_cell({ r, c: 9 })];
+    if (cellJ && typeof cellJ.v === 'number') cellJ.z = '#,##0.0#';
+
+    // K (10): Tiền lãi 1 năm
+    const cellK = worksheet[XLSX.utils.encode_cell({ r, c: 10 })];
+    if (cellK && typeof cellK.v === 'number') cellK.z = '#,##0.0#';
+
+    // O (14): Lãi năm (Lãi hàng năm)
+    const cellO = worksheet[XLSX.utils.encode_cell({ r, c: 14 })];
+    if (cellO && typeof cellO.v === 'number') cellO.z = '#,##0';
+
+    // R (17): Gốc cuối năm (Số cuối năm)
+    const cellR = worksheet[XLSX.utils.encode_cell({ r, c: 17 })];
+    if (cellR && typeof cellR.v === 'number') cellR.z = '#,##0';
+
+    // S (18): Thu nhập năm
+    const cellS = worksheet[XLSX.utils.encode_cell({ r, c: 18 })];
+    if (cellS && typeof cellS.v === 'number') cellS.z = '#,##0';
+
+    // AA (26): Tiền gốc biến động
+    const cellAA = worksheet[XLSX.utils.encode_cell({ r, c: 26 })];
+    if (cellAA && typeof cellAA.v === 'number') cellAA.z = '#,##0';
+
+    // AB (27): Lãi thực nhận biến động
+    const cellAB = worksheet[XLSX.utils.encode_cell({ r, c: 27 })];
+    if (cellAB && typeof cellAB.v === 'number') cellAB.z = '#,##0.0#';
+  }
+
+  // Thêm sheet cấu hình ẩn __CONFIG__ để bảo toàn toàn bộ thiết lập và quyền hạn
+  const configPayload = {
+    schemaVersion: 2,
+    updatedAt: new Date().toISOString(),
+    settlements: settlements || [],
+    ...(metadata || {}),
+  };
+
+  const configMatrix: (string | number)[][] = [
+    ['__METADATA_JSON__', JSON.stringify(configPayload)],
+    ['Vault Name', metadata?.vaultName || 'Sổ Tiết Kiệm'],
+    ['Admin Email', metadata?.adminEmail || ''],
+    ['Schema Version', 2],
+    ['Last Updated', new Date().toLocaleString('vi-VN')],
+    ['Settlements Count', settlements?.length || 0],
+    ['Settlements JSON', JSON.stringify(settlements || [])],
+  ];
+
+  const wsConfig = XLSX.utils.aoa_to_sheet(configMatrix);
+  XLSX.utils.book_append_sheet(workbook, wsConfig, '__CONFIG__');
 
   return workbook;
 }

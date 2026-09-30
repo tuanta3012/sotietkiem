@@ -1,5 +1,16 @@
 import { BankInfo, SavingsBook } from '../types';
-import { saveBanksConfigToFirestore } from '../utils/firebaseFirestoreService';
+
+export function syncBanksConfigToDrive(banks: BankInfo[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const token = localStorage.getItem('google_drive_access_token_v4') || localStorage.getItem('google_access_token') || sessionStorage.getItem('google_access_token');
+    if (token) {
+      import('../utils/googleDriveService').then(({ saveMasterSyncStateOnDrive }) => {
+        saveMasterSyncStateOnDrive(token, { status: 'active', banksConfig: banks }).catch(() => {});
+      });
+    }
+  } catch {}
+}
 
 /**
  * Dispatch an event when banks are modified locally or synced remotely
@@ -483,7 +494,7 @@ export function saveBank(bank: Partial<BankInfo> & { name: string; shortName?: s
       localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(currentList));
     } catch {}
     dispatchBanksUpdated(currentList);
-    saveBanksConfigToFirestore(currentList).catch(() => {});
+    syncBanksConfigToDrive(currentList);
     return updatedBank;
   } else {
     // Thêm ngân hàng mới
@@ -511,7 +522,7 @@ export function saveBank(bank: Partial<BankInfo> & { name: string; shortName?: s
       localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(updatedList));
     } catch {}
     dispatchBanksUpdated(updatedList);
-    saveBanksConfigToFirestore(updatedList).catch(() => {});
+    syncBanksConfigToDrive(updatedList);
     return newBank;
   }
 }
@@ -526,7 +537,7 @@ export function deleteBank(bankId: string): boolean {
     localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(updatedList));
   } catch {}
   dispatchBanksUpdated(updatedList);
-  saveBanksConfigToFirestore(updatedList).catch(() => {});
+  syncBanksConfigToDrive(updatedList);
   return true;
 }
 
@@ -539,7 +550,7 @@ export function resetBanksToDefault(): BankInfo[] {
     localStorage.setItem(BANKS_STORAGE_KEY, JSON.stringify(defaultCleaned));
   } catch {}
   dispatchBanksUpdated(defaultCleaned);
-  saveBanksConfigToFirestore(defaultCleaned).catch(() => {});
+  syncBanksConfigToDrive(defaultCleaned);
   return [...defaultCleaned];
 }
 

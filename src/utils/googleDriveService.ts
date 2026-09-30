@@ -17,24 +17,19 @@ import { Preferences } from '@capacitor/preferences';
 import { GoogleAuth } from '@codetrix-studio/capacitor-google-auth';
 import { getSecureItem, setSecureItem, removeSecureItem } from './secureStorage';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { SavingsBook, SettlementAdjustment, WorkspaceMember, UserRole, AppSettings, MasterSyncState } from '../types';
+import { SavingsBook, SettlementAdjustment, WorkspaceMember, UserRole, AppSettings, MasterSyncState, BankInfo } from '../types';
 import { parseWorkbook, parseMatrixData, getSavingsExcelArrayBuffer, ParseExcelResult } from './excelParser';
 import { translateBooksToSheetMatrix, translateBooksToDataRows, deduplicateSettlementAdjustments, translateDateToSheet } from './dataTranslator';
 import { getOwnerLabel } from './formatters';
 import {
-  DEFAULT_HISTORICAL_ANNUALS,
-  DEFAULT_HISTORICAL_BALANCES,
   getDynamicAnnualInterestHistory,
   getDynamicBalanceGrowthHistory,
   loadStaticHistoryFromStorage,
   saveStaticHistoryToStorage,
 } from '../data/historicalGrowth';
-import { recordSyncAuditLog } from './syncAuditLog';
-import { getBankShortCode } from '../data/banks';
-import {
-  getWorkspaceMasterStateFromFirestore,
-  saveWorkspaceMasterStateToFirestore,
-} from './firebaseFirestoreService';
+import { recordSyncAuditLog, getSyncAuditLogs, SyncAuditLogEntry } from './syncAuditLog';
+import { getBankShortCode, getAllBanks, updateBanksFromRemote } from '../data/banks';
+
 
 // Initialize Firebase App
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -47,11 +42,10 @@ try {
   console.warn('Could not set persistence:', e);
 }
 
-// Provider with requested Drive & Sheets scopes
+// Provider with requested Drive & Sheets scopes (drive.file per-file scope & spreadsheets)
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/drive.file');
 provider.addScope('https://www.googleapis.com/auth/drive.readonly');
-provider.addScope('https://www.googleapis.com/auth/drive');
 provider.addScope('https://www.googleapis.com/auth/spreadsheets');
 
 // Check if user has migrated to drive.file scope
@@ -1131,7 +1125,9 @@ export async function updateRealGoogleDriveFile(
           const firstProp = metaSheetData?.sheets?.[0]?.properties;
           if (firstProp) {
             if (firstProp.title) {
-              sheetPrefix = `'${firstProp.title}'!`;
+              sheetPrefix = /[\s!@#$%^&*()\-+=\[\]{};:",.<>?\/\\|]/.test(firstProp.title)
+                ? `'${firstProp.title}'!`
+                : `${firstProp.title}!`;
             }
             if (firstProp.sheetId !== undefined) {
               targetSheetId = firstProp.sheetId;
@@ -1249,24 +1245,17 @@ export async function updateRealGoogleDriveFile(
           });
           updatedRangesAudit.push(`N${targetRow}:O${targetRow} (Năm ${yr})`);
         });
-      } else {
-        // Sheet BỊ THIẾU các năm cũ (do lỗi ghi đè trước đây):
-        // KHÔI PHỤC TOÀN DIỆN chuỗi lịch sử (2022 - 2028)
-        const fullAnnuals = [
-          ...DEFAULT_HISTORICAL_ANNUALS.filter((a) => a.year < 2026),
-          ...annualInterestList.filter((a) => a.year >= 2026),
-        ];
-        const annualRows = fullAnnuals.map((a) => [a.year, a.interestEarnedMillion]);
+      } else if (annualInterestList && annualInterestList.length > 0) {
+        const annualRows = annualInterestList.map((a) => [a.year, a.interestEarnedMillion]);
         batchDataPayload.push({
           range: `${sheetPrefix}N2:O${1 + annualRows.length}`,
           majorDimension: 'ROWS',
           values: annualRows,
         });
-        updatedRangesAudit.push(`N2:O${1 + annualRows.length} (Khôi phục toàn bộ 2022-2028)`);
+        updatedRangesAudit.push(`N2:O${1 + annualRows.length} (Cập nhật Lãi Hàng Năm)`);
       }
 
       // C. BẢO VỆ & CẬP NHẬT SỐ DƯ CUỐI NĂM & THU NHẬP NĂM (Cột Q, R, S)
-      // Tìm các năm hiện có ở cột Q (index 3)
       const existingBalanceMap = new Map<number, number>(); // year -> sheet row (1-indexed)
       for (let i = 1; i < existingMatrixNtoAC.length; i++) {
         const yrRaw = parseInt(String(existingMatrixNtoAC[i]?.[3] || '').replace(/\D/g, ''), 10);
@@ -1275,53 +1264,37 @@ export async function updateRealGoogleDriveFile(
         }
       }
 
-      const hasHistoricalBalances =
-        existingBalanceMap.has(2019) ||
-        existingBalanceMap.has(2020) ||
-        existingBalanceMap.has(2021) ||
-        existingBalanceMap.has(2025);
-
-      if (hasHistoricalBalances) {
-        // Sheet ĐÃ CÓ các năm cũ 2019-2025: TUYỆT ĐỐI KHÔNG GHI ĐÈ các hàng cũ!
-        // Chỉ cập nhật số dư & thu nhập năm 2026
-        const rec2026 = balanceGrowthList.find((b) => b.year === 2026);
-        const bal2026 = rec2026?.balanceMillion ?? 37000;
-        const inc2026 = rec2026?.annualIncomeMillion !== undefined ? rec2026.annualIncomeMillion : 1711;
-
-        let targetRow = existingBalanceMap.get(2026);
-        if (!targetRow) {
-          const maxBalRow = Math.max(...Array.from(existingBalanceMap.values()), 1);
-          targetRow = maxBalRow + 1;
-        }
-
-        batchDataPayload.push({
-          range: `${sheetPrefix}Q${targetRow}:S${targetRow}`,
-          majorDimension: 'ROWS',
-          values: [[2026, bal2026, inc2026]],
-        });
-        updatedRangesAudit.push(`Q${targetRow}:S${targetRow} (Năm 2026)`);
-      } else {
-        // Sheet BỊ THIẾU các năm cũ (do lỗi ghi đè trước đây):
-        // KHÔI PHỤC TOÀN DIỆN chuỗi lịch sử (2019 - 2026)
-        const rec2026 = balanceGrowthList.find((b) => b.year === 2026);
-        const bal2026 = rec2026?.balanceMillion ?? 37000;
-        const inc2026 = rec2026?.annualIncomeMillion !== undefined ? rec2026.annualIncomeMillion : 1711;
-
-        const fullBalances = [
-          ...DEFAULT_HISTORICAL_BALANCES.filter((b) => b.year < 2026).map((b) => [
+      if (balanceGrowthList && balanceGrowthList.length > 0) {
+        if (existingBalanceMap.size > 0) {
+          // Sheet đã có các dòng số dư: Cập nhật hoặc thêm mới các năm chưa có
+          balanceGrowthList.forEach((rec) => {
+            let targetRow = existingBalanceMap.get(rec.year);
+            if (!targetRow) {
+              const maxBalRow = Math.max(...Array.from(existingBalanceMap.values()), 1);
+              targetRow = maxBalRow + 1;
+              existingBalanceMap.set(rec.year, targetRow);
+            }
+            batchDataPayload.push({
+              range: `${sheetPrefix}Q${targetRow}:S${targetRow}`,
+              majorDimension: 'ROWS',
+              values: [[rec.year, rec.balanceMillion, rec.annualIncomeMillion !== undefined ? rec.annualIncomeMillion : '']],
+            });
+            updatedRangesAudit.push(`Q${targetRow}:S${targetRow} (Năm ${rec.year})`);
+          });
+        } else {
+          // Sheet chưa có dữ liệu số dư: Ghi toàn bộ danh sách
+          const fullBalances = balanceGrowthList.map((b) => [
             b.year,
             b.balanceMillion,
             b.annualIncomeMillion !== undefined ? b.annualIncomeMillion : '',
-          ]),
-          [2026, bal2026, inc2026],
-        ];
-
-        batchDataPayload.push({
-          range: `${sheetPrefix}Q2:S${1 + fullBalances.length}`,
-          majorDimension: 'ROWS',
-          values: fullBalances,
-        });
-        updatedRangesAudit.push(`Q2:S${1 + fullBalances.length} (Khôi phục toàn bộ 2019-2026)`);
+          ]);
+          batchDataPayload.push({
+            range: `${sheetPrefix}Q2:S${1 + fullBalances.length}`,
+            majorDimension: 'ROWS',
+            values: fullBalances,
+          });
+          updatedRangesAudit.push(`Q2:S${1 + fullBalances.length} (Khởi tạo Bảng Số Dư)`);
+        }
       }
 
       // D. BẢO VỆ & CẬP NHẬT NHẬT KÝ BIẾN ĐỘNG / TẤT TOÁN (Cột U..AC)
@@ -1356,7 +1329,7 @@ export async function updateRealGoogleDriveFile(
           if (is9ColLayout) {
             return [
               standardizedId,
-              translateDateToSheet(s.settlementDate || '', 'd/m/yyyy'),
+              translateDateToSheet(s.settlementDate || '', 'yyyy-mm-dd'),
               s.settlementType === 'early' ? 'Tất toán trước hạn' : 'Tất toán đúng hạn',
               s.bookCode || '',
               shortBank,
@@ -1367,7 +1340,7 @@ export async function updateRealGoogleDriveFile(
             ];
           } else {
             return [
-              translateDateToSheet(s.settlementDate || '', 'd/m/yyyy'),
+              translateDateToSheet(s.settlementDate || '', 'yyyy-mm-dd'),
               s.settlementType === 'early' ? 'Tất toán trước hạn' : 'Tất toán đúng hạn',
               s.bookCode || '',
               shortBank,
@@ -1459,27 +1432,173 @@ export async function updateRealGoogleDriveFile(
 
             const formatBody = {
               requests: [
-                // 1. Sao chép định dạng chuẩn (PASTE_FORMAT) từ dòng 2 (hàng mẫu) xuống toàn bộ các dòng còn lại của bảng sổ
+                // 1. Format Cột F (5) & Cột G (6) Ngày gửi & Ngày đáo hạn dạng DATE (dd/mm/yyyy)
                 {
-                  copyPaste: {
-                    source: {
+                  repeatCell: {
+                    range: {
                       sheetId,
                       startRowIndex: 1,
-                      endRowIndex: 2,
-                      startColumnIndex: 0,
-                      endColumnIndex: 12,
+                      endRowIndex: 100,
+                      startColumnIndex: 5,
+                      endColumnIndex: 7,
                     },
-                    destination: {
-                      sheetId,
-                      startRowIndex: 1,
-                      endRowIndex: 1 + Math.max(1, rowCount),
-                      startColumnIndex: 0,
-                      endColumnIndex: 12,
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'DATE',
+                          pattern: 'dd/mm/yyyy',
+                        },
+                      },
                     },
-                    pasteType: 'PASTE_FORMAT',
+                    fields: 'userEnteredFormat.numberFormat',
                   },
                 },
-                // 2. Ép phông chữ Arial 10pt Bold cho tiêu đề hàng 1 (Cột A đến AC)
+                // 2. Format Cột V (21) Ngày biến động dạng DATE (dd/mm/yyyy)
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 21,
+                      endColumnIndex: 22,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'DATE',
+                          pattern: 'dd/mm/yyyy',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                // 3. Format Cột E (4) Tiền gửi dạng NUMBER (#,##0)
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 4,
+                      endColumnIndex: 5,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                // 4. Format Cột J (9) & K (10) Tiền lãi dạng NUMBER (#,##0.0#)
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 9,
+                      endColumnIndex: 11,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0.0#',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                // 5. Format Cột O (14), R (17), S (18), AA (26) dạng NUMBER (#,##0)
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 14,
+                      endColumnIndex: 15,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 17,
+                      endColumnIndex: 19,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 26,
+                      endColumnIndex: 27,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                // 6. Format Cột AB (27) Lãi thực nhận biến động dạng NUMBER (#,##0.0#)
+                {
+                  repeatCell: {
+                    range: {
+                      sheetId,
+                      startRowIndex: 1,
+                      endRowIndex: 100,
+                      startColumnIndex: 27,
+                      endColumnIndex: 28,
+                    },
+                    cell: {
+                      userEnteredFormat: {
+                        numberFormat: {
+                          type: 'NUMBER',
+                          pattern: '#,##0.0#',
+                        },
+                      },
+                    },
+                    fields: 'userEnteredFormat.numberFormat',
+                  },
+                },
+                // 7. Ép phông chữ Arial 10pt Bold cho tiêu đề hàng 1
                 {
                   repeatCell: {
                     range: {
@@ -1502,7 +1621,7 @@ export async function updateRealGoogleDriveFile(
                     fields: 'userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment',
                   },
                 },
-                // 3. Đảm bảo phông chữ Arial 10pt đồng nhất 100% cho TẤT CẢ các vùng dữ liệu (Sổ A..L, Lãi N..O, Số dư Q..S, Nhật ký U..AC)
+                // 8. Phông chữ Arial 10pt cho các dòng dữ liệu
                 {
                   repeatCell: {
                     range: {
@@ -1525,7 +1644,7 @@ export async function updateRealGoogleDriveFile(
                     fields: 'userEnteredFormat.textFormat,userEnteredFormat.verticalAlignment',
                   },
                 },
-                // 4. Kẻ khung viền mỏng đồng nhất cho tất cả các ô từ A2 đến L(1+rowCount)
+                // 9. Kẻ khung viền mỏng
                 {
                   updateBorders: {
                     range: {
@@ -1632,9 +1751,11 @@ export async function createRealGoogleDriveFile(
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
 
+    const cleanFileName = fileName.replace(/\.xlsx$/i, '').trim() || 'So_tiet_kiem';
+
     const metadata = {
-      name: fileName.endsWith('.xlsx') ? fileName : `${fileName}.xlsx`,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      name: cleanFileName,
+      mimeType: 'application/vnd.google-apps.spreadsheet',
     };
 
     const form = new FormData();
@@ -1665,16 +1786,34 @@ export async function createRealGoogleDriveFile(
         setGoogleAccessToken(null);
         throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
       }
-      throw new Error(err?.error?.message || `Không thể tạo file mới trên Google Drive (Mã ${res.status})`);
+      throw new Error(err?.error?.message || `Không thể tạo Google Sheet mới trên Google Drive (Mã ${res.status})`);
     }
 
     const data = await res.json();
     const linkedTimestamp = new Date().toISOString();
-    const webViewLink = data.webViewLink || `https://drive.google.com/file/d/${data.id}/view`;
+    const webViewLink = data.webViewLink || `https://docs.google.com/spreadsheets/d/${data.id}/edit`;
 
-    // Save Master Sync State on Drive
+    const effectiveOwnerEmail = (
+      userEmail ||
+      getGoogleUserProfile()?.email ||
+      auth.currentUser?.email ||
+      ''
+    ).trim().toLowerCase();
+
+    const initialMembers: WorkspaceMember[] = effectiveOwnerEmail
+      ? [
+          {
+            id: `owner-${Date.now()}`,
+            email: effectiveOwnerEmail,
+            name: getGoogleUserProfile()?.name || auth.currentUser?.displayName || 'Admin',
+            role: 'ADMIN',
+            addedAt: linkedTimestamp,
+          },
+        ]
+      : [];
+
+    // Save Master Sync State on Drive for this new file (Single Source of Truth)
     try {
-      const currentMaster = await getMasterSyncStateFromDrive(accessToken);
       await saveMasterSyncStateOnDrive(accessToken, {
         status: 'active',
         lastAction: 'create_and_link',
@@ -1683,9 +1822,10 @@ export async function createRealGoogleDriveFile(
         activeFileUrl: webViewLink,
         mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         linkedTimestamp,
-        linkedAccountEmail: userEmail || 'Google User',
-        adminEmail: currentMaster?.adminEmail || userEmail?.toLowerCase() || 'admin',
-        members: currentMaster?.members || [],
+        linkedAccountEmail: effectiveOwnerEmail || 'Google User',
+        adminEmail: effectiveOwnerEmail || 'admin',
+        members: initialMembers,
+        settlements,
         updatedAt: linkedTimestamp,
       });
     } catch (saveErr) {
@@ -1733,18 +1873,24 @@ export function applyMasterStateToSettings(
 ) {
   if (!masterState) return;
 
-  const cleanUserEmail = currentUserEmail?.toLowerCase();
-  const adminEmail = masterState.adminEmail?.toLowerCase() || masterState.linkedAccountEmail?.toLowerCase();
+  const cleanUserEmail = currentUserEmail?.trim().toLowerCase();
+  const adminEmail = (masterState.adminEmail || masterState.linkedAccountEmail || '').trim().toLowerCase();
 
   let resolvedRole: UserRole = 'ADMIN';
-  if (cleanUserEmail && adminEmail && cleanUserEmail !== adminEmail) {
-    const matchedMember = masterState.members?.find(
-      (m) => m.email.toLowerCase() === cleanUserEmail
-    );
-    if (matchedMember) {
-      resolvedRole = matchedMember.role;
+  if (cleanUserEmail) {
+    if (adminEmail && cleanUserEmail === adminEmail) {
+      resolvedRole = 'ADMIN';
+    } else if (masterState.members && masterState.members.length > 0) {
+      const matchedMember = masterState.members.find(
+        (m) => m.email && m.email.trim().toLowerCase() === cleanUserEmail
+      );
+      if (matchedMember && matchedMember.role) {
+        resolvedRole = matchedMember.role.toUpperCase() as UserRole;
+      } else {
+        resolvedRole = 'VIEWER';
+      }
     } else {
-      resolvedRole = 'VIEWER';
+      resolvedRole = 'ADMIN';
     }
   }
 
@@ -1867,54 +2013,332 @@ function getVietnamTimeFormatted(): string {
   return formatIsoToVietnamTime();
 }
 
-/**
- * Retrieve the active Master Sync Pointer state from Firebase Firestore (fallback to Drive JSON if migrating)
- */
-export async function getMasterSyncStateFromDrive(accessToken: string): Promise<MasterSyncState | null> {
+const LOCAL_MASTER_STATE_KEY = 'master_sync_state_local_v2';
+const LOCAL_ACTIVE_FILE_ID_KEY = 'last_linked_file_id_v2';
+
+export function getLocalMasterPointerFileId(): string | null {
   try {
-    // 1. Ưu tiên tuyệt đối nạp từ Firebase Firestore (Nguồn sự thật duy nhất cho Master State)
-    const firestoreMaster = await getWorkspaceMasterStateFromFirestore();
-    if (firestoreMaster) {
-      return firestoreMaster;
+    return localStorage.getItem(LOCAL_ACTIVE_FILE_ID_KEY) || localStorage.getItem(MASTER_POINTER_FILE_ID_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveLocalMasterPointerFileId(fileId: string | null): void {
+  try {
+    if (fileId) {
+      localStorage.setItem(LOCAL_ACTIVE_FILE_ID_KEY, fileId);
+      localStorage.setItem(MASTER_POINTER_FILE_ID_KEY, fileId);
+    } else {
+      localStorage.removeItem(LOCAL_ACTIVE_FILE_ID_KEY);
+      localStorage.removeItem(MASTER_POINTER_FILE_ID_KEY);
+    }
+  } catch {}
+}
+
+export function getLocalMasterPointerState(): MasterSyncState | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_MASTER_STATE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function saveLocalMasterPointerState(state: MasterSyncState | null): void {
+  try {
+    if (state) {
+      localStorage.setItem(LOCAL_MASTER_STATE_KEY, JSON.stringify(state));
+      if (state.activeFileId) {
+        saveLocalMasterPointerFileId(state.activeFileId);
+      }
+    } else {
+      localStorage.removeItem(LOCAL_MASTER_STATE_KEY);
+    }
+  } catch {}
+}
+
+/**
+ * Đọc cấu hình Master Workspace và phân quyền trực tiếp từ Tab ẩn __CONFIG__ của Google Sheet
+ */
+export async function readMasterSyncStateFromGoogleSheet(
+  accessToken: string,
+  fileId: string
+): Promise<MasterSyncState | null> {
+  try {
+    if (!accessToken || !fileId) return null;
+
+    // 1. Lấy dữ liệu dải ô cấu hình từ tab ẩn __CONFIG__
+    const configRange = '__CONFIG__!A1:B30';
+    const res = await fetchWithRetry(
+      `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/${encodeURIComponent(configRange)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    if (res.status === 404 || res.status === 403) {
+      return null;
     }
 
-    // 2. Fallback đọc 1 lần từ Drive nếu đang trong quá trình chuyển giao
-    if (accessToken) {
-      const searchUrl = new URL('https://www.googleapis.com/drive/v3/files');
-      searchUrl.searchParams.set('pageSize', '10');
-      searchUrl.searchParams.set('supportsAllDrives', 'true');
-      searchUrl.searchParams.set('includeItemsFromAllDrives', 'true');
-      searchUrl.searchParams.set('fields', 'files(id, name, trashed)');
-      searchUrl.searchParams.set('q', `name = '${MASTER_STATE_FILENAME}' and trashed = false`);
-
-      const res = await fetchWithRetry(searchUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const files: any[] = data.files || [];
-        if (files.length > 0) {
-          const pointerFileId = files[0].id;
-          const contentRes = await fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${pointerFileId}?alt=media`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (contentRes.ok) {
-            const state = await contentRes.json();
-            if (state && (state.activeFileId || state.status)) {
-              // Tự động chuyển giao ngay lên Firestore
-              saveWorkspaceMasterStateToFirestore(state).catch(() => {});
-              return state as MasterSyncState;
+    if (res.ok) {
+      const data = await res.json();
+      const rows: any[][] = data.values || [];
+      if (rows.length > 0) {
+        // Đọc danh sách Key-Value từ tab __CONFIG__
+        const kvMap = new Map<string, any>();
+        let metadataParsed: any = {};
+        for (const row of rows) {
+          if (row[0] !== undefined) {
+            const key = String(row[0]).trim().toLowerCase();
+            const val = row[1];
+            kvMap.set(key, val);
+            if (key === '__metadata_json__' && typeof val === 'string') {
+              try {
+                metadataParsed = JSON.parse(val) || {};
+              } catch {}
             }
           }
         }
+
+        let membersList: WorkspaceMember[] = Array.isArray(metadataParsed.members) ? metadataParsed.members : [];
+        const rawMembers = kvMap.get('members json') || kvMap.get('members');
+        if (typeof rawMembers === 'string') {
+          try {
+            const p = JSON.parse(rawMembers);
+            if (Array.isArray(p) && p.length > 0) membersList = p;
+          } catch {}
+        }
+
+        let settlementsList: SettlementAdjustment[] = Array.isArray(metadataParsed.settlements) ? metadataParsed.settlements : [];
+        const rawSettlements = kvMap.get('settlements json') || kvMap.get('settlements');
+        if (typeof rawSettlements === 'string') {
+          try {
+            const p = JSON.parse(rawSettlements);
+            if (Array.isArray(p) && p.length > 0) settlementsList = p;
+          } catch {}
+        }
+
+        let banksConfigList: BankInfo[] | undefined = Array.isArray(metadataParsed.banksConfig) ? metadataParsed.banksConfig : undefined;
+        const rawBanks = kvMap.get('banks config json') || kvMap.get('banks config');
+        if (typeof rawBanks === 'string') {
+          try {
+            const p = JSON.parse(rawBanks);
+            if (Array.isArray(p) && p.length > 0) banksConfigList = p;
+          } catch {}
+        }
+        if (Array.isArray(banksConfigList) && banksConfigList.length > 0) {
+          updateBanksFromRemote(banksConfigList);
+        }
+
+        let auditLogsList: SyncAuditLogEntry[] | undefined = Array.isArray(metadataParsed.auditLogs) ? metadataParsed.auditLogs : undefined;
+        const rawAudit = kvMap.get('audit logs json') || kvMap.get('audit logs');
+        if (typeof rawAudit === 'string') {
+          try {
+            const p = JSON.parse(rawAudit);
+            if (Array.isArray(p) && p.length > 0) auditLogsList = p;
+          } catch {}
+        }
+
+        return {
+          status: metadataParsed.status || (kvMap.get('status') as any) || 'active',
+          lastAction: metadataParsed.lastAction || (kvMap.get('last action') as any) || 'link',
+          activeFileId: fileId,
+          activeFileName: metadataParsed.activeFileName || kvMap.get('vault name') || '',
+          activeFileUrl: metadataParsed.activeFileUrl || `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          linkedTimestamp: metadataParsed.linkedTimestamp || kvMap.get('linked timestamp') || '',
+          linkedLocalTimeVi: metadataParsed.linkedLocalTimeVi || kvMap.get('linked local time') || '',
+          linkedAccountEmail: metadataParsed.linkedAccountEmail || kvMap.get('linked account') || '',
+          adminEmail: metadataParsed.adminEmail || kvMap.get('admin email') || '',
+          schemaVersion: metadataParsed.schemaVersion || 2,
+          updatedAt: metadataParsed.updatedAt || kvMap.get('updated at') || '',
+          updatedAtVi: metadataParsed.updatedAtVi || '',
+          members: membersList,
+          settlements: [],
+          banksConfig: banksConfigList || getAllBanks(),
+          auditLogs: auditLogsList || getSyncAuditLogs(),
+        };
       }
     }
 
     return null;
   } catch (err) {
-    console.warn('Error reading master sync pointer:', err);
+    console.warn('[Sheet Config] Lỗi đọc tab cấu hình __CONFIG__ từ Google Sheet:', err);
     return null;
+  }
+}
+
+/**
+ * Ghi trạng thái Master Workspace và thông tin thành viên trực tiếp vào Tab ẩn __CONFIG__ của Google Sheet
+ */
+export async function saveMasterSyncStateToGoogleSheet(
+  accessToken: string,
+  fileId: string,
+  state: MasterSyncState
+): Promise<boolean> {
+  try {
+    if (!accessToken || !fileId) return false;
+
+    const effectiveBanksConfig =
+      Array.isArray(state.banksConfig) && state.banksConfig.length > 0
+        ? state.banksConfig
+        : getAllBanks();
+
+    const effectiveAuditLogs =
+      Array.isArray(state.auditLogs) && state.auditLogs.length > 0
+        ? state.auditLogs
+        : getSyncAuditLogs();
+
+    // Loại bỏ các danh sách chi tiết quá lớn để tránh vượt quá giới hạn 50,000 ký tự của một ô trong Google Sheets
+    const lightweightAuditLogs = effectiveAuditLogs.slice(0, 15).map((log) => {
+      if (log.details) {
+        const {
+          columns_A_to_M_books,
+          columns_U_to_AC_settlements,
+          columns_N_to_P_annualInterest,
+          columns_Q_to_S_balanceGrowth,
+          ...restDetails
+        } = log.details;
+        return {
+          ...log,
+          details: restDetails,
+        };
+      }
+      return log;
+    });
+
+    const nowIso = state.updatedAt || new Date().toISOString();
+    const nowVi = state.updatedAtVi || formatIsoToVietnamTime(nowIso);
+    const coreMetadataPayload = JSON.stringify({
+      schemaVersion: 2,
+      status: state.status || 'active',
+      lastAction: state.lastAction || 'link',
+      activeFileId: state.activeFileId || fileId,
+      activeFileName: state.activeFileName || '',
+      activeFileUrl: state.activeFileUrl || `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+      adminEmail: state.adminEmail || '',
+      linkedAccountEmail: state.linkedAccountEmail || '',
+      linkedTimestamp: state.linkedTimestamp || '',
+      linkedLocalTimeVi: state.linkedLocalTimeVi || '',
+      updatedAt: nowIso,
+      updatedAtVi: nowVi,
+    });
+
+    const values: (string | number)[][] = [
+      ['__METADATA_JSON__', coreMetadataPayload],
+      ['Vault Name', state.activeFileName || ''],
+      ['Admin Email', state.adminEmail || ''],
+      ['Linked Account', state.linkedAccountEmail || ''],
+      ['Status', state.status || 'active'],
+      ['Last Action', state.lastAction || 'link'],
+      ['Linked Timestamp', state.linkedLocalTimeVi || state.linkedTimestamp || ''],
+      ['Updated At', nowVi],
+      ['Members JSON', JSON.stringify(state.members || [])],
+      ['Banks Config', JSON.stringify(effectiveBanksConfig)],
+      ['Audit Logs JSON', JSON.stringify(lightweightAuditLogs)],
+    ];
+
+    const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`;
+    const writeData = () => fetchWithRetry(batchUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          {
+            range: `__CONFIG__!A1:B${values.length}`,
+            majorDimension: 'ROWS',
+            values: values,
+          }
+        ]
+      }),
+    });
+
+    // 1. Thử ghi dữ liệu trực tiếp lên tab __CONFIG__
+    let updateRes = await writeData();
+
+    // 2. Nếu thất bại vì tab __CONFIG__ chưa tồn tại, tiến hành tạo mới rồi thử ghi lại
+    let errJson: any = null;
+    if (!updateRes.ok) {
+      errJson = await updateRes.json().catch(() => ({}));
+      
+      // Chấp nhận mọi lỗi 400 (vì khi chưa có tab __CONFIG__ thì API ghi luôn báo lỗi 400 dải ô không tồn tại độc lập với ngôn ngữ vùng của người dùng)
+      if (updateRes.status === 400) {
+        console.warn('[Sheet Config] Tab __CONFIG__ chưa tồn tại hoặc dải ô không hợp lệ, tiến hành tạo mới...');
+        
+        const createRes = await fetchWithRetry(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}:batchUpdate`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            requests: [
+              {
+                addSheet: {
+                  properties: {
+                    title: '__CONFIG__',
+                    hidden: false,
+                    gridProperties: { rowCount: 50, columnCount: 5 }
+                  }
+                }
+              }
+            ]
+          }),
+        });
+
+        if (createRes.ok) {
+          updateRes = await writeData();
+          if (!updateRes.ok) {
+            errJson = await updateRes.json().catch(() => ({}));
+          }
+        }
+      }
+    }
+
+    if (!updateRes.ok) {
+      const finalErr = errJson || await updateRes.json().catch(() => ({}));
+      console.error('[Sheet Config] Failed to update config values:', finalErr);
+      alert(`Lỗi ghi cấu hình __CONFIG__: ${finalErr?.error?.message || 'Yêu cầu bị từ chối'}`);
+    }
+
+    return updateRes.ok;
+  } catch (err: any) {
+    console.warn('[Sheet Config] Lỗi hệ thống khi ghi tab cấu hình:', err);
+    return false;
+  }
+}
+
+/**
+ * Nạp trạng thái Master Sync Pointer trực tiếp từ Google Sheet liên kết (hoặc bộ nhớ cục bộ)
+ */
+export async function getMasterSyncStateFromDrive(
+  accessToken: string,
+  explicitFileId?: string
+): Promise<MasterSyncState | null> {
+  try {
+    const targetFileId = explicitFileId || getLocalMasterPointerFileId();
+    if (targetFileId && accessToken) {
+      const sheetState = await readMasterSyncStateFromGoogleSheet(accessToken, targetFileId);
+      if (sheetState) {
+        saveLocalMasterPointerState(sheetState);
+        return sheetState;
+      }
+    }
+
+    // Fallback nạp từ bộ nhớ cục bộ trên máy
+    const localState = getLocalMasterPointerState();
+    if (localState) {
+      return localState;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('Error reading master sync pointer from sheet:', err);
+    return getLocalMasterPointerState();
   }
 }
 
@@ -1922,17 +2346,11 @@ export async function getMasterSyncStateFromDrive(accessToken: string): Promise<
  * Lấy file ID của file master pointer trên Google Drive (nếu có để dọn dẹp)
  */
 export async function getMasterPointerFileId(accessToken: string): Promise<string | null> {
-  try {
-    const cached = localStorage.getItem(MASTER_POINTER_FILE_ID_KEY);
-    if (cached) return cached;
-  } catch {}
-  return null;
+  return getLocalMasterPointerFileId();
 }
 
 /**
- * Save or update the active Master Workspace state on Firebase Firestore.
- * KHÔNG CÒN TẠO HOẶC LƯU FILE so_tiet_kiem_backup.json TRÊN GOOGLE DRIVE NỮA.
- * Trên Google Drive chỉ lưu file bảng tính liên kết (.xlsx hoặc Google Sheets).
+ * Lưu trạng thái Master Workspace trực tiếp vào Tab ẩn __CONFIG__ của Google Sheet và đồng bộ quyền Google Drive
  */
 export async function saveMasterSyncStateOnDrive(
   accessToken: string,
@@ -1944,60 +2362,52 @@ export async function saveMasterSyncStateOnDrive(
     const linkedIso = state.linkedTimestamp || nowIso;
     const linkedVi = state.linkedLocalTimeVi || formatIsoToVietnamTime(linkedIso);
 
-    const existingMaster = await getWorkspaceMasterStateFromFirestore().catch(() => null);
+    const existingLocal = getLocalMasterPointerState();
 
     const mergedMembers =
       state.members !== undefined
         ? state.members
-        : existingMaster?.members || [];
+        : existingLocal?.members || [];
 
     const mergedAdminEmail =
-      state.adminEmail || existingMaster?.adminEmail || state.linkedAccountEmail || 'Google User';
+      state.adminEmail || existingLocal?.adminEmail || state.linkedAccountEmail || 'Google User';
+
+    const mergedBanksConfig =
+      state.banksConfig !== undefined && Array.isArray(state.banksConfig) && state.banksConfig.length > 0
+        ? state.banksConfig
+        : existingLocal?.banksConfig && existingLocal.banksConfig.length > 0
+        ? existingLocal.banksConfig
+        : getAllBanks();
+
+    const mergedAuditLogs =
+      state.auditLogs !== undefined && Array.isArray(state.auditLogs) && state.auditLogs.length > 0
+        ? state.auditLogs
+        : existingLocal?.auditLogs && existingLocal.auditLogs.length > 0
+        ? existingLocal.auditLogs
+        : getSyncAuditLogs();
 
     const preparedState: MasterSyncState = {
-      ...existingMaster,
+      ...existingLocal,
       ...state,
-      schemaVersion: 1,
+      schemaVersion: 2,
       adminEmail: mergedAdminEmail,
       members: mergedMembers,
+      banksConfig: mergedBanksConfig,
+      auditLogs: mergedAuditLogs,
       linkedTimestamp: linkedIso,
       linkedLocalTimeVi: linkedVi,
       updatedAt: state.updatedAt || nowIso,
       updatedAtVi: nowVi,
     };
 
-    // 1. Lưu trạng thái Master Workspace lên Firebase Firestore
-    await saveWorkspaceMasterStateToFirestore(preparedState);
+    // 1. Lưu vào bộ nhớ cục bộ trên máy
+    saveLocalMasterPointerState(preparedState);
 
-    // 2. Dọn dẹp sạch sẽ các file JSON cũ trên Google Drive (nếu còn sót lại) để Drive chỉ có file liên kết
-    if (accessToken) {
-      try {
-        const searchUrl = new URL('https://www.googleapis.com/drive/v3/files');
-        searchUrl.searchParams.set('pageSize', '10');
-        searchUrl.searchParams.set('supportsAllDrives', 'true');
-        searchUrl.searchParams.set('includeItemsFromAllDrives', 'true');
-        searchUrl.searchParams.set('fields', 'files(id, name)');
-        searchUrl.searchParams.set('q', `name = '${MASTER_STATE_FILENAME}' and trashed = false`);
-
-        fetchWithRetry(searchUrl, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }).then(async (searchRes) => {
-          if (searchRes.ok) {
-            const d = await searchRes.json();
-            const legacyFiles = d.files || [];
-            for (const f of legacyFiles) {
-              fetchWithRetry(`https://www.googleapis.com/drive/v3/files/${f.id}`, {
-                method: 'DELETE',
-                headers: { Authorization: `Bearer ${accessToken}` },
-              }).catch(() => {});
-            }
-          }
-        }).catch(() => {});
-      } catch {}
-    }
-
-    // 3. Đồng bộ quyền truy cập Google Drive cho FILE BẢNG TÍNH LIÊN KẾT DUY NHẤT
+    // 2. Ghi trực tiếp vào tab ẩn __CONFIG__ của Google Sheet
     if (preparedState.activeFileId && accessToken) {
+      await saveMasterSyncStateToGoogleSheet(accessToken, preparedState.activeFileId, preparedState).catch(() => {});
+
+      // 3. Đồng bộ quyền truy cập Google Drive cho danh sách thành viên
       await synchronizeDrivePermissionsWithJsonMembers(
         accessToken,
         preparedState.activeFileId,
@@ -2006,16 +2416,15 @@ export async function saveMasterSyncStateOnDrive(
       ).catch(() => {});
     }
 
-    return 'firestore_workspace_doc';
+    return 'sheet_config_tab';
   } catch (err) {
-    console.warn('Error saving master sync pointer to Firestore:', err);
+    console.warn('Error saving master sync pointer to Sheet Config:', err);
     return null;
   }
 }
 
 /**
- * Set the active linked file on Firebase Firestore Master State.
- * Automatically preserves the ORIGINAL linkedTimestamp unless explicitly switching to another file.
+ * Thiết lập file Google Sheet liên kết hoạt động
  */
 export async function setMasterSyncLinked(
   accessToken: string,
@@ -2029,19 +2438,19 @@ export async function setMasterSyncLinked(
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
 
-  // 1. Determine and PRESERVE the authentic linkedTimestamp
+  // 1. Xác định và bảo toàn linkedTimestamp
   let resolvedLinkedTimestamp = existingLinkedTimestamp;
 
   if (!resolvedLinkedTimestamp && !isSwitching) {
     try {
-      const currentMaster = await getWorkspaceMasterStateFromFirestore();
+      const currentMaster = await getMasterSyncStateFromDrive(accessToken, fileId);
       if (currentMaster && currentMaster.activeFileId === fileId && currentMaster.linkedTimestamp) {
         resolvedLinkedTimestamp = currentMaster.linkedTimestamp;
       }
     } catch {}
   }
 
-  // 2. Fetch file details to ensure accurate metadata in Master State
+  // 2. Lấy metadata của file
   let resolvedName = fileName;
   let resolvedUrl = fileUrl;
   let resolvedMime: string | undefined;
@@ -2057,15 +2466,14 @@ export async function setMasterSyncLinked(
     // fallback
   }
 
-  // If this is a truly new link or file switch, establish the new linked timestamp
   if (!resolvedLinkedTimestamp) {
     resolvedLinkedTimestamp = new Date().toISOString();
   }
 
-  // If switching files, revoke permissions of members on the previous file
+  // Thu hồi quyền của thành viên trên file cũ nếu chuyển sang file mới
   if (isSwitching && previousFileId) {
     try {
-      const currentMaster = await getWorkspaceMasterStateFromFirestore();
+      const currentMaster = await getMasterSyncStateFromDrive(accessToken, previousFileId);
       if (currentMaster && currentMaster.members) {
         for (const member of currentMaster.members) {
           if (member.role !== 'ADMIN' && member.email) {
@@ -2078,44 +2486,35 @@ export async function setMasterSyncLinked(
     }
   }
 
-  // 3. Update the Master Workspace State on Firestore
+  // 3. Cập nhật Master State vào tab ẩn __CONFIG__ của Sheet và bộ nhớ máy
   try {
     const actionType: 'link' | 'switch' | 'create_and_link' = isSwitching ? 'switch' : 'link';
-    const currentMaster = await getWorkspaceMasterStateFromFirestore();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken, fileId);
     const finalMembers = currentMaster?.members || [];
     const finalAdminEmail = currentMaster?.adminEmail || email.toLowerCase();
 
-    await saveWorkspaceMasterStateToFirestore({
+    await saveMasterSyncStateOnDrive(accessToken, {
       status: 'active',
       lastAction: actionType,
       activeFileId: fileId,
       activeFileName: resolvedName || 'Bảng tính tiết kiệm',
       activeFileUrl: resolvedUrl || `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
-      mimeType: resolvedMime,
+      mimeType: resolvedMime || 'application/vnd.google-apps.spreadsheet',
       linkedTimestamp: resolvedLinkedTimestamp,
       linkedAccountEmail: email,
       adminEmail: finalAdminEmail,
       members: finalMembers,
       updatedAt: new Date().toISOString(),
     });
-
-    // Automatically synchronize file permissions for the linked Google Sheet!
-    await synchronizeDrivePermissionsWithJsonMembers(
-      accessToken,
-      fileId,
-      finalMembers,
-      finalAdminEmail
-    );
   } catch (saveErr) {
-    console.warn('Failed to update master sync state on Firestore:', saveErr);
+    console.warn('Failed to update master sync state on Sheet Config:', saveErr);
   }
 
   return resolvedLinkedTimestamp;
 }
 
 /**
- * Touch updatedAt on Master Workspace State on Firebase Firestore after a successful data sync,
- * leaving linkedTimestamp 100% UNTOUCHED and PRESERVED.
+ * Cập nhật updatedAt trên Tab __CONFIG__ của Sheet sau mỗi lần đồng bộ dữ liệu thành công
  */
 export async function touchMasterSyncStateOnDrive(
   accessToken: string,
@@ -2126,16 +2525,15 @@ export async function touchMasterSyncStateOnDrive(
   fileUrl?: string
 ): Promise<void> {
   try {
-    const currentMaster = await getWorkspaceMasterStateFromFirestore();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken, fileId);
     const nowIso = new Date().toISOString();
 
-    // If current master state is explicitly unlinked, DO NOT auto-touch it back to active!
     if (currentMaster && (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink')) {
       return;
     }
 
     if (currentMaster && (currentMaster.activeFileId === fileId || !currentMaster.activeFileId)) {
-      await saveWorkspaceMasterStateToFirestore({
+      await saveMasterSyncStateOnDrive(accessToken, {
         ...currentMaster,
         status: 'active',
         lastAction: currentMaster.lastAction === 'unlink' ? 'link' : (currentMaster.lastAction || 'link'),
@@ -2148,24 +2546,24 @@ export async function touchMasterSyncStateOnDrive(
       });
     }
   } catch (err) {
-    console.warn('Failed to touch master sync state on Firestore:', err);
+    console.warn('Failed to touch master sync state on Sheet Config:', err);
   }
 }
 
 /**
- * Update the Master Workspace State on Firebase Firestore to 'unlinked' status when user explicitly unlinks.
+ * Cập nhật trạng thái 'unlinked' khi người dùng hủy liên kết và thu hồi quyền Google Drive của các thành viên
  */
 export async function setMasterSyncUnlinked(
   accessToken: string,
   userEmail?: string
 ): Promise<void> {
   try {
-    const currentMaster = await getWorkspaceMasterStateFromFirestore();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken);
     if (!currentMaster) {
+      saveLocalMasterPointerFileId(null);
       return;
     }
 
-    // Phân quyền nghiêm ngặt: Chỉ Admin của Workspace mới có quyền hủy liên kết file trung tâm
     const cleanUser = userEmail?.trim().toLowerCase();
     const adminEmail = (currentMaster.adminEmail || currentMaster.linkedAccountEmail || '').trim().toLowerCase();
     if (cleanUser && adminEmail && cleanUser !== adminEmail) {
@@ -2173,7 +2571,7 @@ export async function setMasterSyncUnlinked(
       return;
     }
 
-    // Revoke Drive file permission for all non-admin members on the file being unlinked
+    // Thu hồi quyền Google Drive của tất cả thành viên không phải Admin
     try {
       if (currentMaster.activeFileId && currentMaster.members && currentMaster.members.length > 0) {
         const activeId = currentMaster.activeFileId;
@@ -2188,7 +2586,7 @@ export async function setMasterSyncUnlinked(
     }
 
     const nowIso = new Date().toISOString();
-    await saveWorkspaceMasterStateToFirestore({
+    await saveMasterSyncStateOnDrive(accessToken, {
       status: 'unlinked',
       lastAction: 'unlink',
       activeFileId: '',
@@ -2200,28 +2598,33 @@ export async function setMasterSyncUnlinked(
       members: currentMaster.members || [],
       updatedAt: nowIso,
     });
+    saveLocalMasterPointerFileId(null);
+    saveLocalMasterPointerState(null);
   } catch (saveErr) {
-    console.warn('Failed to update master sync state to unlinked on Firestore:', saveErr);
+    console.warn('Failed to update master sync state to unlinked on Sheet Config:', saveErr);
+    saveLocalMasterPointerFileId(null);
+    saveLocalMasterPointerState(null);
   }
 }
 
 /**
- * Auto-discover the latest central hub file directly from Firebase Firestore
+ * Tự động tìm kiếm file trung tâm đang hoạt động
  */
 export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   _userEmail?: string
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
   try {
-    const masterState = await getWorkspaceMasterStateFromFirestore();
+    const targetFileId = getLocalMasterPointerFileId();
+    if (!targetFileId) return null;
+
+    const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId);
     if (!masterState) return null;
 
-    // If master state is explicitly unlinked or has no active file, do NOT auto-discover anything
     if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
       return null;
     }
 
-    // Verify file still exists and is accessible on Google Drive
     try {
       const meta = await getRealGoogleDriveFileMetadata(accessToken, masterState.activeFileId);
       if (meta && !meta.isDeleted) {
@@ -2239,13 +2642,13 @@ export async function autoDiscoverLatestCentralHub(
       return null;
     }
   } catch (err) {
-    console.warn('Error auto-discovering central hub from Firestore:', err);
+    console.warn('Error auto-discovering central hub from Sheet Config:', err);
     return null;
   }
 }
 
 /**
- * Revoke Google Drive file permission for a specific user email
+ * Thu hồi quyền Google Drive của một email thành viên cụ thể
  */
 export async function revokeFilePermission(
   accessToken: string,
@@ -2256,7 +2659,7 @@ export async function revokeFilePermission(
     if (!fileId || !userEmail) return false;
     const cleanEmail = userEmail.trim().toLowerCase();
 
-    // 1. Get permissions list for the file
+    // 1. Lấy danh sách quyền hiện tại của file
     const listUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,emailAddress,role,type)`;
     const listRes = await fetchWithRetry(listUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -2270,7 +2673,7 @@ export async function revokeFilePermission(
     const data = await listRes.json();
     const permissions: Array<{ id: string; emailAddress?: string; role?: string; type?: string }> = data.permissions || [];
 
-    // 2. Find permission entry for target user (only type: 'user', never touch type: 'anyone')
+    // 2. Tìm bản ghi quyền của email mục tiêu (chỉ kiểu 'user')
     const userPerm = permissions.find(
       (p) => p.type === 'user' && p.emailAddress?.trim().toLowerCase() === cleanEmail
     );
@@ -2279,7 +2682,7 @@ export async function revokeFilePermission(
       return false;
     }
 
-    // 3. Delete the permission
+    // 3. Xóa quyền trên Google Drive
     const delUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${userPerm.id}`;
     const delRes = await fetchWithRetry(delUrl, {
       method: 'DELETE',
@@ -2294,14 +2697,14 @@ export async function revokeFilePermission(
 }
 
 /**
- * Remove a specific member email from Master Workspace State and revoke their Drive file permissions
+ * Xóa thành viên khỏi danh sách và thu hồi quyền Google Drive
  */
 export async function removeMemberFromDriveMaster(
   accessToken: string,
   memberEmailToRemove: string
 ): Promise<void> {
   try {
-    const currentMaster = await getWorkspaceMasterStateFromFirestore();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken);
     if (!currentMaster || !currentMaster.members) return;
 
     const cleanTarget = memberEmailToRemove.trim().toLowerCase();
@@ -2309,13 +2712,13 @@ export async function removeMemberFromDriveMaster(
       (m) => m.email.trim().toLowerCase() !== cleanTarget
     );
 
-    await saveWorkspaceMasterStateToFirestore({
+    await saveMasterSyncStateOnDrive(accessToken, {
       ...currentMaster,
       members: updatedMembers,
       updatedAt: new Date().toISOString(),
     });
 
-    // Revoke Drive access permissions on Central Hub
+    // Thu hồi quyền truy cập Drive trên Google Sheet liên kết
     if (currentMaster.activeFileId) {
       await revokeFilePermission(accessToken, currentMaster.activeFileId, cleanTarget).catch(() => {});
     }
@@ -2325,7 +2728,7 @@ export async function removeMemberFromDriveMaster(
 }
 
 /**
- * Update member role on Google Drive by adjusting file permissions
+ * Cập nhật vai trò (Role) của thành viên trên Google Drive và lưu vào Tab __CONFIG__
  */
 export async function updateMemberRoleOnDrive(
   accessToken: string,
@@ -2338,11 +2741,28 @@ export async function updateMemberRoleOnDrive(
     const cleanEmail = userEmail.trim().toLowerCase();
     const driveRole = newRole === 'EDITOR' ? 'writer' : 'reader';
 
-    // Step 1: Revoke existing permission to ensure clean state without conflicting roles
+    // 1. Thu hồi quyền cũ để tránh xung đột vai trò
     await revokeFilePermission(accessToken, fileId, cleanEmail);
 
-    // Step 2: Grant new permission at target role
-    return await shareFileWithUserEmail(accessToken, fileId, cleanEmail, driveRole);
+    // 2. Cấp quyền mới tương ứng
+    const shareSuccess = await shareFileWithUserEmail(accessToken, fileId, cleanEmail, driveRole);
+
+    // 3. Cập nhật role vào danh sách members trong tab __CONFIG__
+    try {
+      const currentMaster = await getMasterSyncStateFromDrive(accessToken, fileId);
+      if (currentMaster && currentMaster.members) {
+        const updatedMembers = currentMaster.members.map((m) =>
+          m.email.trim().toLowerCase() === cleanEmail ? { ...m, role: newRole } : m
+        );
+        await saveMasterSyncStateOnDrive(accessToken, {
+          ...currentMaster,
+          members: updatedMembers,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    } catch {}
+
+    return shareSuccess;
   } catch (err) {
     console.warn(`Lỗi khi cập nhật role cho ${userEmail} trên Google Drive:`, err);
     return false;

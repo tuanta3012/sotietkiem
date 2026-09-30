@@ -34,7 +34,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 }) => {
   if (!isOpen) return null;
 
-  const currentRole = settings.currentRole || (currentUser?.role === 'admin' ? 'ADMIN' : 'ADMIN');
+  const userEmail = currentUser?.email?.trim().toLowerCase();
+  const ownerEmail = settings.workspaceOwnerEmail?.trim().toLowerCase();
+  const isOwner = Boolean(userEmail && ownerEmail && userEmail === ownerEmail);
+  const currentRole: UserRole = isOwner
+    ? 'ADMIN'
+    : (settings.currentRole || (currentUser?.role === 'admin' ? 'ADMIN' : 'ADMIN'));
   const isAdmin = canManageMembers(currentRole);
 
   const [members, setMembers] = useState<WorkspaceMember[]>(() => {

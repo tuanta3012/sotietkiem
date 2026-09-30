@@ -198,6 +198,10 @@ export const AppModals: React.FC<AppModalsProps> = ({
   currentUser,
   currentDateStr,
 }) => {
+  const handleUpdateSettings = React.useCallback((newSettings: Partial<AppSettings>) => {
+    setSettings((prev) => ({ ...prev, ...newSettings }));
+  }, [setSettings]);
+
   const handleSaveMembers = async (updatedMembers: WorkspaceMember[]) => {
     const prevMembers = settings.members || [];
     setSettings((prev) => ({
@@ -323,9 +327,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
             onTriggerManualSync={onTriggerManualSync}
             onMarkAsRemoteUpdate={onMarkAsRemoteUpdate}
             settings={settings}
-            onUpdateSettings={(newSettings) => {
-              setSettings((prev) => ({ ...prev, ...newSettings }));
-            }}
+            onUpdateSettings={handleUpdateSettings}
             onStartFileSwitch={onStartFileSwitch}
             onFinishFileSwitch={onFinishFileSwitch}
             onCancelFileSwitch={onCancelFileSwitch}

@@ -26,19 +26,22 @@ import {
   SyncAuditLogEntry,
 } from '../utils/syncAuditLog';
 import {
-  fetchCentralAuditLogsFromFirestore,
-  getWorkspaceMasterStateFromFirestore,
-} from '../utils/firebaseFirestoreService';
+  getMasterSyncStateFromDrive,
+  getLocalMasterPointerState,
+} from '../utils/googleDriveService';
 import { MasterSyncState } from '../types';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+
+import { AppSettings } from '../types';
 
 interface SyncAuditLogModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUserEmail?: string;
   userRole?: string;
+  settings?: AppSettings;
 }
 
 export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
@@ -46,6 +49,7 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
   onClose,
   currentUserEmail,
   userRole = 'ADMIN',
+  settings,
 }) => {
   const [activeTab, setActiveTab] = useState<'cloud' | 'local'>('cloud');
   const [localLogs, setLocalLogs] = useState<SyncAuditLogEntry[]>([]);
@@ -63,10 +67,25 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
   const loadCloudLogs = async () => {
     setIsLoadingCloud(true);
     try {
-      const logs = await fetchCentralAuditLogsFromFirestore(100);
-      setCloudLogs(logs);
+      const token = localStorage.getItem('google_drive_access_token_v4') || localStorage.getItem('google_access_token') || sessionStorage.getItem('google_access_token');
+      const hasLink = settings?.googleSheetUrl;
+      if (token && hasLink) {
+        const master = await getMasterSyncStateFromDrive(token);
+        if (master && master.activeFileId) {
+          setMasterState(master);
+          if (Array.isArray(master.auditLogs) && master.auditLogs.length > 0) {
+            setCloudLogs(master.auditLogs);
+            setIsLoadingCloud(false);
+            return;
+          }
+        }
+      }
+      // If not authenticated or linked, show local logs
+      setMasterState(null);
+      setCloudLogs(getSyncAuditLogs());
     } catch (err) {
       console.warn('Lỗi tải log cloud:', err);
+      setCloudLogs(getSyncAuditLogs());
     } finally {
       setIsLoadingCloud(false);
     }
@@ -74,10 +93,16 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
 
   const loadMasterStatus = async () => {
     try {
-      const res = await getWorkspaceMasterStateFromFirestore();
-      if (res) {
-        setMasterState(res);
+      const token = localStorage.getItem('google_drive_access_token_v4') || localStorage.getItem('google_access_token') || sessionStorage.getItem('google_access_token');
+      const hasLink = settings?.googleSheetUrl;
+      if (token && hasLink) {
+        const master = await getMasterSyncStateFromDrive(token);
+        if (master) {
+          setMasterState(master);
+          return;
+        }
       }
+      setMasterState(null);
     } catch {
       // ignore
     }
@@ -90,7 +115,7 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
       loadMasterStatus();
       setCopied(false);
     }
-  }, [isOpen]);
+  }, [isOpen, settings?.googleSheetUrl]);
 
   const activeLogs = activeTab === 'cloud' ? cloudLogs : localLogs;
 
@@ -346,9 +371,8 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
               const isWarning = log.status === 'warning';
               const isSuccess = log.status === 'success';
 
-              // Role tag normalization: tuanta3012@gmail.com is ALWAYS ADMIN
-              const cleanEmail = (log.userEmail || '').toLowerCase();
-              const displayRole = cleanEmail === 'tuanta3012@gmail.com' ? 'ADMIN' : (log.currentRole?.toUpperCase() || 'ADMIN');
+              // Role tag normalization
+              const displayRole = log.currentRole?.toUpperCase() || 'ADMIN';
 
               const cleanTitle = (log.title || '')
                 .replace('Đồng bộ dữ liệu từ Google Drive (PULL)', 'Tải từ Google Drive')

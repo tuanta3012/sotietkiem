@@ -6,7 +6,7 @@
  * - Lưu trữ trong localStorage và đồng bộ lên file log trên Google Drive để điều tra sự cố.
  */
 
-import { pushAuditLogToFirestore } from './firebaseFirestoreService';
+
 
 export interface SyncAuditLogEntry {
   id: string;
@@ -39,7 +39,7 @@ export interface SyncAuditLogEntry {
 }
 
 const STORAGE_KEY = 'savings_sync_audit_log_v1';
-const MAX_LOG_ENTRIES = 50;
+const MAX_LOG_ENTRIES = 15;
 
 /**
  * Đọc toàn bộ danh sách nhật ký kiểm toán từ localStorage
@@ -80,22 +80,28 @@ export function recordSyncAuditLog(
     timeStr,
   };
 
+  let updatedLogs: SyncAuditLogEntry[] = [fullEntry];
   try {
     const existing = getSyncAuditLogs();
-    const updated = [fullEntry, ...existing].slice(0, MAX_LOG_ENTRIES);
+    updatedLogs = [fullEntry, ...existing].slice(0, MAX_LOG_ENTRIES);
     if (typeof localStorage !== 'undefined') {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLogs));
     }
   } catch (err) {
     console.warn('Lỗi lưu audit log:', err);
   }
 
-  // Tự động đẩy không đồng bộ lên Firestore trung tâm (để Admin kiểm tra tập trung từ mọi máy)
+  // Đồng bộ không đồng bộ lên Tab __CONFIG__ của Google Sheet liên kết
   try {
-    pushAuditLogToFirestore(fullEntry).catch(() => {});
-  } catch {
-    // Không gián đoạn luồng làm việc
-  }
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('google_drive_access_token_v4') || localStorage.getItem('google_access_token') || sessionStorage.getItem('google_access_token');
+      if (token) {
+        import('./googleDriveService').then(({ saveMasterSyncStateOnDrive }) => {
+          saveMasterSyncStateOnDrive(token, { status: 'active', auditLogs: updatedLogs }).catch(() => {});
+        });
+      }
+    }
+  } catch {}
 
   // Xuất ra console dev để dễ theo dõi
   const prefix = `[SYNC AUDIT] [${fullEntry.type}] [${fullEntry.status.toUpperCase()}]`;

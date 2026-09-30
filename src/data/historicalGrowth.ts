@@ -1,35 +1,19 @@
 import { AnnualInterestRecord, BalanceGrowthRecord, SavingsBook, SettlementAdjustment } from '../types';
 import { deduplicateSettlementAdjustments } from '../utils/dataTranslator';
 
-// Dữ liệu lịch sử chuẩn xác từ bảng tổng kết của người dùng (2019 - 2025/2026)
-export const DEFAULT_HISTORICAL_ANNUALS: AnnualInterestRecord[] = [
-  { year: 2022, interestEarnedMillion: 1554, interestEarnedVND: 1554000000 },
-  { year: 2023, interestEarnedMillion: 1583, interestEarnedVND: 1583000000 },
-  { year: 2024, interestEarnedMillion: 2503, interestEarnedVND: 2503000000 },
-  { year: 2025, interestEarnedMillion: 1986, interestEarnedVND: 1986000000 },
-  { year: 2026, interestEarnedMillion: 2059, interestEarnedVND: 2059000000 },
-];
+// Dữ liệu lịch sử mặc định (trống khi khởi tạo)
+export const DEFAULT_HISTORICAL_ANNUALS: AnnualInterestRecord[] = [];
+export const DEFAULT_HISTORICAL_BALANCES: BalanceGrowthRecord[] = [];
 
-export const DEFAULT_HISTORICAL_BALANCES: BalanceGrowthRecord[] = [
-  { year: 2019, balanceMillion: 14000, balanceVND: 14000000000, annualIncomeMillion: undefined, annualIncomeVND: undefined },
-  { year: 2020, balanceMillion: 18000, balanceVND: 18000000000, annualIncomeMillion: 4000, annualIncomeVND: 4000000000 },
-  { year: 2021, balanceMillion: 19965, balanceVND: 19965000000, annualIncomeMillion: 1965, annualIncomeVND: 1965000000 },
-  { year: 2022, balanceMillion: 23300, balanceVND: 23300000000, annualIncomeMillion: 3335, annualIncomeVND: 3335000000 },
-  { year: 2023, balanceMillion: 27100, balanceVND: 27100000000, annualIncomeMillion: 3800, annualIncomeVND: 3800000000 },
-  { year: 2024, balanceMillion: 32790, balanceVND: 32790000000, annualIncomeMillion: 5690, annualIncomeVND: 5690000000 },
-  { year: 2025, balanceMillion: 35289, balanceVND: 35289000000, annualIncomeMillion: 2499, annualIncomeVND: 2499000000 },
-];
-
-export const ANNUAL_INTEREST_HISTORY: AnnualInterestRecord[] = [...DEFAULT_HISTORICAL_ANNUALS];
-export const BALANCE_GROWTH_HISTORY: BalanceGrowthRecord[] = [...DEFAULT_HISTORICAL_BALANCES];
+export const ANNUAL_INTEREST_HISTORY: AnnualInterestRecord[] = [];
+export const BALANCE_GROWTH_HISTORY: BalanceGrowthRecord[] = [];
 
 export function isUsingSampleData(books?: SavingsBook[]): boolean {
   return false;
 }
 
-const DEFAULT_SAMPLE_ANNUALS: AnnualInterestRecord[] = [...DEFAULT_HISTORICAL_ANNUALS];
-
-const DEFAULT_SAMPLE_BALANCES: BalanceGrowthRecord[] = [...DEFAULT_HISTORICAL_BALANCES];
+const DEFAULT_SAMPLE_ANNUALS: AnnualInterestRecord[] = [];
+const DEFAULT_SAMPLE_BALANCES: BalanceGrowthRecord[] = [];
 
 // In-memory cache for ultra-fast, zero-lag synchronous rendering
 let inMemoryStaticAnnuals: AnnualInterestRecord[] | null = null;
@@ -37,7 +21,6 @@ let inMemoryStaticBalances: BalanceGrowthRecord[] | null = null;
 
 /**
  * Lưu dữ liệu lịch sử tĩnh (data tĩnh - các năm trước năm hiện tại) vào in-memory cache & localStorage
- * BẢO VỆ CHỐNG GHI ĐÈ: Tự động hợp nhất (merge) với dữ liệu lịch sử đã có, tuyệt đối không để các lần đồng bộ lỗi xóa trắng các năm cũ!
  */
 export function saveStaticHistoryToStorage(
   annuals: AnnualInterestRecord[] = [],
@@ -45,17 +28,13 @@ export function saveStaticHistoryToStorage(
 ): void {
   try {
     const currentYear = new Date().getFullYear();
-    // Lãi hàng năm static chốt bao gồm các năm <= currentYear (ví dụ <= 2026)
     const staticAnnuals = annuals.filter(a => a.year <= currentYear);
-    // Số dư cuối năm static chốt bao gồm các năm < currentYear (ví dụ < 2026)
     const staticBalances = balances.filter(b => b.year < currentYear);
 
-    // Hợp nhất an toàn với dữ liệu lịch sử hiện có
     const existing = loadStaticHistoryFromStorage();
     const annualsMap = new Map<number, AnnualInterestRecord>();
     existing.staticAnnuals.forEach(a => annualsMap.set(a.year, a));
     staticAnnuals.forEach(a => {
-      // Chỉ ghi đè nếu dữ liệu mới có số tiền hợp lệ > 0
       if (a.interestEarnedMillion > 0 || !annualsMap.has(a.year)) {
         annualsMap.set(a.year, a);
       }
@@ -64,7 +43,6 @@ export function saveStaticHistoryToStorage(
     const balancesMap = new Map<number, BalanceGrowthRecord>();
     existing.staticBalances.forEach(b => balancesMap.set(b.year, b));
     staticBalances.forEach(b => {
-      // Chỉ ghi đè nếu dữ liệu mới có số dư hợp lệ > 0
       if (b.balanceMillion > 0 || !balancesMap.has(b.year)) {
         balancesMap.set(b.year, b);
       }
@@ -106,17 +84,13 @@ export function clearStaticHistoryFromStorage(): void {
 }
 
 /**
- * Đọc dữ liệu lịch sử tĩnh tức thời từ in-memory cache hoặc localStorage.
- * Nếu storage chưa có hoặc bị thiếu các năm cũ, tự động nạp fallback an toàn từ bảng lịch sử gốc.
+ * Đọc dữ liệu lịch sử tĩnh từ in-memory cache hoặc localStorage.
  */
 export function loadStaticHistoryFromStorage(): {
   staticAnnuals: AnnualInterestRecord[];
   staticBalances: BalanceGrowthRecord[];
 } {
-  const currentYear = new Date().getFullYear();
-
-  // 1. Trả về ngay từ RAM cache nếu có đủ dữ liệu lịch sử
-  if (inMemoryStaticAnnuals && inMemoryStaticAnnuals.length > 0 && inMemoryStaticBalances && inMemoryStaticBalances.length > 0) {
+  if (inMemoryStaticAnnuals !== null && inMemoryStaticBalances !== null) {
     return {
       staticAnnuals: inMemoryStaticAnnuals,
       staticBalances: inMemoryStaticBalances,
@@ -135,23 +109,6 @@ export function loadStaticHistoryFromStorage(): {
     }
   } catch (err) {
     console.warn('Lỗi khi đọc dữ liệu tĩnh từ localStorage:', err);
-  }
-
-  // Nếu thiếu dữ liệu các năm cũ < currentYear, bổ sung từ DEFAULT_HISTORICAL để không bao giờ bị xóa trắng
-  const pastAnnuals = staticAnnuals.filter(a => a.year < currentYear);
-  if (pastAnnuals.length === 0) {
-    const annualMap = new Map<number, AnnualInterestRecord>();
-    DEFAULT_HISTORICAL_ANNUALS.forEach(a => annualMap.set(a.year, a));
-    staticAnnuals.forEach(a => annualMap.set(a.year, a));
-    staticAnnuals = Array.from(annualMap.values()).sort((a, b) => a.year - b.year);
-  }
-
-  const pastBalances = staticBalances.filter(b => b.year < currentYear);
-  if (pastBalances.length === 0) {
-    const balMap = new Map<number, BalanceGrowthRecord>();
-    DEFAULT_HISTORICAL_BALANCES.forEach(b => balMap.set(b.year, b));
-    staticBalances.forEach(b => balMap.set(b.year, b));
-    staticBalances = Array.from(balMap.values()).sort((a, b) => a.year - b.year);
   }
 
   inMemoryStaticAnnuals = staticAnnuals;
@@ -233,6 +190,11 @@ export function getDynamicAnnualInterestHistory(
     }
   });
 
+  // Nếu không có dữ liệu tĩnh và không có sổ/tất toán nào -> Trả về rỗng (0 dữ liệu sample)
+  if (rawStaticAnnuals.length === 0 && (books || []).length === 0 && safeSettlements.length === 0) {
+    return [];
+  }
+
   const dynamicRecords: AnnualInterestRecord[] = [];
 
   yearsToCompute.forEach(yr => {
@@ -242,17 +204,13 @@ export function getDynamicAnnualInterestHistory(
     let interestVND = 0;
 
     if (staticRec) {
-      // TRƯỜNG HỢP ĐÃ CÓ BẢN CHỐT TĨNH (ví dụ năm 2026 chốt tại 31/12/2025)
       let netAdjustmentVND = 0;
 
-      // 1. Điều chỉnh từ các giao dịch tất toán:
       safeSettlements.forEach(s => {
         const originalMaturityYear = getOriginalMaturityYear(s, currentYear);
 
-        // a) Sổ tất toán trong năm yr (s.settlementYear === yr):
         if (s.settlementYear === yr) {
           if (originalMaturityYear === yr) {
-            // Sổ vốn dĩ đáo hạn năm yr: nếu rút trước hạn thì trừ phần lãi bị mất
             if (s.settlementType === 'early') {
               const expected = s.expectedTermInterest || 0;
               const actual = s.actualInterestVND || 0;
@@ -262,23 +220,16 @@ export function getDynamicAnnualInterestHistory(
               }
             }
           } else {
-            // Sổ vốn dĩ đáo hạn năm KHÁC (ví dụ 2027), nhưng lại tất toán sớm trong năm yr (ví dụ 2026):
-            // Sổ này chưa từng có trong base chốt của năm yr.
-            // Số tiền lãi không kỳ hạn thực nhận (actualInterestVND) được thu về trong năm yr -> Cộng thêm vào năm yr!
             netAdjustmentVND += (s.actualInterestVND || 0);
           }
         } else {
-          // b) Sổ tất toán ở năm khác (s.settlementYear !== yr):
           if (originalMaturityYear === yr) {
-            // Sổ vốn dĩ đáo hạn năm yr (đã được tính trong base của yr), nhưng bị tất toán sớm ở năm khác:
-            // Toàn bộ lãi dự kiến ban đầu không còn được nhận ở năm yr nữa -> Trừ khỏi năm yr!
             const expected = s.expectedTermInterest || 0;
             netAdjustmentVND -= expected;
           }
         }
       });
 
-      // 2. Điều chỉnh từ các sổ ngắn hạn mở mới sau ngày chốt (startDate thuộc năm yr) và đáo hạn trong năm yr:
       activeBooks.forEach(b => {
         const maturityYear = b.maturityDate ? parseInt(b.maturityDate.slice(0, 4), 10) : currentYear;
         if (maturityYear === yr) {
@@ -295,10 +246,8 @@ export function getDynamicAnnualInterestHistory(
 
       interestVND = Math.max(0, staticRec.interestEarnedVND + netAdjustmentVND);
     } else {
-      // TRƯỜNG HỢP CHƯA CÓ BẢN CHỐT TĨNH (ví dụ năm 2027, 2028: Tính toán hoàn toàn động)
       let dynamicSumVND = 0;
 
-      // Cộng lãi dự kiến của các sổ ACTIVE đáo hạn trong năm yr
       activeBooks.forEach(b => {
         const maturityYear = b.maturityDate ? parseInt(b.maturityDate.slice(0, 4), 10) : currentYear;
         if (maturityYear === yr) {
@@ -310,7 +259,6 @@ export function getDynamicAnnualInterestHistory(
         }
       });
 
-      // Cộng lãi thực nhận của các sổ ĐÃ TẤT TOÁN trong năm yr (s.settlementYear === yr)
       (settlements || []).forEach(s => {
         if (s.settlementYear === yr) {
           dynamicSumVND += (s.actualInterestVND || 0);
@@ -320,11 +268,13 @@ export function getDynamicAnnualInterestHistory(
       interestVND = dynamicSumVND;
     }
 
-    dynamicRecords.push({
-      year: yr,
-      interestEarnedMillion: Math.round(interestVND / 1_000_000),
-      interestEarnedVND: interestVND,
-    });
+    if (interestVND > 0 || staticRec) {
+      dynamicRecords.push({
+        year: yr,
+        interestEarnedMillion: Math.round(interestVND / 1_000_000),
+        interestEarnedVND: interestVND,
+      });
+    }
   });
 
   const allRecords = [
@@ -339,17 +289,14 @@ export function getDynamicAnnualInterestHistory(
 
 /**
  * Tính toán & Kết hợp Bảng SỐ DƯ CUỐI NĂM & THU NHẬP NĂM:
- * - Dữ liệu tĩnh lịch sử (Năm cũ < Năm hiện tại): Trích xuất trực tiếp từ file Google Sheet/Excel (2019 - 2025).
- * - Dữ liệu động (Năm hiện tại): Tổng gốc danh mục sổ active hiện tại & Thu nhập năm 2026 = Số dư 2026 - Số dư 2025 (data tĩnh).
  */
 export function getDynamicBalanceGrowthHistory(
   books: SavingsBook[] = [],
   _settlements: SettlementAdjustment[] = [],
   customStaticBalances?: BalanceGrowthRecord[]
 ): BalanceGrowthRecord[] {
-  const currentYear = new Date().getFullYear(); // e.g. 2026
+  const currentYear = new Date().getFullYear();
 
-  // 1. Lấy dữ liệu tĩnh lịch sử (< currentYear)
   let staticBalances: BalanceGrowthRecord[] = [];
   if (customStaticBalances && customStaticBalances.length > 0) {
     staticBalances = customStaticBalances.filter(b => b.year < currentYear);
@@ -362,11 +309,14 @@ export function getDynamicBalanceGrowthHistory(
 
   const activeBooks = (books || []).filter(b => b.status !== 'settled');
 
-  // 2. Số dư động năm hiện tại (2026)
+  // Nếu không có dữ liệu tĩnh và không có sổ active -> Trả về rỗng (0 dữ liệu sample)
+  if (staticBalances.length === 0 && activeBooks.length === 0) {
+    return [];
+  }
+
   const currentYearBalanceVND = activeBooks.reduce((sum, b) => sum + b.principal, 0);
   const currentYearBalanceMil = Math.round(currentYearBalanceVND / 1_000_000);
 
-  // 3. Thu nhập năm 2026 = Số dư 2026 - Số dư 2025 (Mốc lịch sử tĩnh gần nhất)
   let lastStaticBalanceMil: number | undefined = undefined;
   if (staticBalances.length > 0) {
     lastStaticBalanceMil = staticBalances[staticBalances.length - 1].balanceMillion;
@@ -398,7 +348,6 @@ export function getDynamicBalanceGrowthHistory(
 
   const sorted = Array.from(uniqueMap.values()).sort((a, b) => a.year - b.year);
 
-  // Tự động tính toán lại Thu nhập năm cho các hàng lịch sử nếu bị thiếu
   let prevBal: number | undefined = undefined;
   return sorted.map(r => {
     let incMil = r.annualIncomeMillion;

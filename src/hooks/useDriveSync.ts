@@ -20,11 +20,7 @@ import { recordSyncAuditLog } from '../utils/syncAuditLog';
 import { resolveUserRole } from '../utils/roleHelper';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
-import {
-  getWorkspaceMasterStateFromFirestore,
-  saveWorkspaceMasterStateToFirestore,
-  subscribeToWorkspaceMasterState,
-} from '../utils/firebaseFirestoreService';
+
 
 interface UseDriveSyncProps {
   currentUser: AuthUser | null;
@@ -68,13 +64,13 @@ export function useDriveSync({
   const applyMasterSettlements = useCallback(
     (remoteSettlements: SettlementAdjustment[] | undefined) => {
       if (!setSettlementAdjustments) return;
-      const cleanNext = Array.isArray(remoteSettlements) ? deduplicateSettlementAdjustments(remoteSettlements) : [];
+      const cleanNext = deduplicateSettlementAdjustments(remoteSettlements || []);
       const nextStr = JSON.stringify(cleanNext);
       previousAdjsStringRef.current = nextStr;
+      setSettlementAdjustments(cleanNext);
       try {
         localStorage.setItem('savings_settlements_v3', nextStr);
       } catch {}
-      setSettlementAdjustments(cleanNext);
     },
     [setSettlementAdjustments]
   );
@@ -332,13 +328,9 @@ export function useDriveSync({
       try {
         // Kiểm tra nhanh xem thiết bị khác có hủy liên kết file này trước đó không & nạp danh sách thành viên
         try {
-          const firestoreMaster = await getWorkspaceMasterStateFromFirestore();
-          const masterState = firestoreMaster || (token ? await getMasterSyncStateFromDrive(token) : null);
+          const masterState = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
           if (masterState) {
             applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
-            if (masterState.settlements) {
-              applyMasterSettlements(masterState.settlements);
-            }
             if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink') {
               const unlinkMs = masterState.updatedAt
                 ? new Date(masterState.updatedAt).getTime()
@@ -613,6 +605,27 @@ export function useDriveSync({
       isPushingRef.current = true;
       try {
         setIsSyncingDrive(true);
+
+        // Kiềm tra timestamp (modifiedTime) của file trên Drive trước khi ghi đè
+        try {
+          const remoteMeta = await getRealGoogleDriveFileMetadata(token, fileId);
+          if (
+            remoteMeta?.modifiedTime &&
+            lastCheckedModifiedTimeRef.current &&
+            remoteMeta.modifiedTime !== lastCheckedModifiedTimeRef.current &&
+            Date.now() - lastLocalPushTimeRef.current > 8000
+          ) {
+            console.info('[Smart Push] Timestamp file Drive mới hơn dữ liệu máy. Nạp bản mới từ Drive trước khi ghi nhận biến động...');
+            const pullRes = await downloadRealGoogleDriveFile(token, fileId);
+            if (pullRes.success) {
+              lastCheckedModifiedTimeRef.current = remoteMeta.modifiedTime;
+              applyMasterSettlements(pullRes.settlements || []);
+            }
+          }
+        } catch {
+          // ignore
+        }
+
         const adjs = currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [];
         const success = await updateRealGoogleDriveFile(token, fileId, updatedBooks, adjs);
         if (success) {
@@ -628,19 +641,22 @@ export function useDriveSync({
             // ignore
           }
 
-          // Cập nhật ngay Master State lên Firestore trung tâm
-          saveWorkspaceMasterStateToFirestore({
-            status: 'active',
-            lastAction: 'link',
-            activeFileId: fileId,
-            activeFileName: settings.googleSheetName || 'Sổ Tiết Kiệm Gia Đình',
-            activeFileUrl: settings.googleSheetUrl,
-            linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
-            linkedAccountEmail: currentUser?.email,
-            adminEmail: currentUser?.email,
-            members: settings.members,
-            updatedAt: new Date().toISOString(),
-          }).catch(() => {});
+          // Cập nhật Master State trực tiếp vào Tab __CONFIG__ của Sheet
+          if (token) {
+            saveMasterSyncStateOnDrive(token, {
+              status: 'active',
+              lastAction: 'link',
+              activeFileId: fileId,
+              activeFileName: settings.googleSheetName || 'Sổ Tiết Kiệm Gia Đình',
+              activeFileUrl: settings.googleSheetUrl,
+              linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
+              linkedAccountEmail: currentUser?.email,
+              adminEmail: settings.workspaceOwnerEmail || currentUser?.email,
+              members: settings.members,
+              settlements: adjs,
+              updatedAt: new Date().toISOString(),
+            }).catch(() => {});
+          }
 
           const userEmail = currentUser?.email || 'unknown';
           const role = resolveUserRole(userEmail, settingsRef.current?.currentRole, settingsRef.current?.members, settingsRef.current?.workspaceOwnerEmail);
@@ -788,9 +804,6 @@ export function useDriveSync({
 
         // Master state tồn tại và active
         applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
-        if (masterState.settlements) {
-          applyMasterSettlements(masterState.settlements);
-        }
 
         if (!settingsRef.current.googleSheetUrl) {
           const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
@@ -985,13 +998,9 @@ export function useDriveSync({
           } else {
             // Ensure master state file exists on Drive for current link if not yet created
             try {
-              const firestoreMaster = await getWorkspaceMasterStateFromFirestore();
-              const currentMaster = firestoreMaster || (token ? await getMasterSyncStateFromDrive(token) : null);
+              const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
               if (currentMaster) {
                 applyMasterStateToSettings(currentMaster, currentUser?.email, setSettings, settingsRef.current, token);
-                if (currentMaster.settlements) {
-                  applyMasterSettlements(currentMaster.settlements);
-                }
                 if (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink') {
                   const unlinkMs = currentMaster.updatedAt
                     ? new Date(currentMaster.updatedAt).getTime()
@@ -1272,14 +1281,10 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
-            const firestoreMaster = await getWorkspaceMasterStateFromFirestore();
-            const masterState = firestoreMaster || (token ? await getMasterSyncStateFromDrive(token) : null);
+            const masterState = token ? await getMasterSyncStateFromDrive(token) : null;
             if (masterState && masterState.status === 'active' && masterState.activeFileId) {
               // Luôn đồng bộ danh sách thành viên & vai trò (ADMIN, EDITOR, VIEWER)
               applyMasterStateToSettings(masterState, currentUser.email, setSettings, settingsRef.current, token);
-              if (masterState.settlements) {
-                applyMasterSettlements(masterState.settlements);
-              }
 
               // Nếu chưa gắn link bảng tính, tự động gắn link bảng tính từ masterState
               if (!settingsRef.current.googleSheetUrl && masterState.activeFileId) {
@@ -1289,13 +1294,11 @@ export function useDriveSync({
                   googleSheetUrl: sheetUrl,
                   googleSheetName: masterState.activeFileName || 'Bảng tính tiết kiệm',
                 }));
-                console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ Firestore master workspace...');
+                console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ master workspace...');
                 await syncBooksFromDriveRef.current(false, token);
               }
-            } else {
-              // Master JSON không tồn tại trên Google Drive hoặc đang unlinked -> Xóa liên kết cục bộ
+            } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
               if (settingsRef.current.googleSheetUrl) {
-                console.info('[Central Hub Sync] Không tìm thấy file master JSON trên Drive -> Hủy liên kết cục bộ.');
                 setSettings((prev) => ({
                   ...prev,
                   googleSheetUrl: undefined,
@@ -1304,6 +1307,7 @@ export function useDriveSync({
                 }));
                 try {
                   localStorage.removeItem('master_pointer_file_id');
+                  localStorage.removeItem('last_linked_file_id_v2');
                 } catch {}
               }
             }
@@ -1319,15 +1323,6 @@ export function useDriveSync({
 
   // SMART SYNC: Lắng nghe sự kiện mở app/máy (Cold start, Focus, Visibility, Android Resume) & Polling nền 5 phút
   useEffect(() => {
-    // Lắng nghe thay đổi Master Workspace Realtime từ Firestore (Phân quyền, Đổi liên kết file)
-    const unsubFirestore = subscribeToWorkspaceMasterState((masterState) => {
-      if (masterState && currentUser?.email) {
-        applyMasterStateToSettings(masterState, currentUser.email, setSettings, settingsRef.current);
-        if (masterState.settlements) {
-          applyMasterSettlements(masterState.settlements);
-        }
-      }
-    });
 
     // 1. Khởi động ứng dụng (Cold start): Kiểm tra và kéo dữ liệu mới nhất tức thì
     checkDriveTokenValidity(false);
@@ -1373,7 +1368,6 @@ export function useDriveSync({
     }, 5 * 60 * 1000); // 5 phút: Giảm 85% truy vấn Google API, triệt tiêu lỗi Quota 403 và tiết kiệm pin tối đa
 
     return () => {
-      unsubFirestore();
       window.removeEventListener('focus', handleFocusOrVisible);
       window.removeEventListener('pageshow', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);

@@ -552,6 +552,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         onClose={() => setIsAuditLogOpen(false)}
         currentUserEmail={currentUser?.email}
         userRole={settings.currentRole || 'ADMIN'}
+        settings={settings}
       />
     </header>
   );

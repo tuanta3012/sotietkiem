@@ -315,7 +315,9 @@ export function translateInterestRateFromSheet(val: any): number {
  * Translates interest rate to sheet format using comma decimal and percent sign for Vietnamese Google Sheet locale (e.g. 8.5 -> '8,50%')
  */
 export function translateInterestRateToSheet(rate: number): string {
-  return `${rate.toFixed(2).replace('.', ',')}%`;
+  if (typeof rate !== 'number' || isNaN(rate)) return '0%';
+  const cleanNum = Number(rate.toFixed(2));
+  return `${cleanNum.toString().replace('.', ',')}%`;
 }
 
 /**
@@ -369,7 +371,7 @@ export function translateMoneyToSheet(vnd: number, allowFraction = false): numbe
 }
 
 /**
- * Normalizes varied date string formats (D/M/YYYY, DD/MM/YYYY, Excel Serial, ISO) into YYYY-MM-DD
+ * Normalizes varied date string formats (D/M/YYYY, DD/MM/YYYY, Excel Serial numbers or strings, ISO) into YYYY-MM-DD
  */
 export function translateDateFromSheet(val: any): string | null {
   if (!val) return null;
@@ -383,15 +385,16 @@ export function translateDateFromSheet(val: any): string | null {
     return `${y}-${m}-${d}`;
   }
 
-  // 2. Handle Excel Serial Numbers (Only valid range 10000 <= val <= 100000 to prevent principal values like 1100 matching)
-  if (typeof val === 'number') {
-    if (isNaN(val) || val < 10000 || val > 100000) return null;
-    const jsDate = new Date((val - 25569) * 86400 * 1000);
-    if (isNaN(jsDate.getTime())) return null;
-    const y = jsDate.getUTCFullYear();
-    const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(jsDate.getUTCDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+  // 2. Handle Excel / Google Sheets Serial Numbers (both numeric 45941 or string "45941")
+  const numVal = typeof val === 'number' ? val : (typeof val === 'string' && /^\d{5}(\.\d+)?$/.test(val.trim()) ? parseFloat(val.trim()) : NaN);
+  if (!isNaN(numVal) && numVal >= 30000 && numVal <= 70000) {
+    const jsDate = new Date((numVal - 25569) * 86400 * 1000);
+    if (!isNaN(jsDate.getTime())) {
+      const y = jsDate.getUTCFullYear();
+      const m = String(jsDate.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(jsDate.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
   }
 
   const str = String(val).trim();
@@ -442,17 +445,38 @@ export function translateDateFromSheet(val: any): string | null {
 
   return null;
 }
-
 /**
- * Formats YYYY-MM-DD into Sheet date format (D/M/YYYY or DD/MM/YYYY)
+ * Formats YYYY-MM-DD or Excel Serial Number into strict Sheet date format (dd/mm/yyyy or d/m/yyyy or yyyy-mm-dd)
  */
-export function translateDateToSheet(dateStr: string, format: 'd/m/yyyy' | 'dd/mm/yyyy' = 'd/m/yyyy'): string {
-  if (!dateStr || dateStr.length < 10) return '';
-  const [y, m, d] = dateStr.split('-');
+export function translateDateToSheet(
+  dateVal: any,
+  format: 'd/m/yyyy' | 'dd/mm/yyyy' | 'yyyy-mm-dd' = 'yyyy-mm-dd'
+): string {
+  if (!dateVal) return '';
+  let str = String(dateVal).trim();
+  
+  // If dateVal is not in YYYY-MM-DD format (e.g. numeric serial "45941"), attempt conversion
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    const iso = translateDateFromSheet(dateVal);
+    if (iso && /^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+      str = iso;
+    } else {
+      return str;
+    }
+  }
+
+  if (format === 'yyyy-mm-dd') {
+    return str;
+  }
+
+  const [y, m, d] = str.split('-');
+  const dayPadded = String(d).padStart(2, '0');
+  const monthPadded = String(m).padStart(2, '0');
+
   if (format === 'd/m/yyyy') {
     return `${parseInt(d, 10)}/${parseInt(m, 10)}/${y}`;
   }
-  return `${d}/${m}/${y}`;
+  return `${dayPadded}/${monthPadded}/${y}`;
 }
 
 import { STANDARDIZED_SHEET_HEADERS, CANONICAL_COLUMNS } from './dataSchema';
@@ -478,18 +502,15 @@ export function translateBooksToDataRows(books: SavingsBook[]): (string | number
     };
   });
   const sortedBooks = [...normalizedBooks].sort((a, b) => a.maturityDate.localeCompare(b.maturityDate));
-
   return sortedBooks.map((b) => {
     const bankStr = translateBankToSheet(b);
     const ownerStr = getOwnerLabel(b.owner);
     const depositTypeStr = b.depositType === 'counter' ? 'Tại quầy' : 'Online';
     const rateStr = translateInterestRateToSheet(b.interestRate);
     const principalMil = translateMoneyToSheet(b.principal, false);
-    const startStr = translateDateToSheet(b.startDate, 'd/m/yyyy');
-    const maturityStr = translateDateToSheet(b.maturityDate, 'd/m/yyyy');
+    const startStr = translateDateToSheet(b.startDate, 'yyyy-mm-dd');
+    const maturityStr = translateDateToSheet(b.maturityDate, 'yyyy-mm-dd');
     const term = b.termMonths;
-    
-    // Benchmark months diff from today
     const benchmarkDateStr = new Date().toISOString().slice(0, 10);
     const daysRemaining = getDaysBetween(benchmarkDateStr, b.maturityDate);
     const monthsRemaining = Math.max(0, Math.round(daysRemaining / 30.417));
@@ -503,7 +524,8 @@ export function translateBooksToDataRows(books: SavingsBook[]): (string | number
     const annualInterestVND = Math.round(b.principal * (b.interestRate / 100));
     const annualInterestMil = translateMoneyToSheet(annualInterestVND, true);
 
-    const monthYear = b.maturityDate.slice(5, 7) + '/' + b.maturityDate.slice(2, 4);
+    const matIso = translateDateFromSheet(b.maturityDate) || b.maturityDate;
+    const monthYear = matIso && matIso.length >= 7 ? `${matIso.slice(5, 7)}/${matIso.slice(2, 4)}` : '';
 
     return [
       bankStr,
@@ -582,17 +604,15 @@ export function translateBooksToSheetMatrix(
   let totalPrincipalMil = 0;
   let totalTermInterestMil = 0;
   let totalAnnualInterestMil = 0;
-
   const dataRows = sortedBooks.map((b) => {
     const bankStr = translateBankToSheet(b);
     const ownerStr = getOwnerLabel(b.owner);
     const depositTypeStr = b.depositType === 'counter' ? 'Tại quầy' : 'Online';
     const rateVal = translateInterestRateToSheet(b.interestRate);
     const principalMil = translateMoneyToSheet(b.principal, false);
-    const startStr = translateDateToSheet(b.startDate, 'd/m/yyyy');
-    const maturityStr = translateDateToSheet(b.maturityDate, 'd/m/yyyy');
+    const startStr = translateDateToSheet(b.startDate, 'yyyy-mm-dd');
+    const maturityStr = translateDateToSheet(b.maturityDate, 'yyyy-mm-dd');
     const term = b.termMonths;
-    
     const benchmarkDateStr = new Date().toISOString().slice(0, 10);
     const daysRemaining = getDaysBetween(benchmarkDateStr, b.maturityDate);
     const monthsRemaining = Math.max(0, Math.round(daysRemaining / 30.417));
@@ -604,7 +624,8 @@ export function translateBooksToSheetMatrix(
     const annualInterestVND = Math.round(b.principal * (b.interestRate / 100));
     const annualInterestMil = translateMoneyToSheet(annualInterestVND, true);
 
-    const monthYear = b.maturityDate.slice(5, 7) + '/' + b.maturityDate.slice(2, 4);
+    const matIso = translateDateFromSheet(b.maturityDate) || b.maturityDate;
+    const monthYear = matIso && matIso.length >= 7 ? `${matIso.slice(5, 7)}/${matIso.slice(2, 4)}` : '';
 
     totalPrincipalMil += principalMil;
     totalTermInterestMil += termInterestMil;
@@ -652,10 +673,10 @@ export function translateBooksToSheetMatrix(
     const activityRow = act
       ? [
           act.id || `ADJ_${act.timestamp || Date.now()}`,
-          translateDateToSheet(act.settlementDate, 'd/m/yyyy'),
+          translateDateToSheet(act.settlementDate, 'yyyy-mm-dd'),
           typeLabel,
           act.bookCode || '',
-          act.bankId || '',
+          getBankTagForBook(act.bankId, act.owner),
           getOwnerLabel(act.owner),
           translateMoneyToSheet(act.principal || 0, true),
           translateMoneyToSheet(act.actualInterestVND || 0, true),
