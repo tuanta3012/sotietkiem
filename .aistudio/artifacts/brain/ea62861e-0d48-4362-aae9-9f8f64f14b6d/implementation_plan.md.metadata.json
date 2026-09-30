@@ -1,6 +1,6 @@
 {
-  "summary": "Kế hoạch chuyển đổi toàn diện kiến trúc ứng dụng Sổ Tiết Kiệm sang mô hình Public Mass-Distribution (Google Play & APK trực tiếp) với bảo mật cao, chi phí hạ tầng 0đ cho cả 2 phía và tính năng hỗ trợ người dùng tích hợp sẵn trong app.",
-  "updatedAt": "2026-09-29T14:44:15.211809516Z",
+  "summary": "Implementation plan for standardizing number formats, cleaning up temporary junk files, optimizing app performance and auto cache management, and preparing for public release.",
+  "updatedAt": "2026-09-30T08:52:56.448964073Z",
   "requestFeedback": true,
   "userFacing": true
 }

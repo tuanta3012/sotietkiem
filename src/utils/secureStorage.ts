@@ -82,3 +82,52 @@ export async function removeSecureItem(key: string): Promise<void> {
     console.error(`[SecureStorage] Failed fallback removal for key: ${key}`, err);
   }
 }
+
+/**
+ * Automatically clean up temporary cache memory on app startup while preserving
+ * active Google Drive sync settings, authentication tokens, and user savings data.
+ */
+export async function autoCleanupStartupCache(): Promise<void> {
+  try {
+    const PRESERVED_PREFIXES = [
+      'savings_',
+      'google_drive_',
+      'gdrive_',
+      'capacitor_',
+      'firebase_',
+    ];
+
+    // 1. Scan and purge orphan/temporary localStorage keys
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key) {
+          const isPreserved = PRESERVED_PREFIXES.some((prefix) => key.startsWith(prefix));
+          if (!isPreserved && (key.startsWith('temp_') || key.startsWith('_stk_') || key.startsWith('cache_') || key.includes('_tmp_'))) {
+            keysToRemove.push(key);
+          }
+        }
+      }
+      keysToRemove.forEach((key) => {
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          // ignore
+        }
+      });
+    }
+
+    // 2. Clear browser CacheStorage if available
+    if (typeof window !== 'undefined' && 'caches' in window) {
+      const cacheNames = await caches.keys();
+      for (const name of cacheNames) {
+        if (name.includes('temp') || name.includes('stale')) {
+          await caches.delete(name);
+        }
+      }
+    }
+  } catch (err) {
+    console.info('[CacheManager] Auto cache cleanup completed with minor notice:', err);
+  }
+}

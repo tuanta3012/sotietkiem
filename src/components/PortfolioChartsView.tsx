@@ -243,7 +243,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
       const savingsVND = Math.max(0, earlyWithdrawLossVND - loanCostVND);
 
       return {
-        targetLabel: `${(targetMil / 1000).toFixed(0)} Tỷ`,
+        targetLabel: `${formatDecimal(targetMil / 1000, 0)} Tỷ`,
         targetMil,
         earlyWithdrawLossMillion: Math.round(earlyWithdrawLossVND / 1_000_000),
         loanCostMillion: Math.round(loanCostVND / 1_000_000),
@@ -429,7 +429,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                 <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#475569' }} />
                 <YAxis
                   tick={{ fontSize: 11, fill: '#475569' }}
-                  tickFormatter={(val) => `${(val / 1000).toFixed(1)}T`}
+                  tickFormatter={(val) => `${formatDecimal(val / 1000, 1)}T`}
                 />
                 <Tooltip
                   formatter={(val: any, name: any) => [
@@ -453,7 +453,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
               <span className="text-slate-500 block">Tháng dòng tiền về lớn nhất:</span>
               <span className="font-bold text-slate-900 text-sm">
                 {peakCashflowMonth
-                  ? `${peakCashflowMonth.monthLabel} (${(peakCashflowMonth.totalMillion / 1000).toFixed(2)} Tỷ)`
+                  ? `${peakCashflowMonth.monthLabel} (${formatDecimal(peakCashflowMonth.totalMillion / 1000, 2)} Tỷ)`
                   : 'N/A'}
               </span>
               <span className="text-[10px] text-slate-500 block mt-0.5">
@@ -509,7 +509,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                         #{idx + 1}. {m.monthLabel}
                       </span>
                       <span className="font-extrabold text-emerald-700">
-                        {(m.totalMillion / 1000).toFixed(2)} Tỷ
+                        {formatDecimal(m.totalMillion / 1000, 2)} Tỷ
                       </span>
                     </div>
                     <div className="text-[10px] text-slate-500 mt-0.5 flex justify-between">
@@ -557,7 +557,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                       innerRadius={60}
                       outerRadius={90}
                       paddingAngle={4}
-                      label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(1)}%`}
+                      label={({ name, percent }) => `${name}: ${formatPercent(percent * 100, 1)}`}
                     >
                       {bankDistributionData.map((entry, index) => (
                         <Cell key={`cell-${index}`} fill={entry.color} />
@@ -576,10 +576,10 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                   <div key={item.name} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
                     <span className="font-semibold text-slate-700 block truncate">{item.name}</span>
                     <span className="font-bold text-slate-900 block mt-0.5">
-                      {(item.valueMillion / 1000).toFixed(1)} Tỷ
+                      {formatDecimal(item.valueMillion / 1000, 1)} Tỷ
                     </span>
                     <span className="text-[10px] text-slate-500">
-                      {((item.valueMillion / totalActivePrincipalMil) * 100).toFixed(1)}% ({item.bookCount} sổ)
+                      {formatPercent((item.valueMillion / totalActivePrincipalMil) * 100, 1)} ({item.bookCount} sổ)
                     </span>
                   </div>
                 ))}
@@ -617,7 +617,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                       innerRadius={60}
                       outerRadius={90}
                       paddingAngle={4}
-                      label={((props: any) => `${props.term || props.name}: ${((props.percent || 0) * 100).toFixed(1)}%`) as any}
+                      label={((props: any) => `${props.term || props.name}: ${formatPercent((props.percent || 0) * 100, 1)}`) as any}
                     >
                       {termDistributionData.map((entry, index) => (
                         <Cell key={`term-cell-${index}`} fill={entry.color} />
@@ -636,10 +636,10 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                   <div key={item.term} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
                     <span className="font-semibold text-slate-700 block">{item.term}</span>
                     <span className="font-bold text-slate-900 block mt-0.5">
-                      {(item.valueMillion / 1000).toFixed(1)} Tỷ
+                      {formatDecimal(item.valueMillion / 1000, 1)} Tỷ
                     </span>
                     <span className="text-[10px] text-slate-500">
-                      {((item.valueMillion / totalActivePrincipalMil) * 100).toFixed(1)}% ({item.bookCount} sổ)
+                      {formatPercent((item.valueMillion / totalActivePrincipalMil) * 100, 1)} ({item.bookCount} sổ)
                     </span>
                   </div>
                 ))}
@@ -712,7 +712,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                 Đường Cong So Sánh Thiệt Hại: Rút Sớm Toàn Bộ vs Vay Cầm Cố VIP
               </h3>
               <p className="text-xs text-slate-500">
-                Mô phỏng mức mất tiền lãi thực tế theo từng quy mô huy động vốn lên đến {(totalActivePrincipalMil / 1000).toFixed(1)} Tỷ VNĐ (Đơn vị: Triệu VNĐ)
+                Mô phỏng mức mất tiền lãi thực tế theo từng quy mô huy động vốn lên đến {formatDecimal(totalActivePrincipalMil / 1000, 1)} Tỷ VNĐ (Đơn vị: Triệu VNĐ)
               </p>
             </div>
             <div className="flex items-center space-x-3 text-xs">
@@ -819,9 +819,9 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} />
-                  <YAxis tickFormatter={(val) => (settings.privacyMode ? '••' : `${(val / 1000).toFixed(0)}T`)} tick={{ fontSize: 11 }} />
+                  <YAxis tickFormatter={(val) => (settings.privacyMode ? '••' : `${formatDecimal(val / 1000, 0)}T`)} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${(Number(val) / 1000).toFixed(1)} Tỷ VNĐ`, 'Số dư cuối năm']}
+                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${formatDecimal(Number(val) / 1000, 1)} Tỷ VNĐ`, 'Số dư cuối năm']}
                     contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '12px' }}
                   />
                   <Area type="monotone" dataKey="balanceMillion" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#balanceGrad)" />

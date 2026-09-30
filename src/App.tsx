@@ -33,7 +33,7 @@ import {
   getDynamicBalanceGrowthHistory,
   clearStaticHistoryFromStorage,
 } from './data/historicalGrowth';
-import { getSecureItem, setSecureItem } from './utils/secureStorage';
+import { getSecureItem, setSecureItem, autoCleanupStartupCache } from './utils/secureStorage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
@@ -246,6 +246,9 @@ export default function App() {
   useEffect(() => {
     const restoreSessionFromPreferences = async () => {
       try {
+        // Tự động dọn dẹp bộ nhớ đệm tạm thời khi mở app
+        await autoCleanupStartupCache();
+
         let hasBiometric = false;
         let hasNotifications = false;
 

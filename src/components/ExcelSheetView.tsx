@@ -469,7 +469,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#cbd5e1' }} />
                   <YAxis
                     tick={{ fontSize: 10, fill: '#cbd5e1' }}
-                    tickFormatter={(v) => `${(v / 1000).toFixed(1)}T`}
+                    tickFormatter={(v) => `${formatDecimal(v / 1000, 1)}T`}
                   />
                   <Tooltip
                     formatter={(val: any, name: any) => [
