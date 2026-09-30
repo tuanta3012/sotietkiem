@@ -121,6 +121,7 @@ jobs:
       - name: Generate App Icons
         run: |
           npx @capacitor/assets generate --android || true
+          python3 scripts/generate_app_icons.py || true
 
       # 8. Khởi tạo & Sử dụng Keystore cố định trong Repo (Không bao giờ đổi SHA-1)
       - name: Setup Permanent Fixed Keystore

@@ -270,7 +270,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             <span className="font-semibold text-slate-300">v{currentVersion || '1.0.13'}</span>
           </div>
 
-          {import.meta.env.VITE_APP_MODE !== 'play' && (
+          {(import.meta as any).env.VITE_APP_MODE !== 'play' && (
             hasNewUpdate ? (
               <button
                 type="button"

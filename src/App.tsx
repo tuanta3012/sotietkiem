@@ -17,7 +17,10 @@ import { BiometricUnlockModal } from './components/BiometricUnlockModal';
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { BookListView } from './components/BookListView';
 import { AppModals } from './components/AppModals';
+import { LoginConflictResolveModal } from './components/LoginConflictResolveModal';
 import {
+  downloadRealGoogleDriveFile,
+  updateRealGoogleDriveFile,
   getGoogleAccessToken,
   setGoogleAccessToken,
   restoreGoogleAuthSession,
@@ -29,6 +32,7 @@ import {
   removeMemberFromDriveMaster,
 } from './utils/googleDriveService';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
+import { sortAndReindexBooks } from './utils/dataTranslator';
 import {
   getDynamicAnnualInterestHistory,
   getDynamicBalanceGrowthHistory,
@@ -118,6 +122,11 @@ export default function App() {
   const [isLogoutWarningModalOpen, setIsLogoutWarningModalOpen] = useState<boolean>(false);
   const [showFileDeletedRecovery, setShowFileDeletedRecovery] = useState<boolean>(false);
   const [isClearDataModalOpen, setIsClearDataModalOpen] = useState<boolean>(false);
+
+  // States to manage conflict when logging in online with existing offline books
+  const [conflictHub, setConflictHub] = useState<any | null>(null);
+  const [conflictToken, setConflictToken] = useState<string | null>(null);
+  const [conflictUser, setConflictUser] = useState<AuthUser | null>(null);
 
   // App settings state - Hỗ trợ khôi phục đồng bộ đa tầng (Direct keys + JSON settings)
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -402,7 +411,7 @@ export default function App() {
 
   const checkAppUpdate = useCallback(async (manual: boolean = false) => {
     // Nếu là phiên bản chạy Google Play, tắt hoàn toàn việc kiểm tra cập nhật APK trực tiếp
-    if (import.meta.env.VITE_APP_MODE === 'play') {
+    if ((import.meta as any).env.VITE_APP_MODE === 'play') {
       if (manual) {
         showToast('Tính năng cập nhật trực tiếp bị tắt trên phiên bản Google Play Store.', 'info');
       }
@@ -417,7 +426,7 @@ export default function App() {
     if (Capacitor.isNativePlatform()) {
       try {
         const info = await CapApp.getInfo();
-        if (info.installerPackageName === 'com.android.vending' && !manual) {
+        if ((info as any).installerPackageName === 'com.android.vending' && !manual) {
           console.info('[Update Check] Ứng dụng chạy từ Google Play Store. Tự động ẩn thông báo cập nhật in-app.');
           return;
         }
@@ -729,19 +738,20 @@ export default function App() {
   };
 
   const clearSessionAndLocalData = () => {
-    handleDeleteAllAppData();
-    setSettings((prev) => ({
-      ...prev,
-      googleSheetUrl: undefined,
-      googleSheetName: undefined,
-      lastSyncTime: undefined,
-      lastLocalLinkTimestamp: undefined,
-    }));
+    // 1. Đồng bộ xóa sạch mọi dữ liệu tài chính trong localStorage ngay lập tức để tránh race condition khi unmount
     try {
+      localStorage.removeItem('savings_books_v3');
+      localStorage.removeItem('savings_settlements_v3');
+      localStorage.setItem('savings_books_cleared', 'true');
       localStorage.removeItem('savings_auth_user_v3');
       localStorage.removeItem('google_drive_access_token');
       localStorage.removeItem('google_drive_access_token_v4');
       sessionStorage.removeItem('google_drive_access_token_v4');
+      
+      // Xóa sạch dấu vết liên kết file để tránh liên kết tự động sau này
+      localStorage.removeItem('last_linked_file_id_v2');
+      localStorage.removeItem('master_pointer_file_id');
+      localStorage.removeItem('master_sync_state_local_v2');
       
       const savedSettings = localStorage.getItem('savings_settings_v3');
       if (savedSettings) {
@@ -755,10 +765,21 @@ export default function App() {
     } catch (err) {
       console.warn('Lỗi khi xóa sạch dữ liệu cục bộ khi đăng xuất:', err);
     }
-  };
 
-  const handleDeleteAppDataAndUnlink = () => {
-    handleDeleteAllAppData();
+    // 2. Xóa khỏi Capacitor Preferences để tránh tự động khôi phục phiên khi khởi động lại ứng dụng
+    try {
+      Preferences.remove({ key: 'savings_auth_user_v3' }).catch(() => {});
+      Preferences.remove({ key: 'savings_books_v3' }).catch(() => {});
+      Preferences.remove({ key: 'savings_settlements_v3' }).catch(() => {});
+    } catch (err) {
+      console.warn('Lỗi khi dọn dẹp Capacitor Preferences:', err);
+    }
+
+    // 3. Xóa cứng React State (Bỏ qua hoàn toàn canEditData check của hook) để dọn sạch dữ liệu hiển thị tức thì
+    setBooks([]);
+    setSettlementAdjustments([]);
+    clearStaticHistoryFromStorage();
+
     setSettings((prev) => ({
       ...prev,
       googleSheetUrl: undefined,
@@ -766,7 +787,18 @@ export default function App() {
       lastSyncTime: undefined,
       lastLocalLinkTimestamp: undefined,
     }));
+  };
+
+  const handleDeleteAppDataAndUnlink = () => {
     try {
+      // Xóa sạch dấu vết liên kết file & dữ liệu trong localStorage
+      localStorage.removeItem('savings_books_v3');
+      localStorage.removeItem('savings_settlements_v3');
+      localStorage.setItem('savings_books_cleared', 'true');
+      localStorage.removeItem('last_linked_file_id_v2');
+      localStorage.removeItem('master_pointer_file_id');
+      localStorage.removeItem('master_sync_state_local_v2');
+
       const savedSettings = localStorage.getItem('savings_settings_v3');
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
@@ -779,16 +811,29 @@ export default function App() {
     } catch (err) {
       console.warn('Lỗi khi xóa thông tin liên kết:', err);
     }
+
+    // Xóa cứng React State để dọn sạch dữ liệu hiển thị tức thì
+    setBooks([]);
+    setSettlementAdjustments([]);
+    clearStaticHistoryFromStorage();
+
+    setSettings((prev) => ({
+      ...prev,
+      googleSheetUrl: undefined,
+      googleSheetName: undefined,
+      lastSyncTime: undefined,
+      lastLocalLinkTimestamp: undefined,
+    }));
   };
 
   // Logout Safeguard
   const handleRequestLogout = async () => {
     if (currentUser?.isOffline) {
-      await signOutGoogle();
       clearSessionAndLocalData();
       setCurrentUser(null);
       setIsUnlocked(false);
       setGoogleAccessToken(null);
+      signOutGoogle().catch(() => {});
       return;
     }
 
@@ -796,28 +841,35 @@ export default function App() {
       setIsSyncingDrive(true);
       setSyncDriveStatus('Đang tự động đồng bộ dữ liệu mới nhất lên Google Drive trước khi đăng xuất...');
       try {
-        await pushBooksToDrive(books);
+        // Tối đa 1.5 giây để đồng bộ, nếu quá thời gian hoặc lỗi mạng, buộc phải bỏ qua để logout lập tức để tránh treo UI
+        const pushPromise = pushBooksToDrive(books);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Sync timeout')), 1500)
+        );
+        await Promise.race([pushPromise, timeoutPromise]);
         setSyncDriveStatus('Đã đồng bộ thành công lên Google Drive. Đã đăng xuất!');
       } catch (err: any) {
-        console.error('Lỗi tự động đồng bộ trước khi đăng xuất:', err);
+        console.warn('Bỏ qua đồng bộ trước đăng xuất do trễ hoặc lỗi mạng (an toàn):', err?.message || err);
       } finally {
         setIsSyncingDrive(false);
       }
-      await signOutGoogle();
+      
+      // Đăng xuất UI lập tức không chờ tác vụ mạng chặn UI
       clearSessionAndLocalData();
       setCurrentUser(null);
       setIsUnlocked(false);
       setGoogleAccessToken(null);
+      signOutGoogle().catch(() => {});
       setTimeout(() => setSyncDriveStatus(null), 3000);
     } else {
       if (books.length > 0) {
         setIsLogoutWarningModalOpen(true);
       } else {
-        await signOutGoogle();
         clearSessionAndLocalData();
         setCurrentUser(null);
         setIsUnlocked(false);
         setGoogleAccessToken(null);
+        signOutGoogle().catch(() => {});
       }
     }
   };
@@ -930,24 +982,134 @@ export default function App() {
 
   const handleConfirmLogoutAnyway = useCallback(async () => {
     setIsLogoutWarningModalOpen(false);
-    await signOutGoogle();
+    
+    // Đăng xuất UI và xóa dữ liệu lập tức (0ms delay)
     clearSessionAndLocalData();
     setCurrentUser(null);
     setIsUnlocked(false);
     setGoogleAccessToken(null);
+
+    // Chạy ngầm dọn dẹp phiên Google/Firebase ngoài mạng để tối ưu tốc độ phản hồi
+    signOutGoogle().catch((err) => console.warn('Background sign out warning:', err));
   }, []);
 
   const handleExportAndLogout = useCallback(async () => {
     const annualHistory = getDynamicAnnualInterestHistory(books, settlementAdjustments);
     const balanceHistory = getDynamicBalanceGrowthHistory(books, settlementAdjustments);
+    
+    // 1. Thực hiện xuất file Excel lưu về máy trước
     await exportSavingsBooksToExcel(books, `So_Tiet_Kiem_Gia_Dinh_Backup_${CURRENT_DATE}.xlsx`, annualHistory, balanceHistory);
+    
     setIsLogoutWarningModalOpen(false);
-    await signOutGoogle();
+    
+    // 2. Đăng xuất UI lập tức
     clearSessionAndLocalData();
     setCurrentUser(null);
     setIsUnlocked(false);
     setGoogleAccessToken(null);
+
+    // 3. Đăng xuất Google ngầm
+    signOutGoogle().catch((err) => console.warn('Background sign out warning:', err));
   }, [books, settlementAdjustments]);
+
+  // 4. Các hàm xử lý xung đột đồng bộ giữa sổ tiết kiệm ngoại tuyến và Google Drive
+  const resolveConflictMerge = async () => {
+    if (!conflictHub || !conflictToken || !conflictUser) return;
+    setIsSyncingDrive(true);
+    setSyncDriveStatus('Đang thực hiện gộp dữ liệu ngoại tuyến và tệp Google Drive...');
+    const fileId = conflictHub.id;
+    try {
+      const res = await downloadRealGoogleDriveFile(conflictToken, fileId);
+      if (res.success) {
+        // Gộp danh sách sổ tiết kiệm (Union theo ID)
+        const localBooks = books || [];
+        const remoteBooks = res.books || [];
+        const bookMap = new Map<string, SavingsBook>();
+        remoteBooks.forEach((b: SavingsBook) => bookMap.set(b.id, b));
+        localBooks.forEach((b: SavingsBook) => bookMap.set(b.id, b));
+        const mergedBooks = sortAndReindexBooks(Array.from(bookMap.values()));
+
+        // Gộp nhật ký tất toán (Union theo ID)
+        const localAdjs = settlementAdjustments || [];
+        const remoteAdjs = res.settlements || [];
+        const adjMap = new Map<string, SettlementAdjustment>();
+        remoteAdjs.forEach((a: SettlementAdjustment) => adjMap.set(a.id, a));
+        localAdjs.forEach((a: SettlementAdjustment) => adjMap.set(a.id, a));
+        const mergedAdjs = Array.from(adjMap.values());
+
+        // Cập nhật React State cục bộ
+        setBooks(mergedBooks);
+        setSettlementAdjustments(mergedAdjs);
+
+        // Thiết lập liên kết Google Sheet trong settings
+        const hubUrl = conflictHub.webViewLink || `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
+        setSettings((prev) => ({
+          ...prev,
+          googleSheetUrl: hubUrl,
+          googleSheetName: conflictHub.name,
+          lastLocalLinkTimestamp: conflictHub.linkedTimestamp || new Date().toISOString(),
+        }));
+
+        // Đẩy toàn bộ dữ liệu đã gộp ngược lên Drive trung tâm ngay lập tức
+        await updateRealGoogleDriveFile(conflictToken, fileId, mergedBooks, mergedAdjs);
+        const nowStr = new Date().toLocaleString('vi-VN');
+        setSettings((prev) => ({ ...prev, lastSyncTime: nowStr }));
+
+        showToast('Gộp dữ liệu thành công! Sổ cũ trên Drive và sổ ngoại tuyến mới đã được đồng bộ đồng nhất.', 'success');
+      } else {
+        showToast('Không thể tải dữ liệu cũ từ Google Drive để gộp. Vui lòng kiểm tra mạng.', 'error');
+      }
+    } catch (err: any) {
+      console.error('Merge conflict error:', err);
+      showToast('Lỗi khi gộp dữ liệu: ' + (err?.message || err), 'error');
+    } finally {
+      setIsSyncingDrive(false);
+      setSyncDriveStatus(null);
+      setConflictHub(null);
+      setConflictToken(null);
+      setConflictUser(null);
+    }
+  };
+
+  const resolveConflictOverwriteLocal = async () => {
+    if (!conflictHub || !conflictToken || !conflictUser) return;
+    const fileId = conflictHub.id;
+    const hubUrl = conflictHub.webViewLink || `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
+    setSettings((prev) => ({
+      ...prev,
+      googleSheetUrl: hubUrl,
+      googleSheetName: conflictHub.name,
+      lastLocalLinkTimestamp: conflictHub.linkedTimestamp || new Date().toISOString(),
+    }));
+    setConflictHub(null);
+    setConflictToken(null);
+    setConflictUser(null);
+    showToast('Đang thiết lập kết nối và tải toàn bộ sổ cũ từ Google Drive về máy...', 'info');
+    setTimeout(() => {
+      syncBooksFromDrive(false, conflictToken);
+    }, 200);
+  };
+
+  const resolveConflictCreateNewFile = () => {
+    setConflictHub(null);
+    setConflictToken(null);
+    setConflictUser(null);
+    setIsSyncModalOpen(true);
+    showToast('Vui lòng nhấp vào nút "Tạo file mới" hoặc "Chọn file" trong bảng đồng bộ.', 'info');
+  };
+
+  const resolveConflictClose = () => {
+    // Trở lại chế độ ngoại tuyến bằng cách hủy phiên Google vừa đăng nhập
+    setConflictHub(null);
+    setConflictToken(null);
+    setConflictUser(null);
+    clearSessionAndLocalData();
+    setCurrentUser(null);
+    setIsUnlocked(false);
+    setGoogleAccessToken(null);
+    signOutGoogle().catch(() => {});
+    showToast('Đã hủy đăng nhập Google. Bạn tiếp tục sử dụng app ở chế độ Ngoại tuyến.', 'info');
+  };
 
   if (!currentUser) {
     return (
@@ -968,14 +1130,22 @@ export default function App() {
                   // Kiểm tra xem tài khoản này đã có file liên kết trung tâm trên Google Drive chưa
                   const hub = await autoDiscoverLatestCentralHub(token, user.email);
                   if (hub && hub.id && (hub as any).status !== 'unlinked' && (hub as any).lastAction !== 'unlink') {
-                    const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-                    setSettings((prev) => ({
-                      ...prev,
-                      googleSheetUrl: hubUrl,
-                      googleSheetName: hub.name,
-                      lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-                    }));
-                    syncBooksFromDrive(false, token);
+                    // Nếu thiết bị đang có sổ ngoại tuyến mới (books.length > 0), không tự động liên kết
+                    // Mà hiển thị Modal giải quyết xung đột để người dùng lựa chọn (gộp, ghi đè hoặc tạo mới)
+                    if (books.length > 0) {
+                      setConflictHub(hub);
+                      setConflictToken(token);
+                      setConflictUser(user);
+                    } else {
+                      const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+                      setSettings((prev) => ({
+                        ...prev,
+                        googleSheetUrl: hubUrl,
+                        googleSheetName: hub.name,
+                        lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+                      }));
+                      syncBooksFromDrive(false, token);
+                    }
                   } else if (!settings.googleSheetUrl) {
                     // Mở modal đồng bộ để hỗ trợ tạo file liên kết mới hoặc chọn file có sẵn
                     setIsSyncModalOpen(true);
@@ -1280,6 +1450,17 @@ export default function App() {
         currentVersion={CURRENT_APP_VERSION}
         updateInfo={updateInfo}
         onClose={() => setIsUpdateModalOpen(false)}
+      />
+
+      {/* Login Sync Conflict Resolution Modal */}
+      <LoginConflictResolveModal
+        isOpen={!!conflictHub}
+        onClose={resolveConflictClose}
+        fileName={conflictHub?.name || 'Sổ Tiết Kiệm Gia Đình'}
+        localBooksCount={books.length}
+        onResolveMerge={resolveConflictMerge}
+        onResolveOverwriteLocal={resolveConflictOverwriteLocal}
+        onResolveCreateNewFile={resolveConflictCreateNewFile}
       />
     </div>
   );

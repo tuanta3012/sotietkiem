@@ -447,7 +447,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
 
                     {/* Phiên bản & Cập nhật */}
-                    {import.meta.env.VITE_APP_MODE === 'play' ? (
+                    {(import.meta as any).env.VITE_APP_MODE === 'play' ? (
                       <div className="w-full flex items-center justify-between p-2.5 rounded-xl text-slate-400 text-left">
                         <div className="flex items-center space-x-2.5">
                           <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
