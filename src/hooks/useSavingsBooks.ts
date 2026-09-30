@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { SavingsBook, SettlementAdjustment, BookStatus, canEditData } from '../types';
 import { sortAndReindexBooks, normalizeOwner, deduplicateSettlementAdjustments, normalizeDateToISO } from '../utils/dataTranslator';
-import { formatDateVN, getOwnerLabel } from '../utils/formatters';
+import { formatDateVN, getOwnerLabel, formatDecimal } from '../utils/formatters';
 import { calculateInterest, getDaysBetween } from '../utils/calculator';
 import { getSortedBanksByUsage } from '../data/banks';
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
@@ -259,10 +259,10 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
           reinvested: false,
           note: isEarly
             ? (originalMaturityYear > settlementYear
-                ? `Tất toán trước hạn ngày ${formatDateVN(settlementDate)}. Lãi thực nhận năm ${settlementYear}: +${(actualInterestVND / 1_000_000).toFixed(1)} Tr. Lãi bị mất năm ${originalMaturityYear}: -${(expectedTermInterest / 1_000_000).toFixed(1)} Tr.`
-                : `Tất toán trước hạn ngày ${formatDateVN(settlementDate)}. Lãi thực nhận năm ${settlementYear}: +${(actualInterestVND / 1_000_000).toFixed(1)} Tr. Lãi bị mất năm ${settlementYear}: -${(lostInterestVND / 1_000_000).toFixed(1)} Tr.`
+                ? `Tất toán trước hạn ngày ${formatDateVN(settlementDate)}. Lãi thực nhận năm ${settlementYear}: +${formatDecimal(actualInterestVND / 1_000_000, 1)} Tr. Lãi bị mất năm ${originalMaturityYear}: -${formatDecimal(expectedTermInterest / 1_000_000, 1)} Tr.`
+                : `Tất toán trước hạn ngày ${formatDateVN(settlementDate)}. Lãi thực nhận năm ${settlementYear}: +${formatDecimal(actualInterestVND / 1_000_000, 1)} Tr. Lãi bị mất năm ${settlementYear}: -${formatDecimal(lostInterestVND / 1_000_000, 1)} Tr.`
               )
-            : `Tất toán đúng hạn ngày ${formatDateVN(settlementDate)}. Lãi nhận đủ năm ${settlementYear}: +${(actualInterestVND / 1_000_000).toFixed(1)} Tr.`,
+            : `Tất toán đúng hạn ngày ${formatDateVN(settlementDate)}. Lãi nhận đủ năm ${settlementYear}: +${formatDecimal(actualInterestVND / 1_000_000, 1)} Tr.`,
           timestamp: Date.now(),
           originalMaturityYear,
         };
@@ -358,9 +358,10 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
           expectedTermInterest,
           lostInterestVND: 0,
           reinvested: true,
-          note: `Tất toán đáo hạn & tái tục chu kỳ mới từ ${formatDateVN(settlementDate)}. Lãi ghi nhận: ${(
-            expectedTermInterest / 1_000_000
-          ).toFixed(2)} Tr.`,
+          note: `Tất toán đáo hạn & tái tục chu kỳ mới từ ${formatDateVN(settlementDate)}. Lãi ghi nhận: ${formatDecimal(
+            expectedTermInterest / 1_000_000,
+            2
+          )} Tr.`,
           timestamp: Date.now(),
         };
 

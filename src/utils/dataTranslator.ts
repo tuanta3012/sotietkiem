@@ -349,6 +349,12 @@ export function translateMoneyFromSheet(val: any): number {
     } else {
       str = str.replace(/,/g, '');
     }
+  } else if (str.includes('.') && !str.includes(',')) {
+    const parts = str.split('.');
+    // If multiple dots (e.g. "1.000.000") or single dot followed by 3 digits (e.g. "1.080" or "3.450" in VN thousands format)
+    if (parts.length > 2 || (parts.length === 2 && parts[1].length === 3)) {
+      str = parts.join('');
+    }
   }
 
   const num = parseFloat(str);

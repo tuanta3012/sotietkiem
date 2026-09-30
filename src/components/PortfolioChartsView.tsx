@@ -20,7 +20,7 @@ import {
 import { SavingsBook, AppSettings, SettlementAdjustment } from '../types';
 import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory } from '../data/historicalGrowth';
 import { getBankById } from '../data/banks';
-import { formatVND, formatDateVN, formatAdaptiveVND, formatAdaptiveShortVND, formatShortVND } from '../utils/formatters';
+import { formatVND, formatDateVN, formatAdaptiveVND, formatAdaptiveShortVND, formatShortVND, formatPercent, formatDecimal } from '../utils/formatters';
 import { getDaysBetween } from '../utils/calculator';
 import {
   BarChart3,
@@ -486,7 +486,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                 +{formatAdaptiveVND(totalTermInterest, settings.privacyMode)}
               </span>
               <span className="text-[10px] text-slate-500 block mt-0.5">
-                Lãi suất BQ {averageRate.toFixed(2)}%/năm
+                Lãi suất BQ {formatPercent(averageRate)}/năm
               </span>
             </div>
           </div>
@@ -663,7 +663,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
               </p>
             </div>
             <span className="px-3 py-1 bg-amber-50 text-amber-800 text-xs font-bold rounded-lg">
-              Lãi suất bình quân: {averageRate.toFixed(2)}%/năm
+              Lãi suất bình quân: {formatPercent(averageRate)}/năm
             </span>
           </div>
 
@@ -674,7 +674,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                 <XAxis dataKey="range" tick={{ fontSize: 11, fill: '#475569' }} />
                 <YAxis
                   tick={{ fontSize: 11, fill: '#475569' }}
-                  tickFormatter={(val) => `${(val / 1000).toFixed(1)}T`}
+                  tickFormatter={(val) => `${formatDecimal(val / 1000, 1)}T`}
                 />
                 <Tooltip
                   formatter={(val: any) => [`${Number(val).toLocaleString('vi-VN')} Tr VNĐ`, 'Số tiền gửi']}
@@ -696,7 +696,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start space-x-2">
             <Award className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <p>
-              <strong>Nhận định danh mục:</strong> Danh mục hiện đang được phân bổ trên các mức lãi suất tối ưu với lãi suất bình quân <strong>{averageRate.toFixed(2)}%/năm</strong>.
+              <strong>Nhận định danh mục:</strong> Danh mục hiện đang được phân bổ trên các mức lãi suất tối ưu với lãi suất bình quân <strong>{formatPercent(averageRate)}/năm</strong>.
             </p>
           </div>
         </div>

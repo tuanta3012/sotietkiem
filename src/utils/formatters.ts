@@ -21,6 +21,38 @@ const VN_NUMBER_FORMATTER_2DEC = new Intl.NumberFormat('vi-VN', {
   maximumFractionDigits: 2,
 });
 
+/**
+ * Định dạng phần trăm chuẩn Việt Nam (sử dụng dấu phẩy làm phân cách thập phân).
+ * Ví dụ: 8.2 -> "8,20%", 6.55 -> "6,55%", 8 -> "8,00%" (hoặc gọn "8,2%" nếu tùy chỉnh)
+ */
+export function formatPercent(
+  rate: number | string | null | undefined,
+  decimals: number = 2
+): string {
+  if (rate === null || rate === undefined || rate === '') return '0%';
+  const num = typeof rate === 'string' ? parseFloat(rate.replace(',', '.')) : rate;
+  if (isNaN(num)) return '0%';
+  const formatted = num.toFixed(decimals).replace('.', ',');
+  return `${formatted}%`;
+}
+
+/**
+ * Định dạng số thập phân chuẩn Việt Nam (dấu phẩy cách thập phân, dấu chấm cách hàng nghìn).
+ * Ví dụ: 3.8 -> "3,8", 1234.5 -> "1.234,5"
+ */
+export function formatDecimal(
+  val: number | string | null | undefined,
+  decimals: number = 1
+): string {
+  if (val === null || val === undefined || val === '') return '0';
+  const num = typeof val === 'string' ? parseFloat(val.replace(',', '.')) : val;
+  if (isNaN(num)) return '0';
+  return new Intl.NumberFormat('vi-VN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: decimals,
+  }).format(num);
+}
+
 export function formatVND(amount: number, hideAmount: boolean = false): string {
   if (hideAmount) {
     return '•••••••• đ';

@@ -29,6 +29,7 @@ import {
   formatShortVND,
   formatDateVN,
   formatRelativeDays,
+  formatDecimal,
   getOwnerLabel,
   getOwnerBadgeStyle,
 } from '../utils/formatters';
@@ -219,7 +220,7 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                 <XAxis dataKey="monthLabel" tick={{ fontSize: 11, fill: '#475569' }} />
                 <YAxis
                   tick={{ fontSize: 11, fill: '#475569' }}
-                  tickFormatter={(val) => `${(val / 1000).toFixed(1)}T`}
+                  tickFormatter={(val) => `${formatDecimal(val / 1000, 1)}T`}
                 />
                 <Tooltip
                   formatter={(val: any, name: any) => [

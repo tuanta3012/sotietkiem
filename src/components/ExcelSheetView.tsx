@@ -18,6 +18,8 @@ import {
   formatAdaptiveVND,
   formatAdaptiveShortVND,
   formatDateVN,
+  formatPercent,
+  formatDecimal,
   getOwnerLabel,
   getOwnerBadgeStyle,
   DEFAULT_OWNER_TAGS,
@@ -410,10 +412,10 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
               Lãi suất bình quân
             </span>
             <span className="text-base sm:text-xl font-bold text-yellow-300 block mt-1 font-mono tracking-tight">
-              {summary.weightedAvgRate.toFixed(2)}% / năm
+              {formatPercent(summary.weightedAvgRate)} / năm
             </span>
             <span className="text-[10px] sm:text-[11px] text-emerald-300 mt-0.5 truncate">
-              {highestRateBook ? `Đỉnh: ${highestRateBook.interestRate.toFixed(2)}% (${getBankById(highestRateBook.bankId).code})` : 'Chưa có sổ'}
+              {highestRateBook ? `Đỉnh: ${formatPercent(highestRateBook.interestRate)} (${getBankById(highestRateBook.bankId).code})` : 'Chưa có sổ'}
             </span>
           </div>
         </div>
@@ -726,7 +728,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                               : 'bg-slate-100 text-slate-900 border-slate-200'
                           }`}
                         >
-                          {item.interestRate.toFixed(2)}%
+                          {formatPercent(item.interestRate)}
                         </span>
                       </td>
 
@@ -809,7 +811,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                     {formatMoney(summary.totalPrincipal)}
                   </td>
                   <td colSpan={4} className="py-1.5 px-2 text-center text-slate-200 font-extrabold text-[11px] sm:text-[12px]">
-                    Lãi suất BQ: <span className="text-yellow-300 font-black">{summary.weightedAvgRate.toFixed(2)}%/năm</span>
+                    Lãi suất BQ: <span className="text-yellow-300 font-black">{formatPercent(summary.weightedAvgRate)}/năm</span>
                   </td>
                   {/* Tổng tiền lãi theo sổ */}
                   <td className="py-1.5 px-1 text-right text-amber-400 font-mono font-black text-xs sm:text-[13.5px]">
@@ -965,7 +967,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
               <div className="flex flex-wrap items-center justify-between text-slate-600 gap-1">
                 {bankBreakdown.map((bk) => (
                   <span key={bk.code}>
-                    {bk.code} ({bk.count} sổ): <strong style={{ color: bk.color }}>{formatShortVND(bk.amount, settings.privacyMode)}</strong> ({bk.percent.toFixed(1)}%)
+                    {bk.code} ({bk.count} sổ): <strong style={{ color: bk.color }}>{formatShortVND(bk.amount, settings.privacyMode)}</strong> ({formatPercent(bk.percent, 1)})
                   </span>
                 ))}
               </div>
@@ -975,7 +977,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                     key={bk.code}
                     className="h-full"
                     style={{ width: `${bk.percent}%`, backgroundColor: bk.color }}
-                    title={`${bk.code}: ${bk.percent.toFixed(1)}%`}
+                    title={`${bk.code}: ${formatPercent(bk.percent, 1)}`}
                   />
                 ))}
               </div>
@@ -1015,7 +1017,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                 <strong className="text-emerald-700 font-bold">~{formatShortVND(summary.monthlyAverageInterest, settings.privacyMode)}/tháng</strong>
               </div>
               <p className="text-[11px] text-slate-500">
-                Lãi suất cao nhất: <strong className="text-rose-700">{highestRateBook ? `${highestRateBook.interestRate.toFixed(2)}%/năm` : '0%'}</strong> {highestRateBook ? `(${getBankById(highestRateBook.bankId).code} - ${formatShortVND(highestRateBook.principal, settings.privacyMode)})` : ''}.
+                Lãi suất cao nhất: <strong className="text-rose-700">{highestRateBook ? `${formatPercent(highestRateBook.interestRate)}/năm` : '0%'}</strong> {highestRateBook ? `(${getBankById(highestRateBook.bankId).code} - ${formatShortVND(highestRateBook.principal, settings.privacyMode)})` : ''}.
               </p>
             </div>
           </div>
@@ -1095,7 +1097,7 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
                       <div className="bg-amber-50/90 p-2.5 rounded-2xl border border-amber-200/80 col-span-2 flex items-center justify-between">
                         <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">2. LÃI SUẤT ({selectedSummaryBook.termMonths}T):</span>
                         <span className="text-base sm:text-lg font-black font-mono text-amber-700">
-                          {selectedSummaryBook.interestRate.toFixed(2)}%/năm
+                          {formatPercent(selectedSummaryBook.interestRate)}/năm
                         </span>
                       </div>
 

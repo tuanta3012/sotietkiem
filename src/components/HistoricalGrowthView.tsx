@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { SavingsBook, AppSettings, SettlementAdjustment } from '../types';
 import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory } from '../data/historicalGrowth';
-import { formatVND, formatShortVND } from '../utils/formatters';
+import { formatVND, formatShortVND, formatPercent, formatDecimal } from '../utils/formatters';
 import { 
   TrendingUp, 
   Coins, 
@@ -118,7 +118,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               Tốc độ tăng trưởng (CAGR)
             </span>
             <span className="text-2xl font-black text-amber-300 block">
-              {cagr > 0 ? `+${cagr.toFixed(1)}% / năm` : 'Ổn định'}
+              {cagr > 0 ? `+${formatPercent(cagr, 1)} / năm` : 'Ổn định'}
             </span>
             <span className="text-[10px] text-slate-300">{books.length} sổ tiết kiệm đang hoạt động</span>
           </div>
@@ -146,7 +146,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
               {formatVND(currentBalance, settings.privacyMode)}
             </span>
             <span className="text-[11px] text-emerald-400 font-semibold">
-              {settings.privacyMode ? '••••••' : `${totalWealthGained >= 0 ? '+' : ''}${formatVND(totalWealthGained, settings.privacyMode)} (${percentageGained >= 0 ? '+' : ''}${percentageGained.toFixed(0)}%)`}
+              {settings.privacyMode ? '••••••' : `${totalWealthGained >= 0 ? '+' : ''}${formatVND(totalWealthGained, settings.privacyMode)} (${percentageGained >= 0 ? '+' : ''}${formatPercent(percentageGained, 0)})`}
             </span>
           </div>
 
@@ -207,7 +207,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
                   <span className={`text-[10px] sm:text-xs font-bold mb-1.5 transition-colors ${
                     isSelected ? 'text-indigo-600 font-black scale-110' : 'text-slate-500 group-hover:text-slate-800'
                   }`}>
-                    {settings.privacyMode ? '••••' : `${(item.balanceMillion / 1000).toFixed(1)}T`}
+                    {settings.privacyMode ? '••••' : `${formatDecimal(item.balanceMillion / 1000, 1)}T`}
                   </span>
 
                   {/* Column Bar */}
@@ -236,7 +236,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
-            <span>{dynamicBalanceGrowth[0]?.year}: {settings.privacyMode ? '••••••' : `${((dynamicBalanceGrowth[0]?.balanceMillion || 0) / 1000).toFixed(1)} Tỷ VNĐ`}</span>
+            <span>{dynamicBalanceGrowth[0]?.year}: {settings.privacyMode ? '••••••' : `${formatDecimal((dynamicBalanceGrowth[0]?.balanceMillion || 0) / 1000, 1)} Tỷ VNĐ`}</span>
             <span className="text-[10px] text-emerald-600 font-semibold">* Số liệu Thực tế chốt số</span>
             <span className="font-bold text-emerald-700">{lastYear}: {formatShortVND(currentBalance, settings.privacyMode)}</span>
           </div>

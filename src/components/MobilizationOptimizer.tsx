@@ -51,6 +51,7 @@ import {
   formatShortVND,
   formatMillionVND,
   formatDateVN,
+  formatPercent,
   getOwnerLabel,
   getOwnerBadgeStyle,
   formatNumberWithDots,
@@ -1086,7 +1087,7 @@ export const MobilizationOptimizer: React.FC<MobilizationOptimizerProps> = ({
                       {Math.round(activeDayResult.optimalTotalCost / 1_000_000).toLocaleString('vi-VN')} Tr VNĐ
                     </span>
                     <span className="text-[10px] font-bold text-slate-500">
-                      (~{((activeDayResult.optimalTotalCost / (activeDayResult.optimalTotalCash || 1)) * 100).toFixed(2)}%)
+                      (~{formatPercent((activeDayResult.optimalTotalCost / (activeDayResult.optimalTotalCash || 1)) * 100)})
                     </span>
                   </div>
                 </div>

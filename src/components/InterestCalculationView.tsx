@@ -40,7 +40,7 @@ import {
   SlidersHorizontal,
   ChevronRight,
 } from 'lucide-react';
-import { getOwnerLabel, formatAdaptiveShortVND, formatAdaptiveVND } from '../utils/formatters';
+import { getOwnerLabel, formatAdaptiveShortVND, formatAdaptiveVND, formatPercent, formatDecimal } from '../utils/formatters';
 
 interface InterestCalculationViewProps {
   books: SavingsBook[];
@@ -559,7 +559,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
               <Percent className="w-3 h-3 text-yellow-300/80" />
             </span>
             <span className="text-sm sm:text-base font-black text-yellow-300 block mt-1 tracking-tight">
-              {weightedAvgRate.toFixed(2)}%/năm
+              {formatPercent(weightedAvgRate)}/năm
             </span>
           </div>
         </div>
@@ -610,7 +610,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                       {formatShortNumber(item.totalCashflowMillion)} Tr
                     </td>
                     <td className="py-2.5 px-3 text-right font-semibold text-slate-800">
-                      {item.avgRate.toFixed(2)}%
+                      {formatPercent(item.avgRate)}
                     </td>
                   </tr>
                 ))}
@@ -628,7 +628,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                     {formatShortNumber(Math.round(totalCashflowVND / 1_000_000))} Tr
                   </td>
                   <td className="py-2.5 px-3 text-right text-slate-900">
-                    {weightedAvgRate.toFixed(2)}%
+                    {formatPercent(weightedAvgRate)}
                   </td>
                 </tr>
               </tbody>
@@ -835,7 +835,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                   backgroundColor: item.color,
                 }}
                 className="h-full border-r-2 border-white first:rounded-l-full last:rounded-r-full last:border-r-0 transition-all"
-                title={`${item.shortName}: ${item.percent.toFixed(1)}% (${item.principalMillion.toLocaleString('vi-VN')} Tr)`}
+                title={`${item.shortName}: ${formatPercent(item.percent, 1)} (${item.principalMillion.toLocaleString('vi-VN')} Tr)`}
               />
             ))}
           </div>
@@ -844,7 +844,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
             <span>
               Top cao nhất:{' '}
               <strong className="text-slate-800 font-bold">
-                {allocationStats.topItem?.shortName} ({allocationStats.topItem?.percent.toFixed(1)}%)
+                {allocationStats.topItem?.shortName} ({formatPercent(allocationStats.topItem?.percent, 1)})
               </strong>
             </span>
             <span>
@@ -887,7 +887,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                 {allocationStats.topItem?.shortName || 'Tỷ trọng'}
               </span>
               <span className="text-base font-black text-slate-900 leading-tight">
-                {allocationStats.topItem ? `${allocationStats.topItem.percent.toFixed(1)}%` : '100%'}
+                {allocationStats.topItem ? `${formatPercent(allocationStats.topItem.percent, 1)}` : '100%'}
               </span>
               <span className="text-[10px] font-bold text-indigo-600">
                 {formatMoney(allocationStats.totActivePrincipal)}
@@ -922,7 +922,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                     className="text-[10px] font-black px-2 py-0.5 rounded-md text-white shrink-0 shadow-2xs"
                     style={{ backgroundColor: item.color }}
                   >
-                    {item.percent.toFixed(1)}%
+                    {formatPercent(item.percent, 1)}
                   </span>
                 </div>
 
@@ -936,7 +936,7 @@ export const InterestCalculationView: React.FC<InterestCalculationViewProps> = (
                   <div className="text-center">
                     <span className="text-[10px] text-slate-400 block uppercase font-medium">Lãi suất BQ</span>
                     <span className="font-bold text-emerald-700 text-xs">
-                      {item.avgRate.toFixed(2)}%
+                      {formatPercent(item.avgRate)}
                     </span>
                   </div>
                   <div className="text-right">
