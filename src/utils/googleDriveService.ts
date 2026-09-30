@@ -269,6 +269,33 @@ export async function restoreGoogleAuthSession(): Promise<boolean> {
   return false;
 }
 
+let isGoogleAuthInitialized = false;
+
+/**
+ * Ensures GoogleAuth native plugin is initialized exactly once on mobile platforms.
+ */
+export async function ensureGoogleAuthInitialized(): Promise<void> {
+  if (isGoogleAuthInitialized || !Capacitor.isNativePlatform()) return;
+  try {
+    await (GoogleAuth as any).initialize({
+      clientId: firebaseConfig.oAuthClientId,
+      serverClientId: firebaseConfig.oAuthClientId,
+      scopes: [
+        'email',
+        'profile',
+        'openid',
+        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/spreadsheets',
+      ],
+      grantOfflineAccess: true,
+    });
+    isGoogleAuthInitialized = true;
+  } catch (err) {
+    console.warn('[GoogleAuth] Initialize warning/error:', err);
+  }
+}
+
 /**
  * Attempt to silently refresh Google credentials without showing popups/consents.
  * Returns the fresh accessToken if successful, or null if interactive re-auth is needed.
@@ -289,23 +316,7 @@ export async function trySilentRefresh(): Promise<string | null> {
   if (Capacitor.isNativePlatform()) {
     console.info('[Silent Auth] Đang gia hạn phiên làm việc ngầm trên Native...');
     try {
-      try {
-        await (GoogleAuth as any).initialize({
-          clientId: firebaseConfig.oAuthClientId,
-          serverClientId: firebaseConfig.oAuthClientId,
-          scopes: [
-            'email',
-            'profile',
-            'openid',
-            'https://www.googleapis.com/auth/drive.file',
-            'https://www.googleapis.com/auth/drive.readonly',
-            'https://www.googleapis.com/auth/spreadsheets',
-          ],
-          grantOfflineAccess: true,
-        });
-      } catch (e) {
-        // ignore initialization warning
-      }
+      await ensureGoogleAuthInitialized();
 
       // Try silent refresh using offline refresh token with a strict 8-second timeout to prevent native hangs
       try {
@@ -466,41 +477,38 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
     // 1. Native App (Capacitor) Flow
     if (Capacitor.isNativePlatform()) {
       console.info('[Google Sign-In] Khởi chạy GoogleAuth trên thiết bị Native App...');
-      try {
-        await (GoogleAuth as any).initialize({
-          clientId: firebaseConfig.oAuthClientId,
-          serverClientId: firebaseConfig.oAuthClientId,
-          scopes: [
-            'email',
-            'profile',
-            'openid',
-            'https://www.googleapis.com/auth/drive.file',
-            'https://www.googleapis.com/auth/drive.readonly',
-            'https://www.googleapis.com/auth/spreadsheets',
-          ],
-          grantOfflineAccess: true,
-        });
-      } catch (initErr) {
-        console.warn('GoogleAuth.initialize warn/error:', initErr);
-      }
+      await ensureGoogleAuthInitialized();
 
       let nativeResult: any;
       try {
-        // Clear cached Native session before interactive sign-in with a strict 3-second timeout to prevent native hangs
-        const signOutPromise = GoogleAuth.signOut();
-        const signOutTimeout = new Promise<void>((resolve) => setTimeout(resolve, 3000));
-        await Promise.race([signOutPromise, signOutTimeout]).catch(() => {});
-
+        // DO NOT call GoogleAuth.signOut() here!
+        // Calling signOut() synchronously right before signIn() interrupts native GoogleSignInClient state on Android,
+        // causing the signIn intent callback to be lost or hang indefinitely.
         const signInPromise = GoogleAuth.signIn();
         const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('TIMEOUT: Quá thời gian thao tác chọn tài khoản Google (60 giây). Vui lòng thử lại.')), 60000)
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'TIMEOUT: Quá thời gian thao tác chọn tài khoản Google (25 giây). Vui lòng kiểm tra lại thiết bị hoặc bấm Đăng nhập lại.'
+                )
+              ),
+            25000
+          )
         );
         nativeResult = await Promise.race([signInPromise, timeoutPromise]);
       } catch (signInErr: any) {
         console.error('[Google Sign-In Native Error]', signInErr);
         const rawMsg = String(signInErr?.message || signInErr || '');
-        if (rawMsg.includes('Something went wrong') || rawMsg.includes('10') || rawMsg.includes('12500')) {
-          throw new Error('Lỗi xác thực Google trên Android (Mã 10: Mã SHA-1 của APK hoặc Client ID chưa khớp với cấu hình Firebase).');
+        if (
+          rawMsg.includes('Something went wrong') ||
+          rawMsg.includes('10') ||
+          rawMsg.includes('12500') ||
+          rawMsg.includes('10002')
+        ) {
+          throw new Error(
+            'Lỗi xác thực Google trên Android (Mã 10/12500: Cần thêm mã SHA-1 Fingerprint của file APK vào Firebase Console > Project Settings).'
+          );
         }
         if (rawMsg.includes('canceled') || rawMsg.includes('12501') || rawMsg.includes('closed')) {
           throw new Error('Bạn đã hủy thao tác chọn tài khoản Google.');
@@ -670,6 +678,13 @@ export async function validateAndEnsureToken(): Promise<string> {
  * Sign out (removes all saved tokens, sessions, and credentials)
  */
 export async function signOutGoogle(): Promise<void> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await GoogleAuth.signOut();
+    } catch (err) {
+      console.warn('[GoogleAuth] Native signOut warning:', err);
+    }
+  }
   try {
     await signOut(auth);
   } finally {

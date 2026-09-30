@@ -213,6 +213,16 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
             {isNative ? (
               <div className="pt-2.5 flex flex-col gap-2 border-t border-rose-900/60">
+                {(errorMessage.includes('SHA-1') || errorMessage.includes('10')) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowShaHelp(true)}
+                    className="w-full py-2 px-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-colors cursor-pointer shadow-md"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>Xem hướng dẫn thêm mã SHA-1</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleOpenInNewTab}
