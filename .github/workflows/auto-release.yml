@@ -67,14 +67,11 @@ jobs:
           }
           EOF
 
-      # 4. Cài đặt các thư viện cần thiết (bao gồm cả Capacitor Android Core) & Build Web
+      # 4. Cài đặt các thư viện cần thiết (bao gồm cả Capacitor Android Core)
       - name: Install Dependencies
         run: |
           npm install --legacy-peer-deps
           npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
-
-      - name: Build Web Assets
-        run: npm run build
 
       # 5. Khởi tạo lại hoàn toàn thư mục Android nếu bị rỗng / thiếu file build.gradle
       - name: Generate Fresh Android Project
@@ -84,7 +81,6 @@ jobs:
             rm -rf android
             npx cap add android
           fi
-          npx cap sync android
 
       # 6. Cập nhật SDK, strings.xml (server_client_id cho Google Auth) & Phiên bản
       - name: Update Android Config, SDK & Strings
@@ -181,19 +177,43 @@ jobs:
           echo "- Mã này được cố định vĩnh viễn trong file \`keystore/debug.keystore\`." >> $GITHUB_STEP_SUMMARY
           echo "- Hãy đối chiếu với Firebase Console: nếu chưa có mã trên, bấm **Add fingerprint** và dán vào." >> $GITHUB_STEP_SUMMARY
 
-      # 9. Đóng gói cả APK (Cài trực tiếp) và AAB (Đăng Google Play Store) bằng Gradle
-      - name: Build Android APK and AAB Bundle
+      # 9. Biên dịch phiên bản APK Sideload (Có bật Kiểm tra cập nhật)
+      - name: Build Web Assets for APK
+        env:
+          VITE_APP_MODE: apk
+        run: npm run build
+
+      - name: Sync APK Assets to Android
+        run: npx cap sync android
+
+      - name: Compile APK file
         run: |
           cd android
           echo "org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8" >> gradle.properties
           chmod +x gradlew
-          ./gradlew assembleDebug bundleRelease --no-daemon
+          ./gradlew assembleDebug --no-daemon
 
-      # 10. Đổi tên tệp APK và AAB về định dạng chuẩn
-      - name: Rename APK and AAB
+      - name: Copy & Rename APK
         run: |
           mkdir -p dist-release
           cp android/app/build/outputs/apk/debug/app-debug.apk dist-release/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
+
+      # 10. Biên dịch phiên bản AAB cho Google Play (Dọn sạch hoàn toàn Kiểm tra cập nhật)
+      - name: Build Web Assets for Google Play AAB
+        env:
+          VITE_APP_MODE: play
+        run: npm run build
+
+      - name: Sync AAB Assets to Android
+        run: npx cap sync android
+
+      - name: Compile AAB file
+        run: |
+          cd android
+          ./gradlew bundleRelease --no-daemon
+
+      - name: Copy & Rename AAB
+        run: |
           if [ -f "android/app/build/outputs/bundle/release/app-release.aab" ]; then
             cp android/app/build/outputs/bundle/release/app-release.aab dist-release/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
           elif [ -f "android/app/build/outputs/bundle/debug/app-debug.aab" ]; then
@@ -209,8 +229,8 @@ jobs:
           name: Bản cập nhật v${{ steps.auto_version.outputs.NAME }}
           body: |
             Bản cập nhật tự động xuất bản từ AI Studio:
-            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk**: Bản APK cài đặt trực tiếp bên ngoài.
-            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab**: File Android App Bundle để tải lên Google Play Console.
+            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk**: Bản APK cài đặt trực tiếp bên ngoài (có tích hợp thông báo cập nhật tự động).
+            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab**: File Android App Bundle để tải lên Google Play Console (dọn sạch hoàn toàn hiển thị và tính năng cập nhật, 100% tuân thủ chính sách kiểm duyệt).
           files: dist-release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

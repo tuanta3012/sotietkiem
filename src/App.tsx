@@ -401,6 +401,14 @@ export default function App() {
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
 
   const checkAppUpdate = useCallback(async (manual: boolean = false) => {
+    // Nếu là phiên bản chạy Google Play, tắt hoàn toàn việc kiểm tra cập nhật APK trực tiếp
+    if (import.meta.env.VITE_APP_MODE === 'play') {
+      if (manual) {
+        showToast('Tính năng cập nhật trực tiếp bị tắt trên phiên bản Google Play Store.', 'info');
+      }
+      return;
+    }
+
     if (manual) {
       showToast('Đang kết nối tới máy chủ GitHub kiểm tra phiên bản mới...', 'info');
     }

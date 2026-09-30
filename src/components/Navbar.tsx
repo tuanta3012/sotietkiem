@@ -447,33 +447,47 @@ export const Navbar: React.FC<NavbarProps> = ({
                     </button>
 
                     {/* Phiên bản & Cập nhật */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowMenu(false);
-                        if (onTriggerManualCheckUpdate) {
-                          onTriggerManualCheckUpdate();
-                        }
-                      }}
-                      className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
-                    >
-                      <div className="flex items-center space-x-2.5">
-                        <Smartphone className="w-4 h-4 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
-                        <div className="font-semibold text-xs text-slate-200 flex items-center space-x-1.5">
-                          <span>Phiên bản</span>
-                          <span className="font-mono text-cyan-300 font-bold">
-                            {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
-                          </span>
+                    {import.meta.env.VITE_APP_MODE === 'play' ? (
+                      <div className="w-full flex items-center justify-between p-2.5 rounded-xl text-slate-400 text-left">
+                        <div className="flex items-center space-x-2.5">
+                          <Smartphone className="w-4 h-4 text-cyan-400 shrink-0" />
+                          <div className="font-semibold text-xs text-slate-300 flex items-center space-x-1.5">
+                            <span>Phiên bản</span>
+                            <span className="font-mono text-cyan-300 font-bold">
+                              {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
+                            </span>
+                          </div>
                         </div>
                       </div>
-
-                      <div
-                        title="Tải cập nhật mới"
-                        className="p-1.5 rounded-lg bg-teal-500/10 text-teal-400 border border-teal-500/30 group-hover:bg-gradient-to-r group-hover:from-teal-500 group-hover:to-emerald-500 group-hover:text-slate-950 group-hover:border-transparent font-bold shrink-0 shadow-sm transition-all flex items-center justify-center"
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMenu(false);
+                          if (onTriggerManualCheckUpdate) {
+                            onTriggerManualCheckUpdate();
+                          }
+                        }}
+                        className="w-full flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-800 text-slate-200 transition-all text-left group active:scale-[0.99] cursor-pointer"
                       >
-                        <Download className="w-3.5 h-3.5" />
-                      </div>
-                    </button>
+                        <div className="flex items-center space-x-2.5">
+                          <Smartphone className="w-4 h-4 text-cyan-400 shrink-0 group-hover:scale-110 transition-transform" />
+                          <div className="font-semibold text-xs text-slate-200 flex items-center space-x-1.5">
+                            <span>Phiên bản</span>
+                            <span className="font-mono text-cyan-300 font-bold">
+                              {currentVersion.startsWith('v') ? currentVersion : `v${currentVersion}`}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div
+                          title="Tải cập nhật mới"
+                          className="p-1.5 rounded-lg bg-teal-500/10 text-teal-400 border border-teal-500/30 group-hover:bg-gradient-to-r group-hover:from-teal-500 group-hover:to-emerald-500 group-hover:text-slate-950 group-hover:border-transparent font-bold shrink-0 shadow-sm transition-all flex items-center justify-center"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                        </div>
+                      </button>
+                    )}
 
                     {/* Clear All App Data (Chỉ Admin / Editor mới hiển thị) */}
                     {canEditData(settings.currentRole) && (
