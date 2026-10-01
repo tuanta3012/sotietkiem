@@ -54,7 +54,7 @@ export const DriveTokenExpiredModal: React.FC<DriveTokenExpiredModalProps> = ({
           <div className="p-2 bg-amber-50 border border-amber-200/80 rounded-lg flex items-start space-x-1.5 text-left">
             <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
             <span className="text-[10px] text-amber-800 font-medium leading-tight">
-              Phiên kết nối đã hết hạn (60 phút). Bấm kết nối lại để tiếp tục đồng bộ.
+              Phiên kết nối Google Drive cần được gia hạn. Bấm "Kết nối lại" để tiếp tục đồng bộ an toàn.
             </span>
           </div>
 

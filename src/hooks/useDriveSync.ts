@@ -5,6 +5,7 @@ import {
   getGoogleAccessToken,
   setGoogleAccessToken,
   ensureGoogleAccessToken,
+  trySilentRefresh,
   isGoogleTokenValid,
   downloadRealGoogleDriveFile,
   updateRealGoogleDriveFile,
@@ -291,7 +292,11 @@ export function useDriveSync({
       const isValid = isGoogleTokenValid();
 
       if (!token || !isValid) {
-        if (forceTokenPrompt) {
+        // Thử silent refresh ngầm trước khi làm gián đoạn người dùng
+        const silentToken = await trySilentRefresh();
+        if (silentToken) {
+          token = silentToken;
+        } else if (forceTokenPrompt) {
           try {
             token = await ensureGoogleAccessToken();
           } catch {
@@ -299,11 +304,11 @@ export function useDriveSync({
             return;
           }
         } else {
-          // Silent background check - tuyệt đối không mở popup tự động
+          // Chỉ kích hoạt khi silent refresh thực sự thất bại
           if (token && !isValid) {
             setGoogleAccessToken(null);
             setIsDriveTokenExpired(true);
-            setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
+            setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
           }
           return;
         }
@@ -387,11 +392,13 @@ export function useDriveSync({
             tokenErr?.message?.includes('invalid authentication credentials') ||
             tokenErr?.message?.includes('credentials')
           ) {
-            console.warn('[Central Hub Sync] Token expired or invalid inside syncBooksFromDrive. Clearing token.');
-            setGoogleAccessToken(null);
-            setIsDriveTokenExpired(true);
-            setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
-            if (forceTokenPrompt) {
+            console.warn('[Central Hub Sync] Token hết hạn trong download. Thử gia hạn ngầm...');
+            const freshToken = await trySilentRefresh();
+            if (freshToken) {
+              token = freshToken;
+              setIsDriveTokenExpired(false);
+              res = await downloadRealGoogleDriveFile(freshToken, fileId);
+            } else if (forceTokenPrompt) {
               try {
                 token = await ensureGoogleAccessToken();
                 setIsDriveTokenExpired(false);
@@ -400,6 +407,9 @@ export function useDriveSync({
                 return;
               }
             } else {
+              setGoogleAccessToken(null);
+              setIsDriveTokenExpired(true);
+              setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
               return;
             }
           } else {
@@ -602,13 +612,18 @@ export function useDriveSync({
       const isValid = isGoogleTokenValid();
 
       if (!token || !isValid) {
-        console.warn('[Auto-Push] Token Google Drive không tồn tại hoặc đã hết hạn. Kích hoạt modal cảnh báo.');
-        if (token && !isValid) {
-          setGoogleAccessToken(null);
+        const silentToken = await trySilentRefresh();
+        if (silentToken) {
+          token = silentToken;
+        } else {
+          console.warn('[Auto-Push] Token Google Drive không tồn tại hoặc đã hết hạn.');
+          if (token && !isValid) {
+            setGoogleAccessToken(null);
+          }
+          setIsDriveTokenExpired(true);
+          setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
+          return;
         }
-        setIsDriveTokenExpired(true);
-        setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
-        return;
       }
 
       isPushingRef.current = true;
@@ -980,15 +995,21 @@ export function useDriveSync({
         return;
       }
 
-      const token = getGoogleAccessToken();
-      const isValid = isGoogleTokenValid();
+      let token = getGoogleAccessToken();
+      let isValid = isGoogleTokenValid();
       if (!token || !isValid) {
-        if (token && !isValid) {
-          setGoogleAccessToken(null);
-          setIsDriveTokenExpired(true);
-          setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
+        const silentToken = await trySilentRefresh();
+        if (silentToken) {
+          token = silentToken;
+          isValid = true;
+        } else {
+          if (token && !isValid) {
+            setGoogleAccessToken(null);
+            setIsDriveTokenExpired(true);
+            setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
+          }
+          return;
         }
-        return;
       }
 
       const match =
@@ -1247,7 +1268,7 @@ export function useDriveSync({
 
     if (!token || !isValid) {
       try {
-        const freshToken = await ensureGoogleAccessToken();
+        const freshToken = await trySilentRefresh();
         if (freshToken) {
           token = freshToken;
           isValid = true;
@@ -1257,28 +1278,14 @@ export function useDriveSync({
       }
     }
 
-    if (!token) {
+    if (!token || !isValid) {
       if (!isPassiveBackground) {
         const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
         const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
         if (!dismissedPrompt && !explicitlyUnlinked) {
           setIsDriveTokenExpired(true);
         }
-        setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
-      }
-      return;
-    }
-
-    if (!isValid) {
-      console.info('[Google Drive Auth] Token đã hết thời hạn 60 phút theo timestamp cục bộ.');
-      setGoogleAccessToken(null);
-      if (!isPassiveBackground) {
-        const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-        const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
-        if (!dismissedPrompt && !explicitlyUnlinked) {
-          setIsDriveTokenExpired(true);
-        }
-        setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
+        setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
       }
       return;
     }
@@ -1292,15 +1299,21 @@ export function useDriveSync({
       );
 
       if (res.status === 401) {
-        console.warn('[Google Drive Auth] Token Drive không hợp lệ hoặc đã hết hạn (401).');
-        setGoogleAccessToken(null);
-        if (!isPassiveBackground) {
-          const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-          const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
-          if (!dismissedPrompt && !explicitlyUnlinked) {
-            setIsDriveTokenExpired(true);
+        console.warn('[Google Drive Auth] Token Drive không hợp lệ hoặc đã hết hạn (401). Thử gia hạn ngầm...');
+        const freshToken = await trySilentRefresh();
+        if (freshToken) {
+          token = freshToken;
+          setIsDriveTokenExpired(false);
+        } else {
+          setGoogleAccessToken(null);
+          if (!isPassiveBackground) {
+            const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
+            const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
+            if (!dismissedPrompt && !explicitlyUnlinked) {
+              setIsDriveTokenExpired(true);
+            }
+            setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
           }
-          setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
         }
       } else if (res.status === 403) {
         console.warn('[Google Drive Auth] Google Drive API bị giới hạn truy cập hoặc hết hạn mức (403). Giữ nguyên Token.');

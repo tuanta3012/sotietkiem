@@ -30,10 +30,7 @@ import {
   Copy,
   RotateCcw,
   FolderPlus,
-  Smartphone,
 } from 'lucide-react';
-import { isMobilePhone } from '../utils/deviceDetector';
-import { openGooglePicker, dismissGooglePicker } from '../utils/googlePicker';
 import { User } from 'firebase/auth';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, WorkspaceMember, canChangeDriveFile } from '../types';
 import { exportSavingsBooksToExcel, exportStandardTemplateExcel, parseExcelFile } from '../utils/excelParser';
@@ -183,7 +180,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   onUpdateSettingsRef.current = onUpdateSettings;
 
   const isLoadingFilesRef = React.useRef(false);
-  const androidFileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Sync settings when modified externally
   useEffect(() => {
@@ -500,114 +496,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  // Xử lý nạp file từ Trình quản lý file của Android (hỗ trợ chọn file từ Google Drive của máy)
-  const handleSelectAndroidFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Mở cửa sổ Google Picker hoặc mở hộp thoại nhập Link trên thiết bị di động
 
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
-      return;
-    }
-
-    setSyncStatusStep(`Đang đọc dữ liệu bảng tính từ file "${file.name}"...`);
-    setSyncErrorMessage(null);
-    try {
-      const res = await parseExcelFile(file);
-      if (res.success && res.books.length > 0) {
-        const token = accessToken || getGoogleAccessToken();
-        if (token) {
-          const shouldUpload = window.confirm(
-            `Đã đọc thành công ${res.books.length} sổ tiết kiệm từ file "${file.name}".\n\nBạn có muốn tự động tạo và liên kết file này lên Google Drive để cập nhật 2 chiều tự động không?`
-          );
-
-          if (shouldUpload) {
-            setIsCreatingNewFile(true);
-            setSyncStatusStep(`Đang tạo và liên kết bảng tính "${file.name}" trên Google Drive...`);
-            const userEmail = (currentUser?.email || appUser?.email || '').trim().toLowerCase();
-            const created = await createRealGoogleDriveFile(
-              token,
-              file.name.replace(/\.[^/.]+$/, ''),
-              res.books,
-              [],
-              userEmail
-            );
-            setSelectedFileId(created.id);
-            setSelectedFileName(created.name);
-            setSheetUrl(created.webViewLink);
-            const nowStr = new Date().toLocaleString('vi-VN');
-            setLastSyncTime(nowStr);
-            onImportBooks(res.books, 'replace');
-            onUpdateSettings({
-              googleSheetUrl: created.webViewLink,
-              googleSheetName: created.name,
-              lastSyncTime: nowStr,
-              autoSync: true,
-            });
-            setGoogleSyncMessage(`✅ Đã nạp ${res.books.length} sổ và tạo file liên kết "${created.name}" trên Google Drive thành công!`);
-            await loadGoogleDriveFiles(token);
-            return;
-          }
-        }
-
-        onImportBooks(res.books, 'replace');
-        setGoogleSyncMessage(`✅ Đã nạp thành công ${res.books.length} sổ tiết kiệm từ file "${file.name}"!`);
-      } else {
-        setSyncErrorMessage(res.errors?.[0] || 'File không hợp lệ hoặc không tìm thấy cấu trúc sổ tiết kiệm.');
-      }
-    } catch (err: any) {
-      setSyncErrorMessage(`Lỗi đọc file: ${err.message || 'Không thể đọc nội dung file.'}`);
-    } finally {
-      setIsCreatingNewFile(false);
-      setSyncStatusStep(null);
-      e.target.value = '';
-    }
-  };
-
-  // Mở cửa sổ Google Picker chính thức để chọn bảng tính trên Google Drive
-  const handleOpenGooglePicker = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
-      return;
-    }
-
-    if (isMobilePhone() || Capacitor.isNativePlatform()) {
-      dismissGooglePicker();
-      showToast('Trên điện thoại, bạn vui lòng chọn file từ danh sách bảng tính có sẵn hoặc tạo file mới trên Drive.', 'info');
-      return;
-    }
-
-    const token = await validateTokenOrPrompt();
-    if (!token) return;
-
-    setIsLoadingFiles(true);
-    setSyncErrorMessage(null);
-    try {
-      const picked = await openGooglePicker(token);
-      if (picked) {
-        const newFile: RealDriveFile = {
-          id: picked.id,
-          name: picked.name,
-          mimeType: picked.mimeType,
-          modifiedTime: new Date().toISOString(),
-          webViewLink: picked.url,
-          isSheetOrExcel: true,
-          isCentralHub: true,
-        };
-        // Cập nhật danh sách hiển thị
-        setRealFiles((prev) => {
-          const exists = prev.some((f) => f.id === picked.id);
-          return exists ? prev : [newFile, ...prev];
-        });
-        await handleSelectRealFile(newFile);
-      }
-    } catch (err: any) {
-      console.warn('Google Picker notice:', err);
-      showToast(err?.message || 'Không thể mở cửa sổ Google Drive Picker', 'error');
-    } finally {
-      setIsLoadingFiles(false);
-    }
-  };
 
   // Select a file from real Google Drive
   const handleSelectRealFile = async (file: RealDriveFile) => {
@@ -1181,14 +1071,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
       <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
-        {/* Hidden Android / System Document File Picker */}
-        <input
-          type="file"
-          ref={androidFileInputRef}
-          accept=".xlsx,.xls,.csv"
-          onChange={handleSelectAndroidFile}
-          className="hidden"
-        />
         {/* Header */}
         <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center space-x-2.5 min-w-0">
@@ -1248,28 +1130,21 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-2.5">
-                    {/* Nút tạo mới nhanh */}
+                  <div className="space-y-3">
+                    {/* Nút tạo Google Sheet mới với tên tùy chọn */}
                     <button
-                      onClick={handleQuickCreateDriveFile}
+                      onClick={() => {
+                        setNewFileNameInput(`So_tiet_kiem_${new Date().getFullYear()}`);
+                        setShowCreateFileDialog(true);
+                      }}
                       disabled={isCreatingNewFile}
-                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 shadow-xs"
+                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer disabled:opacity-60 shadow-xs"
                     >
-                      {isCreatingNewFile ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                          <span>Đang tạo file...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5 text-emerald-200" />
-                          <span>⚡ Tạo Google Sheet mới (So_tiet_kiem)</span>
-                        </>
-                      )}
+                      <Plus className="w-4 h-4 text-emerald-200" />
+                      <span>➕ Tạo Google Sheet mới trên Drive (Tùy chọn đặt tên)</span>
                     </button>
 
-
-                    {/* Danh sách file khả dụng (drive.file) */}
+                    {/* Danh sách file khả dụng trên Drive (drive.file) */}
                     <div className="space-y-2 bg-slate-50 p-2.5 sm:p-3 rounded-xl border border-slate-200">
                       <div className="flex items-center justify-between text-[11px] text-slate-700 font-bold px-0.5">
                         <span className="flex items-center gap-1.5">
@@ -1287,14 +1162,31 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         </button>
                       </div>
 
+                      {/* Thanh tìm kiếm nhanh */}
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          placeholder="Tìm bảng tính trên Drive..."
+                          value={driveSearchQuery}
+                          onChange={(e) => {
+                            setDriveSearchQuery(e.target.value);
+                            if (accessToken) {
+                              loadGoogleDriveFiles(accessToken, e.target.value);
+                            }
+                          }}
+                          className="w-full pl-8 pr-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        />
+                      </div>
+
                       {/* File Items */}
-                      {isLoadingFiles && realFiles.length === 0 ? (
+                      {isLoadingFiles ? (
                         <div className="py-6 text-center text-slate-500 space-y-1.5 bg-white rounded-lg border border-slate-100">
                           <RefreshCw className="w-4 h-4 animate-spin mx-auto text-emerald-600" />
                           <p className="text-[11px]">Đang tải danh sách file bảng tính...</p>
                         </div>
                       ) : realFiles.length > 0 ? (
-                        <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white max-h-48 overflow-y-auto">
+                        <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white max-h-52 overflow-y-auto">
                           {realFiles.map((file) => {
                             const isSelected = selectedFileId === file.id;
                             return (
@@ -1318,157 +1210,186 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                                     </div>
                                   </div>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleSelectRealFile(file);
-                                  }}
-                                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs shadow-xs shrink-0 cursor-pointer transition-all"
-                                >
+                                <span className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700 font-bold text-[10px] shrink-0 transition-colors">
                                   Chọn
-                                </button>
+                                </span>
                               </div>
                             );
                           })}
                         </div>
                       ) : (
-                        <div className="py-3 px-2 text-center bg-white rounded-lg border border-dashed border-slate-200">
-                          <p className="text-[11px] text-slate-500">Chưa có bảng tính nào trong ứng dụng</p>
+                        <div className="py-4 px-2 text-center bg-white rounded-lg border border-dashed border-slate-200 space-y-1">
+                          <p className="text-[11px] font-medium text-slate-600">Không tìm thấy bảng tính nào trên Drive</p>
+                          <p className="text-[10px] text-slate-400">Bấm nút "Tạo Google Sheet mới" ở trên để tạo file lưu trữ</p>
                         </div>
                       )}
+                    </div>
 
-                      {/* DÒNG DƯỚI CÙNG: Mở Google Picker trên Web Desktop hoặc Nạp tệp Excel máy */}
-                      {!isMobilePhone() ? (
+                    {/* Khu vực Chọn file từ máy & Xuất Excel */}
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                          <HardDrive className="w-3.5 h-3.5 text-slate-600" />
+                          <span>Dữ liệu trên máy</span>
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.2 rounded">Bộ nhớ thiết bị</span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <label className="flex items-center justify-center space-x-1.5 py-2 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs cursor-pointer shadow-2xs">
+                          <Upload className="w-3.5 h-3.5 text-white" />
+                          <span>📂 Chọn file từ máy</span>
+                          <input type="file" accept=".xlsx,.xls,.csv" onChange={handleSelectOfflineFile} className="hidden" />
+                        </label>
                         <button
                           type="button"
-                          id="btn-open-google-picker-bottom"
-                          onClick={handleOpenGooglePicker}
-                          disabled={isLoadingFiles}
-                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-lg border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
+                          onClick={handleExportBackup}
+                          className="flex items-center justify-center space-x-1.5 py-2 px-2.5 rounded-lg bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-700 border border-slate-300 font-semibold text-xs cursor-pointer shadow-2xs"
                         >
-                          <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>➕ Chọn file qua Google Picker (Web Desktop)...</span>
+                          <Download className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Xuất file .xlsx</span>
                         </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => androidFileInputRef.current?.click()}
-                          disabled={isLoadingFiles}
-                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] text-slate-700 font-medium rounded-lg border border-dashed border-slate-300 transition-all cursor-pointer text-xs"
-                        >
-                          <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>📁 Nạp từ tệp Excel/CSV trên máy (.xlsx, .csv)...</span>
-                        </button>
-                      )}
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
             ) : (
               /* KHI ĐÃ LIÊN KẾT VỚI FILE DRIVE */
-              <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                {fileIsDeleted ? (
-                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs space-y-2">
-                    <div className="flex items-center gap-1.5 font-bold">
-                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-                      <span>File trên Drive đã bị xóa!</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={handleQuickCreateDriveFile}
-                        disabled={isCreatingNewFile}
-                        className="flex-1 py-1.5 px-2 bg-emerald-600 text-white rounded-lg font-bold text-xs"
-                      >
-                        Tạo file mới
-                      </button>
-                      <button
-                        onClick={handleOpenDrivePicker}
-                        className="flex-1 py-1.5 px-2 bg-white border border-slate-200 text-slate-700 rounded-lg font-bold text-xs"
-                      >
-                        Chọn file khác
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center space-x-2 min-w-0">
-                        <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
-                          <FileSpreadsheet className="w-4 h-4" />
-                        </div>
-                        <h4 className="font-bold text-slate-900 text-xs truncate" title={selectedFileName || 'So_tiet_kiem'}>
-                          {selectedFileName || 'So_tiet_kiem'}
-                        </h4>
+              <div className="space-y-3">
+                <div className="space-y-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  {fileIsDeleted ? (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>File trên Drive đã bị xóa!</span>
                       </div>
-                      <div className="flex items-center space-x-1 shrink-0">
+                      <div className="flex gap-2">
                         <button
-                          type="button"
-                          onClick={handleManualSyncClick}
-                          disabled={isManualSyncing || isFetchingFileName}
-                          className="inline-flex items-center space-x-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white rounded border border-slate-200 cursor-pointer"
+                          onClick={() => {
+                            setNewFileNameInput(`So_tiet_kiem_${new Date().getFullYear()}`);
+                            setShowCreateFileDialog(true);
+                          }}
+                          disabled={isCreatingNewFile}
+                          className="flex-1 py-1.5 px-2 bg-emerald-600 text-white rounded-lg font-bold text-xs"
                         >
-                          <RefreshCw className={`w-3 h-3 ${isManualSyncing || isFetchingFileName ? 'animate-spin text-emerald-600' : ''}`} />
-                          <span>{!hasGoogleToken ? 'Cấp quyền' : 'Đồng bộ'}</span>
+                          Tạo file mới
                         </button>
-                        <a
-                          href={sheetUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center space-x-0.5 px-2 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200"
+                        <button
+                          onClick={handleOpenDrivePicker}
+                          className="flex-1 py-1.5 px-2 bg-white border border-slate-200 text-slate-700 rounded-lg font-bold text-xs"
                         >
-                          <span>Mở</span>
-                          <ExternalLink className="w-2.5 h-2.5" />
-                        </a>
+                          Chọn file khác
+                        </button>
                       </div>
                     </div>
-
-                    {!hasGoogleToken && (
-                      <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] flex items-center gap-1.5">
-                        <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>Phiên hết hạn. Bấm <strong>&quot;Cấp quyền&quot;</strong> để đồng bộ.</span>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center space-x-2 min-w-0">
+                          <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+                            <FileSpreadsheet className="w-4 h-4" />
+                          </div>
+                          <h4 className="font-bold text-slate-900 text-xs truncate" title={selectedFileName || 'So_tiet_kiem'}>
+                            {selectedFileName || 'So_tiet_kiem'}
+                          </h4>
+                        </div>
+                        <div className="flex items-center space-x-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={handleManualSyncClick}
+                            disabled={isManualSyncing || isFetchingFileName}
+                            className="inline-flex items-center space-x-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white rounded border border-slate-200 cursor-pointer"
+                          >
+                            <RefreshCw className={`w-3 h-3 ${isManualSyncing || isFetchingFileName ? 'animate-spin text-emerald-600' : ''}`} />
+                            <span>{!hasGoogleToken ? 'Cấp quyền' : 'Đồng bộ'}</span>
+                          </button>
+                          <a
+                            href={sheetUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center space-x-0.5 px-2 py-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded border border-emerald-200"
+                          >
+                            <span>Mở</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        </div>
                       </div>
-                    )}
 
-                    <div className="flex items-center justify-between text-[10px] text-slate-500 pt-0.5">
-                      <span className="text-emerald-700 font-medium flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-emerald-600" />
-                        <span>Đồng bộ 2 chiều</span>
-                      </span>
-                      {lastSyncTime && <span>Cập nhật: <strong className="text-slate-700">{lastSyncTime}</strong></span>}
-                    </div>
+                      {!hasGoogleToken && (
+                        <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                          <span>Phiên hết hạn. Bấm <strong>&quot;Cấp quyền&quot;</strong> để đồng bộ.</span>
+                        </div>
+                      )}
 
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <button
-                        id="btn-link-google-drive"
-                        disabled={!canChangeDriveFile(settings.currentRole)}
-                        onClick={handleOpenDrivePicker}
-                        className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
-                          !canChangeDriveFile(settings.currentRole)
-                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-                            : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 cursor-pointer'
-                        }`}
-                      >
-                        <Link2 className="w-3.5 h-3.5 text-slate-500" />
-                        <span>Đổi file</span>
-                      </button>
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 pt-0.5">
+                        <span className="text-emerald-700 font-medium flex items-center gap-1">
+                          <CheckCircle className="w-3 h-3 text-emerald-600" />
+                          <span>Đồng bộ 2 chiều</span>
+                        </span>
+                        {lastSyncTime && <span>Cập nhật: <strong className="text-slate-700">{lastSyncTime}</strong></span>}
+                      </div>
 
-                      <button
-                        id="btn-unlink-and-clear-data"
-                        disabled={!canChangeDriveFile(settings.currentRole)}
-                        onClick={() => setShowClearConfirm(true)}
-                        className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
-                          !canChangeDriveFile(settings.currentRole)
-                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-                            : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer'
-                        }`}
-                      >
-                        <Unlink className="w-3.5 h-3.5 text-rose-600" />
-                        <span>Hủy liên kết</span>
-                      </button>
-                    </div>
-                  </>
-                )}
+                      <div className="grid grid-cols-2 gap-2 pt-1">
+                        <button
+                          id="btn-link-google-drive"
+                          disabled={!canChangeDriveFile(settings.currentRole)}
+                          onClick={handleOpenDrivePicker}
+                          className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
+                            !canChangeDriveFile(settings.currentRole)
+                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                              : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 cursor-pointer'
+                          }`}
+                        >
+                          <Link2 className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Đổi file</span>
+                        </button>
+
+                        <button
+                          id="btn-unlink-and-clear-data"
+                          disabled={!canChangeDriveFile(settings.currentRole)}
+                          onClick={() => setShowClearConfirm(true)}
+                          className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
+                            !canChangeDriveFile(settings.currentRole)
+                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
+                              : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer'
+                          }`}
+                        >
+                          <Unlink className="w-3.5 h-3.5 text-rose-600" />
+                          <span>Hủy liên kết</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Khu vực Chọn file từ máy & Xuất Excel khi đã liên kết */}
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-800 text-xs flex items-center gap-1.5">
+                      <HardDrive className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Dữ liệu trên máy</span>
+                    </span>
+                    <span className="text-[9px] font-bold text-slate-500 bg-slate-200 px-1.5 py-0.2 rounded">Bộ nhớ thiết bị</span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="flex items-center justify-center space-x-1.5 py-2 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold text-xs cursor-pointer shadow-2xs">
+                      <Upload className="w-3.5 h-3.5 text-white" />
+                      <span>📂 Chọn file từ máy</span>
+                      <input type="file" accept=".xlsx,.xls,.csv" onChange={handleSelectOfflineFile} className="hidden" />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleExportBackup}
+                      className="flex items-center justify-center space-x-1.5 py-2 px-2.5 rounded-lg bg-white hover:bg-slate-100 active:scale-[0.98] text-slate-700 border border-slate-300 font-semibold text-xs cursor-pointer shadow-2xs"
+                    >
+                      <Download className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Xuất file .xlsx</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )
           ) : (
@@ -1636,52 +1557,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 </div>
               )}
 
-              {/* Nút hành động chính */}
-              {isMobilePhone() ? (
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateFileDialog(true)}
-                    disabled={isLoadingFiles || !currentUser}
-                    className="flex items-center justify-center space-x-1.5 py-2.5 px-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4 shrink-0" />
-                    <span className="truncate">Tạo file mới trên Drive</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => androidFileInputRef.current?.click()}
-                    disabled={isLoadingFiles}
-                    className="flex items-center justify-center space-x-1.5 py-2.5 px-2.5 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span className="truncate">Nạp tệp Excel/CSV từ máy</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={handleOpenGooglePicker}
-                    disabled={isLoadingFiles || !currentUser}
-                    className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    <FolderPlus className="w-4 h-4 shrink-0" />
-                    <span className="truncate">+ Chọn file từ Drive (Picker)</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateFileDialog(true)}
-                    disabled={isLoadingFiles || !currentUser}
-                    className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span className="truncate">Tạo file mới</span>
-                  </button>
-                </div>
-              )}
+              {/* Nút hành động chính: Tạo file mới trên Drive */}
+              <button
+                type="button"
+                onClick={() => {
+                  setNewFileNameInput(`So_tiet_kiem_${new Date().getFullYear()}`);
+                  setShowCreateFileDialog(true);
+                }}
+                disabled={isLoadingFiles || !currentUser}
+                className="w-full flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+              >
+                <Plus className="w-4 h-4 text-emerald-200 shrink-0" />
+                <span className="truncate">➕ Tạo bảng tính mới trên Drive</span>
+              </button>
 
               {/* Thanh tìm kiếm & Làm mới */}
               <div className="flex items-center gap-1.5">
@@ -1703,7 +1591,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 <button
                   disabled={isLoadingFiles || !accessToken}
                   onClick={() => accessToken && loadGoogleDriveFiles(accessToken, driveSearchQuery)}
-                  className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-slate-600 disabled:opacity-50 shrink-0"
+                  className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-slate-600 disabled:opacity-50 shrink-0 cursor-pointer"
                   title="Tải lại"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin text-emerald-600' : ''}`} />
@@ -1724,9 +1612,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   </div>
                 ) : realFiles.length === 0 ? (
                   <div className="py-6 px-3 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-2">
-                    <p className="text-xs font-semibold text-slate-700">Chưa có bảng tính nào</p>
+                    <p className="text-xs font-semibold text-slate-700">Chưa có file nào liên kết</p>
                     <p className="text-[11px] text-slate-500">
-                      Bạn hãy chọn file trong danh sách bên dưới hoặc bấm <strong>"Tạo file mới trên Drive"</strong> để bắt đầu đồng bộ.
+                      Bấm <strong>"Tạo bảng tính mới trên Drive"</strong> để bắt đầu đồng bộ.
                     </p>
                   </div>
                 ) : (
@@ -1776,19 +1664,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     })}
                   </div>
                 )}
-
-                {/* DÒNG DƯỚI CÙNG: Mở Google Picker iframe chỉ cho Desktop */}
-                {!isMobilePhone() && (
-                  <button
-                    type="button"
-                    onClick={handleOpenGooglePicker}
-                    disabled={isLoadingFiles}
-                    className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-xl border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
-                  >
-                    <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>➕ Chọn file qua Google Picker (Web Desktop)...</span>
-                  </button>
-                )}
               </div>
             </div>
 
@@ -1796,7 +1671,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
             <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
               <button
                 onClick={() => setShowDrivePickerModal(false)}
-                className="px-4 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs"
+                className="px-4 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs cursor-pointer"
               >
                 Đóng
               </button>
@@ -1805,7 +1680,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         </div>
       )}
 
-      {/* DIALOG TẠO FILE TRÊN DRIVE NẾU CHƯA CÓ */}
+      {/* DIALOG TẠO FILE TRÊN DRIVE VỚI TÊN TÙY CHỌN */}
       {showCreateFileDialog && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-xs">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 p-5 space-y-4 animate-in fade-in zoom-in-95">
@@ -1815,7 +1690,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               </span>
               <div>
                 <h3 className="font-bold text-slate-900 text-base">Tạo File Mới Trên Google Drive</h3>
-                <p className="text-xs text-slate-500">Lưu trữ danh mục sổ tiết kiệm vào Drive của bạn</p>
+                <p className="text-xs text-slate-500">Đặt tên tùy thích cho file bảng tính của bạn</p>
               </div>
             </div>
 
@@ -1834,14 +1709,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               <button
                 disabled={isCreatingNewFile}
                 onClick={() => setShowCreateFileDialog(false)}
-                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold"
+                className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
               >
                 Hủy
               </button>
               <button
-                disabled={isCreatingNewFile}
+                disabled={isCreatingNewFile || !newFileNameInput.trim()}
                 onClick={handleCreateNewDriveFile}
-                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm disabled:opacity-50"
+                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-sm disabled:opacity-50 cursor-pointer"
               >
                 {isCreatingNewFile ? (
                   <>
