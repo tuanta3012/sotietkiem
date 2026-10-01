@@ -118,10 +118,16 @@ jobs:
             cp google-services.json android/app/google-services.json
           fi
 
+      - name: Install ImageMagick for Icon Generation
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+
       - name: Generate App Icons
         run: |
+          python3 scripts/generate_app_icons.py
           npx @capacitor/assets generate --android || true
-          python3 scripts/generate_app_icons.py || true
+          python3 scripts/generate_app_icons.py
 
       # 8. Khởi tạo & Sử dụng Keystore cố định trong Repo (Không bao giờ đổi SHA-1)
       - name: Setup Permanent Fixed Keystore

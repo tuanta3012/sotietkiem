@@ -48,6 +48,18 @@ def main():
     run(['convert', solid_master_png, '-resize', '192x192', 'public/pwa-192x192.png'])
     run(['convert', solid_master_png, '-resize', '512x512', 'public/pwa-512x512.png'])
 
+    # 5b. Capacitor assets source icons (resources/ & resources/android/)
+    run(['convert', '-size', '1024x1024', 'xc:#06B46F', 'resources/icon-background.png'])
+    run([
+        'convert', '-size', '1024x1024', 'xc:none',
+        '(', solid_master_png, '-resize', '840x840', ')',
+        '-gravity', 'center', '-composite',
+        'resources/icon-foreground.png'
+    ])
+    os.makedirs('resources/android', exist_ok=True)
+    run(['cp', 'resources/icon-background.png', 'resources/android/icon-background.png'])
+    run(['cp', 'resources/icon-foreground.png', 'resources/android/icon-foreground.png'])
+
     # 6. Splash screen (2732x2732) with dark slate background (#0f172a) and centered logo
     run([
         'convert', '-size', '2732x2732', 'xc:#0f172a',
