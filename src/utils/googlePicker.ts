@@ -10,6 +10,7 @@ declare global {
 
 let isGapiLoading = false;
 let isPickerLoaded = false;
+let currentPickerInstance: any = null;
 
 /**
  * Tải script gapi.js nếu chưa có
@@ -83,6 +84,28 @@ export interface PickedGoogleDriveFile {
 }
 
 /**
+ * Đóng cửa sổ Google Picker nếu đang mở
+ */
+export function dismissGooglePicker(): void {
+  try {
+    if (currentPickerInstance && typeof currentPickerInstance.setVisible === 'function') {
+      currentPickerInstance.setVisible(false);
+    }
+    // Dọn dẹp DOM nếu picker iframe vẫn tồn tại
+    const pickerEls = document.querySelectorAll('.picker-dialog, .picker-dialog-bg, [class*="picker"]');
+    pickerEls.forEach((el) => {
+      if (el.tagName.toLowerCase() === 'div' && el.parentElement === document.body) {
+        el.remove();
+      }
+    });
+  } catch (err) {
+    console.warn('[GooglePicker] Lỗi khi dismiss Google Picker:', err);
+  } finally {
+    currentPickerInstance = null;
+  }
+}
+
+/**
  * Mở cửa sổ Google Picker chính thức để người dùng chọn bảng tính hoặc file bất kỳ từ Google Drive
  */
 export async function openGooglePicker(accessToken: string): Promise<PickedGoogleDriveFile | null> {
@@ -143,6 +166,7 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
                 doc.url ||
                 `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
 
+              currentPickerInstance = null;
               resolve({
                 id: fileId,
                 name: fileName,
@@ -150,19 +174,24 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
                 url: fileUrl,
               });
             } else {
+              currentPickerInstance = null;
               resolve(null);
             }
           } else if (action === google.picker.Action.CANCEL || action === 'cancel') {
+            currentPickerInstance = null;
             resolve(null);
           } else if (action === 'error' || data.error) {
             console.warn('[GooglePicker] Callback received error:', data);
+            currentPickerInstance = null;
             reject(new Error(data.error?.message || 'Lỗi từ Google Picker API.'));
           }
         });
 
       const picker = builder.build();
+      currentPickerInstance = picker;
       picker.setVisible(true);
     } catch (err: any) {
+      currentPickerInstance = null;
       console.error('[GooglePicker] Lỗi khởi tạo picker:', err);
       reject(new Error(`Không thể mở cửa sổ Google Drive: ${err?.message || err}`));
     }
