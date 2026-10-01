@@ -83,9 +83,46 @@ export interface PickedGoogleDriveFile {
 }
 
 /**
- * Mở cửa sổ Google Picker chính thức để người dùng chọn bảng tính hoặc file bất kỳ từ Google Drive
+ * Dọn sạch mọi iframe hoặc overlay của Google Picker bị treo trong DOM
+ */
+export function dismissGooglePicker(): void {
+  try {
+    const selectors = [
+      '.picker-dialog',
+      '.picker-dialog-bg',
+      '[class*="picker-dialog"]',
+      'iframe[src*="google.com/picker"]',
+      'iframe[src*="picker"]',
+      '.picker-popup',
+    ];
+    selectors.forEach((sel) => {
+      document.querySelectorAll(sel).forEach((el) => {
+        try {
+          el.remove();
+        } catch {}
+      });
+    });
+  } catch {}
+}
+
+/**
+ * Mở cửa sổ Google Picker chính thức để người dùng chọn bảng tính hoặc file bất kỳ từ Google Drive.
+ * Trên môi trường Native Android APK và điện thoại di động, Google cấm Cookie bên thứ ba trong WebView
+ * nên iframe Picker không thể nhận session và không thể giao tiếp hai chiều với popup ngoài. Do đó
+ * trên điện thoại, ứng dụng hỗ trợ chọn trực tiếp từ danh sách file hoặc tạo file mới.
  */
 export async function openGooglePicker(accessToken: string): Promise<PickedGoogleDriveFile | null> {
+  const isMobile =
+    Capacitor.isNativePlatform() ||
+    (typeof window !== 'undefined' && (window.innerWidth < 768 || /Android|iPhone|iPod|Mobile/i.test(navigator.userAgent)));
+
+  if (isMobile) {
+    dismissGooglePicker();
+    throw new Error(
+      'NATIVE_PICKER_UNSUPPORTED: Khung Google Picker iframe không tương thích với màn hình điện thoại di động / ứng dụng Android APK. Vui lòng chọn file trong danh sách bên dưới hoặc bấm Tạo file mới trên Drive để liên kết.'
+    );
+  }
+
   if (!accessToken) {
     throw new Error('Vui lòng đăng nhập Google trước khi chọn file.');
   }
@@ -142,6 +179,7 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
                 doc.url ||
                 `https://docs.google.com/spreadsheets/d/${fileId}/edit`;
 
+              dismissGooglePicker();
               resolve({
                 id: fileId,
                 name: fileName,
@@ -149,12 +187,15 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
                 url: fileUrl,
               });
             } else {
+              dismissGooglePicker();
               resolve(null);
             }
           } else if (action === google.picker.Action.CANCEL || action === 'cancel') {
+            dismissGooglePicker();
             resolve(null);
           } else if (action === 'error' || data.error) {
             console.warn('[GooglePicker] Callback received error:', data);
+            dismissGooglePicker();
             reject(new Error(data.error?.message || 'Lỗi từ Google Picker API.'));
           }
         });
@@ -163,6 +204,7 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
       picker.setVisible(true);
     } catch (err: any) {
       console.error('[GooglePicker] Lỗi khởi tạo picker:', err);
+      dismissGooglePicker();
       reject(new Error(`Không thể mở cửa sổ Google Drive: ${err?.message || err}`));
     }
   });

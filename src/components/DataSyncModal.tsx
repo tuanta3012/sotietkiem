@@ -33,7 +33,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { isMobilePhone } from '../utils/deviceDetector';
-import { openGooglePicker } from '../utils/googlePicker';
+import { openGooglePicker, dismissGooglePicker } from '../utils/googlePicker';
 import { User } from 'firebase/auth';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, WorkspaceMember, canChangeDriveFile } from '../types';
 import { exportSavingsBooksToExcel, exportStandardTemplateExcel, parseExcelFile } from '../utils/excelParser';
@@ -570,6 +570,13 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
       return;
     }
+
+    if (isMobilePhone() || Capacitor.isNativePlatform()) {
+      dismissGooglePicker();
+      showToast('Trên điện thoại, bạn vui lòng chọn file từ danh sách bảng tính có sẵn hoặc tạo file mới trên Drive.', 'info');
+      return;
+    }
+
     const token = await validateTokenOrPrompt();
     if (!token) return;
 
@@ -1261,6 +1268,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                       )}
                     </button>
 
+
                     {/* Danh sách file khả dụng (drive.file) */}
                     <div className="space-y-2 bg-slate-50 p-2.5 sm:p-3 rounded-xl border border-slate-200">
                       <div className="flex items-center justify-between text-[11px] text-slate-700 font-bold px-0.5">
@@ -1280,7 +1288,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                       </div>
 
                       {/* File Items */}
-                      {isLoadingFiles ? (
+                      {isLoadingFiles && realFiles.length === 0 ? (
                         <div className="py-6 text-center text-slate-500 space-y-1.5 bg-white rounded-lg border border-slate-100">
                           <RefreshCw className="w-4 h-4 animate-spin mx-auto text-emerald-600" />
                           <p className="text-[11px]">Đang tải danh sách file bảng tính...</p>
@@ -1323,17 +1331,29 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         </div>
                       )}
 
-                      {/* DÒNG DƯỚI CÙNG: Chọn thêm file từ Google Drive */}
-                      <button
-                        type="button"
-                        id="btn-open-google-picker-bottom"
-                        onClick={handleOpenGooglePicker}
-                        disabled={isLoadingFiles}
-                        className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-lg border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
-                      >
-                        <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <span>➕ Chọn thêm file từ Google Drive...</span>
-                      </button>
+                      {/* DÒNG DƯỚI CÙNG: Mở Google Picker trên Web Desktop hoặc Trình chọn file Android */}
+                      {!isMobilePhone() ? (
+                        <button
+                          type="button"
+                          id="btn-open-google-picker-bottom"
+                          onClick={handleOpenGooglePicker}
+                          disabled={isLoadingFiles}
+                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-lg border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
+                        >
+                          <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>➕ Chọn file qua Google Picker (Web Desktop)...</span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => androidFileInputRef.current?.click()}
+                          disabled={isLoadingFiles}
+                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] text-slate-700 font-bold rounded-lg border border-dashed border-slate-300 transition-all cursor-pointer text-xs"
+                        >
+                          <Smartphone className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>📱 Mở tệp từ máy / Drive (Trình chọn file Android)...</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1609,28 +1629,52 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 </div>
               )}
 
-              {/* Nút hành động chính: Chọn file từ Drive & Tạo mới */}
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={handleOpenGooglePicker}
-                  disabled={isLoadingFiles || !currentUser}
-                  className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
-                >
-                  <FolderPlus className="w-4 h-4 shrink-0" />
-                  <span className="truncate">+ Chọn file từ Drive</span>
-                </button>
+              {/* Nút hành động chính */}
+              {isMobilePhone() ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateFileDialog(true)}
+                    disabled={isLoadingFiles || !currentUser}
+                    className="flex items-center justify-center space-x-1.5 py-2.5 px-2.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Tạo file mới trên Drive</span>
+                  </button>
 
-                <button
-                  type="button"
-                  onClick={() => setShowCreateFileDialog(true)}
-                  disabled={isLoadingFiles || !currentUser}
-                  className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="truncate">Tạo file mới</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => androidFileInputRef.current?.click()}
+                    disabled={isLoadingFiles}
+                    className="flex items-center justify-center space-x-1.5 py-2.5 px-2.5 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Smartphone className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="truncate">Mở tệp từ máy / Drive</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenGooglePicker}
+                    disabled={isLoadingFiles || !currentUser}
+                    className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <FolderPlus className="w-4 h-4 shrink-0" />
+                    <span className="truncate">+ Chọn file từ Drive (Picker)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateFileDialog(true)}
+                    disabled={isLoadingFiles || !currentUser}
+                    className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="truncate">Tạo file mới</span>
+                  </button>
+                </div>
+              )}
 
               {/* Thanh tìm kiếm & Làm mới */}
               <div className="flex items-center gap-1.5">
@@ -1673,9 +1717,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   </div>
                 ) : realFiles.length === 0 ? (
                   <div className="py-6 px-3 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-2">
-                    <p className="text-xs font-semibold text-slate-700">Chưa có file nào liên kết</p>
+                    <p className="text-xs font-semibold text-slate-700">Chưa có bảng tính nào</p>
                     <p className="text-[11px] text-slate-500">
-                      Bấm <strong>"+ Chọn file từ Drive"</strong> để chọn file hoặc bấm <strong>"Tạo file mới"</strong> để bắt đầu đồng bộ.
+                      Bạn hãy chọn file trong danh sách bên dưới hoặc bấm <strong>"Tạo file mới trên Drive"</strong> để bắt đầu đồng bộ.
                     </p>
                   </div>
                 ) : (
@@ -1726,16 +1770,18 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   </div>
                 )}
 
-                {/* DÒNG DƯỚI CÙNG: Mở Google Picker iframe */}
-                <button
-                  type="button"
-                  onClick={handleOpenGooglePicker}
-                  disabled={isLoadingFiles}
-                  className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-xl border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
-                >
-                  <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>➕ Chọn thêm file từ Google Drive...</span>
-                </button>
+                {/* DÒNG DƯỚI CÙNG: Mở Google Picker iframe chỉ cho Desktop */}
+                {!isMobilePhone() && (
+                  <button
+                    type="button"
+                    onClick={handleOpenGooglePicker}
+                    disabled={isLoadingFiles}
+                    className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-xl border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
+                  >
+                    <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>➕ Chọn file qua Google Picker (Web Desktop)...</span>
+                  </button>
+                )}
               </div>
             </div>
 
