@@ -32,6 +32,7 @@ import {
   Package,
   Globe,
   WifiOff,
+  RefreshCw,
 } from 'lucide-react';
 import { SyncAuditLogModal } from './SyncAuditLogModal';
 import { AppSettings, AuthUser, canEditData } from '../types';
@@ -69,6 +70,7 @@ interface NavbarProps {
   currentUser?: AuthUser | null;
   onLogout?: () => void;
   onLoginGoogle?: () => void;
+  isLoggingInGoogle?: boolean;
   isSyncingDrive?: boolean;
   onTriggerManualCheckUpdate?: () => void;
   currentVersion?: string;
@@ -94,6 +96,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
   onLogout,
   onLoginGoogle,
+  isLoggingInGoogle = false,
   isSyncingDrive,
   onTriggerManualCheckUpdate,
   currentVersion = '1.0.0',
@@ -181,13 +184,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             {currentUser?.isOffline && onLoginGoogle && (
               <button
                 id="btn-navbar-login-google"
+                disabled={isLoggingInGoogle}
                 onClick={onLoginGoogle}
-                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition-all active:scale-98 cursor-pointer"
+                className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold text-xs shadow-sm transition-all active:scale-98 cursor-pointer"
                 title="Đăng nhập Google để chuyển sang trực tuyến và đồng bộ Drive"
               >
-                <Globe className="w-3.5 h-3.5" />
-                <span className="hidden xs:inline">Đăng nhập Google</span>
-                <span className="xs:hidden">Google</span>
+                {isLoggingInGoogle ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang kết nối...</span>
+                  </>
+                ) : (
+                  <>
+                    <Globe className="w-3.5 h-3.5" />
+                    <span className="hidden xs:inline">Đăng nhập Google</span>
+                    <span className="xs:hidden">Google</span>
+                  </>
+                )}
               </button>
             )}
 
@@ -279,14 +292,24 @@ export const Navbar: React.FC<NavbarProps> = ({
                     ) : (
                       onLoginGoogle && (
                         <button
+                          disabled={isLoggingInGoogle}
                           onClick={() => {
                             setShowMenu(false);
                             onLoginGoogle();
                           }}
-                          className="w-full mt-2 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
+                          className="w-full mt-2 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-bold shadow-xs transition-all flex items-center justify-center space-x-1.5 active:scale-98 cursor-pointer"
                         >
-                          <LogIn className="w-3.5 h-3.5" />
-                          <span>Đăng nhập</span>
+                          {isLoggingInGoogle ? (
+                            <>
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              <span>Đang kết nối...</span>
+                            </>
+                          ) : (
+                            <>
+                              <LogIn className="w-3.5 h-3.5" />
+                              <span>Đăng nhập</span>
+                            </>
+                          )}
                         </button>
                       )
                     )}

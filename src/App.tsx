@@ -84,9 +84,19 @@ const CURRENT_DATE = new Date().toISOString().split('T')[0];
 
 export default function App() {
   const { showToast } = useToast();
-  // Authentication state - Khôi phục cơ chế ghi nhớ phiên an toàn để tránh bị văng đột ngột khi thiết bị chạy ngầm hoặc reload trang
+  const [isPendingAuth, setIsPendingAuth] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('pending_google_redirect_auth') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
+      if (sessionStorage.getItem('pending_google_redirect_auth') === 'true') {
+        return null;
+      }
       const saved = localStorage.getItem('savings_auth_user_v3');
       if (saved) return JSON.parse(saved);
     } catch {
@@ -640,10 +650,14 @@ export default function App() {
           setCurrentUser(onlineUser);
           setIsUnlocked(true);
           setGoogleAccessToken(redirectRes.accessToken);
+          setIsPendingAuth(false);
           syncBooksFromDrive(false, redirectRes.accessToken);
+        } else {
+          setIsPendingAuth(false);
         }
       } catch (err) {
         console.error('Error handling Google OAuth redirect result:', err);
+        setIsPendingAuth(false);
       }
     };
     handleRedirect();
@@ -715,8 +729,12 @@ export default function App() {
     setSelectedBookForDetail(book);
   }, []);
 
-  // Google Sign-in Handler
+  // Google Sign-in Handler for Offline User Transition
+  const [isLoggingInGoogle, setIsLoggingInGoogle] = useState<boolean>(false);
+
   const handleLoginGoogle = async () => {
+    if (isLoggingInGoogle) return;
+    setIsLoggingInGoogle(true);
     try {
       const res = await signInWithGoogle();
       const onlineUser: AuthUser = {
@@ -732,8 +750,12 @@ export default function App() {
         setGoogleAccessToken(res.accessToken);
         syncBooksFromDrive(false, res.accessToken);
       }
+      showToast(`Đã chuyển sang trực tuyến: ${onlineUser.email}`, 'success');
     } catch (err: any) {
       console.warn('Lỗi đăng nhập Google (đã xử lý):', err?.message || err);
+      showToast(err?.message || 'Đăng nhập Google thất bại hoặc bị hủy.', 'error');
+    } finally {
+      setIsLoggingInGoogle(false);
     }
   };
 
@@ -1111,6 +1133,18 @@ export default function App() {
     showToast('Đã hủy đăng nhập Google. Bạn tiếp tục sử dụng app ở chế độ Ngoại tuyến.', 'info');
   };
 
+  if (isPendingAuth && !currentUser) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center space-y-4">
+        <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mx-auto" />
+        <div className="space-y-1">
+          <h2 className="text-base font-bold text-white">Đang Hoàn Tất Đăng Nhập Google</h2>
+          <p className="text-xs text-slate-400">Đang đồng bộ tài khoản và kết nối Google Drive...</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
     return (
       <>
@@ -1217,6 +1251,7 @@ export default function App() {
           currentUser={currentUser}
           isSyncingDrive={isSyncingDrive}
           onLoginGoogle={handleLoginGoogle}
+          isLoggingInGoogle={isLoggingInGoogle}
           onLogout={handleRequestLogout}
           onOpenAddModal={() => {
             setBookToEdit(null);

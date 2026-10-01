@@ -42,11 +42,9 @@ try {
   console.warn('Could not set persistence:', e);
 }
 
-// Provider with requested Drive & Sheets scopes (drive.file per-file scope & spreadsheets)
+// Provider with requested Drive scope (drive.file non-sensitive scope)
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/drive.file');
-provider.addScope('https://www.googleapis.com/auth/drive.readonly');
-provider.addScope('https://www.googleapis.com/auth/spreadsheets');
 
 // Check if user has migrated to drive.file scope
 const isScopeMigrated = (() => {
@@ -285,8 +283,6 @@ export async function ensureGoogleAuthInitialized(): Promise<void> {
         'profile',
         'openid',
         'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/spreadsheets',
       ],
       grantOfflineAccess: true,
     });
@@ -424,6 +420,7 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
   }
   try {
     const result = await getRedirectResult(auth);
+    sessionStorage.removeItem('pending_google_redirect_auth');
     if (result) {
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
@@ -447,6 +444,7 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
       }
     }
   } catch (error: any) {
+    sessionStorage.removeItem('pending_google_redirect_auth');
     console.error('Error checking Google redirect result:', error);
   }
   return null;
@@ -464,6 +462,9 @@ export const signInWithGoogleRedirect = async (): Promise<void> => {
     window.open(window.location.href, '_blank');
     throw new Error('Đã mở ứng dụng ở thẻ (tab) trình duyệt mới để đăng nhập Google an toàn.');
   }
+  try {
+    sessionStorage.setItem('pending_google_redirect_auth', 'true');
+  } catch {}
   await signInWithRedirect(auth, provider);
 };
 
@@ -529,6 +530,19 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
         accessToken = idToken;
       }
 
+      const expiresAt = Date.now() + 3500 * 1000;
+      saveGoogleAuthSession({
+        accessToken,
+        idToken: idToken || undefined,
+        refreshToken: refreshToken || undefined,
+        expiresAt,
+        userProfile: {
+          email: nativeResult.email || undefined,
+          name: nativeResult.displayName || undefined,
+          photoUrl: nativeResult.imageUrl || undefined,
+        },
+      });
+
       console.info('[Google Sign-In] Đang xác thực với Firebase bằng Google Credential...');
       const credential = GoogleAuthProvider.credential(idToken || null, accessToken !== idToken ? accessToken : null);
       
@@ -543,18 +557,6 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       });
       const user = firebaseUserCredential.user;
 
-      const expiresAt = Date.now() + 3500 * 1000;
-      saveGoogleAuthSession({
-        accessToken,
-        idToken: idToken || undefined,
-        refreshToken: refreshToken || undefined,
-        expiresAt,
-        userProfile: {
-          email: nativeResult.email || user.email || undefined,
-          name: nativeResult.displayName || user.displayName || undefined,
-          photoUrl: nativeResult.imageUrl || user.photoURL || undefined,
-        }
-      });
       localStorage.setItem('drive_scope_migrated_v2', 'true');
 
       return {
@@ -602,6 +604,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       console.warn('Google Sign In popup blocked:', error?.message);
       if (autoFallbackToRedirect && !isRunningInIframe()) {
         try {
+          sessionStorage.setItem('pending_google_redirect_auth', 'true');
           await signInWithRedirect(auth, provider);
           throw new Error('Đang chuyển hướng sang trang đăng nhập Google...');
         } catch (redirectErr: any) {
@@ -649,27 +652,17 @@ export async function ensureGoogleAccessToken(): Promise<string> {
  * and if that also fails, it will call signInWithGoogle() to re-authorize.
  */
 export async function validateAndEnsureToken(): Promise<string> {
-  const silentToken = await trySilentRefresh();
-  if (silentToken) {
-    try {
-      const response = await fetch(
-        'https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)',
-        {
-          headers: {
-            Authorization: `Bearer ${silentToken}`,
-          },
-        }
-      );
-      if (response.ok) {
-        return silentToken;
-      }
-    } catch (err) {
-      console.warn('[Google Drive Auth] Test API validation check failed:', err);
-    }
+  // 1. Nếu token hiện tại còn hạn hợp lệ, trả về ngay lập tức (0ms, không tạo thêm request mạng thừa)
+  if (isGoogleTokenValid()) {
+    const existing = getGoogleAccessToken();
+    if (existing) return existing;
   }
 
-  // Fallback: full interactive sign-in
-  setGoogleAccessToken(null);
+  // 2. Thử làm mới ngầm (Silent Refresh) nếu có phiên hợp lệ
+  const silentToken = await trySilentRefresh();
+  if (silentToken) return silentToken;
+
+  // 3. Fallback: Nếu không có token hoặc đã hết hạn hoàn toàn, yêu cầu đăng nhập lại
   const res = await signInWithGoogle();
   return res.accessToken;
 }
@@ -906,9 +899,6 @@ export async function getRealGoogleDriveFileMetadata(
         headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
-    if (driveRes.status === 404) {
-      return { id: fileId, name: '', mimeType: '', isDeleted: true };
-    }
     if (driveRes.ok) {
       const data = await driveRes.json();
       if (data?.trashed) {

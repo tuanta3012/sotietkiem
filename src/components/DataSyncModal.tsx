@@ -29,7 +29,9 @@ import {
   FileText,
   Copy,
   RotateCcw,
+  FolderPlus,
 } from 'lucide-react';
+import { openGooglePicker } from '../utils/googlePicker';
 import { User } from 'firebase/auth';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, WorkspaceMember, canChangeDriveFile } from '../types';
 import { exportSavingsBooksToExcel, exportStandardTemplateExcel, parseExcelFile } from '../utils/excelParser';
@@ -152,7 +154,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   }, [isOpen, syncErrorMessage, showToast]);
   const [showDrivePickerModal, setShowDrivePickerModal] = useState<boolean>(false);
-  const [customLinkInput, setCustomLinkInput] = useState<string>('');
   const [isCreatingNewFile, setIsCreatingNewFile] = useState<boolean>(false);
   const [showCreateFileDialog, setShowCreateFileDialog] = useState<boolean>(false);
   const [newFileNameInput, setNewFileNameInput] = useState<string>('So_tiet_kiem');
@@ -303,12 +304,12 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     };
   }, [selectedFileId, accessToken, isOpen]);
 
-  // Fetch real Google Drive files when token is available and picker is opened
+  // Fetch real Google Drive files when token is available and modal is open
   useEffect(() => {
-    if (accessToken && showDrivePickerModal) {
+    if (accessToken && isOpen) {
       loadGoogleDriveFiles(accessToken, driveSearchQuery);
     }
-  }, [accessToken, showDrivePickerModal]);
+  }, [accessToken, isOpen, showDrivePickerModal]);
 
   const loadGoogleDriveFiles = async (token: string, search?: string) => {
     if (isLoadingFilesRef.current) return;
@@ -493,6 +494,49 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     const token = await validateTokenOrPrompt();
     if (token) {
       loadGoogleDriveFiles(token, driveSearchQuery);
+    }
+  };
+
+  // Mở cửa sổ Google Picker chính thức để chọn bảng tính trên Google Drive
+  const handleOpenGooglePicker = async () => {
+    if (!canChangeDriveFile(settings.currentRole)) {
+      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
+      return;
+    }
+    const token = await validateTokenOrPrompt();
+    if (!token) return;
+
+    if (Capacitor.isNativePlatform()) {
+      showToast('Tính năng chọn trực tiếp Google Picker không hỗ trợ trong WebView trên điện thoại.', 'info');
+      return;
+    }
+
+    setIsLoadingFiles(true);
+    setSyncErrorMessage(null);
+    try {
+      const picked = await openGooglePicker(token);
+      if (picked) {
+        const newFile: RealDriveFile = {
+          id: picked.id,
+          name: picked.name,
+          mimeType: picked.mimeType,
+          modifiedTime: new Date().toISOString(),
+          webViewLink: picked.url,
+          isSheetOrExcel: true,
+          isCentralHub: true,
+        };
+        // Cập nhật danh sách hiển thị
+        setRealFiles((prev) => {
+          const exists = prev.some((f) => f.id === picked.id);
+          return exists ? prev : [newFile, ...prev];
+        });
+        await handleSelectRealFile(newFile);
+      }
+    } catch (err: any) {
+      console.warn('Google Picker notice:', err);
+      showToast(err?.message || 'Không thể mở cửa sổ Google Drive Picker', 'error');
+    } finally {
+      setIsLoadingFiles(false);
     }
   };
 
@@ -934,7 +978,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setSheetUrl('');
     setSelectedFileId('');
     setSelectedFileName('');
-    setCustomLinkInput('');
     setLastSyncTime(null);
     setIsUnlinking(false);
     setSyncStatusStep(null);
@@ -1128,7 +1171,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
+                    {/* Nút tạo mới nhanh */}
                     <button
                       onClick={handleQuickCreateDriveFile}
                       disabled={isCreatingNewFile}
@@ -1147,15 +1191,80 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                       )}
                     </button>
 
-                    <button
-                      id="btn-link-google-drive"
-                      type="button"
-                      onClick={handleOpenDrivePicker}
-                      className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all flex items-center justify-center space-x-1.5 cursor-pointer border border-slate-200"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5 text-slate-500" />
-                      <span>📂 Chọn file có sẵn trên Drive</span>
-                    </button>
+                    {/* Danh sách file khả dụng (drive.file) */}
+                    <div className="space-y-2 bg-slate-50 p-2.5 sm:p-3 rounded-xl border border-slate-200">
+                      <div className="flex items-center justify-between text-[11px] text-slate-700 font-bold px-0.5">
+                        <span className="flex items-center gap-1.5">
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Danh sách bảng tính trên Drive ({realFiles.length}):</span>
+                        </span>
+                        <button
+                          type="button"
+                          disabled={isLoadingFiles}
+                          onClick={() => accessToken && loadGoogleDriveFiles(accessToken, driveSearchQuery)}
+                          className="text-slate-500 hover:text-emerald-700 p-1 rounded cursor-pointer transition-colors"
+                          title="Tải lại danh sách"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin text-emerald-600' : ''}`} />
+                        </button>
+                      </div>
+
+                      {/* File Items */}
+                      {isLoadingFiles ? (
+                        <div className="py-6 text-center text-slate-500 space-y-1.5 bg-white rounded-lg border border-slate-100">
+                          <RefreshCw className="w-4 h-4 animate-spin mx-auto text-emerald-600" />
+                          <p className="text-[11px]">Đang tải danh sách file bảng tính...</p>
+                        </div>
+                      ) : realFiles.length > 0 ? (
+                        <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white max-h-48 overflow-y-auto">
+                          {realFiles.map((file) => {
+                            const isSelected = selectedFileId === file.id;
+                            return (
+                              <div
+                                key={file.id}
+                                onClick={() => handleSelectRealFile(file)}
+                                className={`p-2.5 flex items-center justify-between cursor-pointer transition-colors ${
+                                  isSelected ? 'bg-emerald-50/90 border-l-4 border-l-emerald-600' : 'hover:bg-slate-50'
+                                }`}
+                              >
+                                <div className="flex items-center space-x-2 min-w-0 pr-2">
+                                  <span className="p-1 bg-emerald-100 text-emerald-700 rounded-md shrink-0">
+                                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                                  </span>
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-slate-900 text-xs truncate" title={file.name}>
+                                      {file.name}
+                                    </div>
+                                    <div className="text-[10px] text-slate-500">
+                                      {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('vi-VN') : ''}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className="px-2 py-1 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold text-[10px] shrink-0">
+                                  Chọn
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="py-3 px-2 text-center bg-white rounded-lg border border-dashed border-slate-200">
+                          <p className="text-[11px] text-slate-500">Chưa có bảng tính nào trong ứng dụng</p>
+                        </div>
+                      )}
+
+                      {/* DÒNG DƯỚI CÙNG: Chọn thêm file từ Google Drive (mở picker iframe) */}
+                      <button
+                        type="button"
+                        id="btn-open-google-picker-bottom"
+                        onClick={handleOpenGooglePicker}
+                        disabled={isLoadingFiles}
+                        className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-lg border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
+                      >
+                        <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>➕ Chọn thêm file từ Google Drive...</span>
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1385,62 +1494,81 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         </div>
       </div>
 
-      {/* CỬA SỔ CHỌN FILE GOOGLE DRIVE THỰC TẾ */}
+      {/* CỬA SỔ CHỌN FILE GOOGLE DRIVE GỌN NHẸ CHO MOBILE */}
       {showDrivePickerModal && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-300 overflow-hidden flex flex-col max-h-[88vh] animate-in fade-in zoom-in-95">
-            {/* Drive Picker Header */}
-            <div className="bg-slate-900 text-white p-4 flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center space-x-2.5">
-                <span className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl border border-emerald-500/30">
-                  <FolderOpen className="w-5 h-5" />
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-5 bg-slate-950/80 backdrop-blur-xs">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95">
+            {/* Header gọn nhẹ */}
+            <div className="bg-slate-900 text-white px-4 py-3.5 flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <span className="p-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
+                  <FolderOpen className="w-4 h-4" />
                 </span>
-                <div>
-                  <h3 className="font-bold text-white text-base">
-                    Chọn File Trên Google Drive Của Bạn
+                <div className="min-w-0">
+                  <h3 className="font-bold text-white text-sm truncate">
+                    Chọn File Google Drive
                   </h3>
-                  <p className="text-xs text-slate-400">
-                    {currentUser ? (
-                      <>Tài khoản: <strong className="text-emerald-300">{currentUser.email}</strong></>
-                    ) : (
-                      <>Chưa kết nối tài khoản Google</>
-                    )}
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {currentUser?.email || 'Chưa đăng nhập Google'}
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setShowDrivePickerModal(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10"
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 shrink-0"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Drive Picker Content */}
-            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 text-xs">
+            {/* Nội dung */}
+            <div className="p-3 sm:p-4 overflow-y-auto space-y-3 flex-1 text-xs">
               {!currentUser && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl text-center space-y-2">
-                  <p className="font-bold text-amber-900">
-                    Vui lòng đăng nhập Google để xem danh sách file từ Google Drive của bạn
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-center space-y-2">
+                  <p className="font-semibold text-amber-900 text-xs">
+                    Vui lòng đăng nhập Google để xem và chọn file
                   </p>
                   <button
                     disabled={isAuthenticating}
                     onClick={handleSignInGoogle}
-                    className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs"
+                    className="inline-flex items-center space-x-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white font-bold text-xs"
                   >
-                    <LogIn className="w-4 h-4" />
-                    <span>Đăng Nhập Google Sync</span>
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>Đăng nhập Google</span>
                   </button>
                 </div>
               )}
 
-              {/* Search Bar & Refresh */}
-              <div className="flex items-center gap-2">
+              {/* Nút hành động chính: Chọn file từ Drive & Tạo mới */}
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleOpenGooglePicker}
+                  disabled={isLoadingFiles || !currentUser}
+                  className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <FolderPlus className="w-4 h-4 shrink-0" />
+                  <span className="truncate">+ Chọn file từ Drive</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCreateFileDialog(true)}
+                  disabled={isLoadingFiles || !currentUser}
+                  className="flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="truncate">Tạo file mới</span>
+                </button>
+              </div>
+
+              {/* Thanh tìm kiếm & Làm mới */}
+              <div className="flex items-center gap-1.5">
                 <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    placeholder="Tìm kiếm file trên Google Drive..."
+                    placeholder="Tìm trong danh sách file..."
                     value={driveSearchQuery}
                     onChange={(e) => {
                       setDriveSearchQuery(e.target.value);
@@ -1448,138 +1576,107 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         loadGoogleDriveFiles(accessToken, e.target.value);
                       }
                     }}
-                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                   />
                 </div>
                 <button
                   disabled={isLoadingFiles || !accessToken}
                   onClick={() => accessToken && loadGoogleDriveFiles(accessToken, driveSearchQuery)}
-                  className="p-2.5 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl text-slate-700 disabled:opacity-50"
-                  title="Tải lại danh sách file"
+                  className="p-2 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-slate-600 disabled:opacity-50 shrink-0"
+                  title="Tải lại"
                 >
-                  <RefreshCw className={`w-4 h-4 ${isLoadingFiles ? 'animate-spin text-emerald-600' : ''}`} />
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin text-emerald-600' : ''}`} />
                 </button>
               </div>
 
-              {/* Real Drive Files List */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Danh sách file trên Google Drive ({realFiles.length} file):
-                  </span>
+              {/* Danh sách file khả dụng */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold px-0.5">
+                  <span>File khả dụng ({realFiles.length}):</span>
+                  {selectedFileId && <span className="text-emerald-600">Đã chọn 1 file</span>}
                 </div>
 
                 {isLoadingFiles ? (
-                  <div className="py-12 text-center text-slate-500 space-y-2 bg-slate-50 rounded-xl border border-slate-200">
-                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-emerald-600" />
-                    <p className="text-xs font-medium">Đang tải danh sách file từ Google Drive...</p>
+                  <div className="py-8 text-center text-slate-500 space-y-1.5 bg-slate-50 rounded-xl border border-slate-100">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto text-emerald-600" />
+                    <p className="text-xs">Đang tải danh sách file...</p>
                   </div>
                 ) : realFiles.length === 0 ? (
-                  <div className="py-6 px-4 text-center bg-slate-50 rounded-xl border border-slate-200 space-y-4">
-                    <div className="space-y-1.5">
-                      <p className="text-xs font-bold text-slate-800">
-                        {driveSearchQuery
-                          ? `Không tìm thấy file nào khớp với "${driveSearchQuery}".`
-                          : 'Chưa tìm thấy file bảng tính khả dụng trên Google Drive.'}
-                      </p>
-                      <p className="text-[11px] text-slate-500 max-w-md mx-auto leading-relaxed">
-                        Bạn có thể <strong>Tạo file mới</strong> trực tiếp trên Drive, <strong>Dán link Google Sheets</strong> ở bên dưới, hoặc <strong>Đăng nhập lại</strong> để cấp toàn quyền Drive.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-                      <button
-                        onClick={() => setShowCreateFileDialog(true)}
-                        className="inline-flex items-center space-x-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-xs transition-all"
-                      >
-                        <FileSpreadsheet className="w-4 h-4" />
-                        <span>Tạo File Mới Trên Google Drive</span>
-                      </button>
-
-                      <button
-                        onClick={handleSignInGoogle}
-                        className="inline-flex items-center space-x-1.5 px-3.5 py-2 bg-white hover:bg-slate-100 text-slate-700 font-semibold border border-slate-300 rounded-xl text-xs shadow-2xs transition-all"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Cấp lại quyền Google Drive</span>
-                      </button>
-                    </div>
+                  <div className="py-6 px-3 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-2">
+                    <p className="text-xs font-semibold text-slate-700">Chưa có file nào liên kết</p>
+                    <p className="text-[11px] text-slate-500">
+                      Bấm <strong>"+ Chọn file từ Drive"</strong> để chọn file hoặc bấm <strong>"Tạo file mới"</strong> để bắt đầu đồng bộ.
+                    </p>
                   </div>
                 ) : (
-                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white max-h-60 overflow-y-auto">
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white max-h-56 overflow-y-auto">
                     {realFiles.map((file) => {
                       const isSelected = selectedFileId === file.id;
                       return (
                         <div
                           key={file.id}
                           onClick={() => handleSelectRealFile(file)}
-                          className={`p-3.5 flex items-center justify-between cursor-pointer transition-colors ${
+                          className={`p-2.5 sm:p-3 flex items-center justify-between cursor-pointer transition-colors ${
                             isSelected ? 'bg-emerald-50/90 border-l-4 border-l-emerald-600' : 'hover:bg-slate-50'
                           }`}
                         >
-                          <div className="flex items-center space-x-3">
-                            <span className="p-2 bg-emerald-100 text-emerald-700 rounded-xl">
-                              <FileSpreadsheet className="w-5 h-5" />
+                          <div className="flex items-center space-x-2.5 min-w-0 pr-2">
+                            <span className="p-1.5 bg-emerald-100 text-emerald-700 rounded-lg shrink-0">
+                              <FileSpreadsheet className="w-4 h-4" />
                             </span>
-                            <div>
-                              <div className="font-bold text-slate-900 text-xs flex items-center space-x-2">
-                                <span>{file.name}</span>
-                                {isSelected && (
-                                  <span className="px-2 py-0.5 bg-emerald-600 text-white text-[10px] font-bold rounded-full">
-                                    Đang liên kết
+                            <div className="min-w-0">
+                              <div className="font-semibold text-slate-900 text-xs flex items-center space-x-1.5">
+                                <span className="truncate">{file.name}</span>
+                                {file.isCentralHub && (
+                                  <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-700 text-[10px] font-bold rounded-sm shrink-0">
+                                    Trung tâm
                                   </span>
                                 )}
                               </div>
-                              <div className="text-[11px] text-slate-500 flex items-center space-x-3 mt-0.5">
-                                <span>Kích thước: {file.size}</span>
+                              <div className="text-[10px] text-slate-400 flex items-center space-x-2 mt-0.5">
+                                <span>{file.size}</span>
                                 <span>&bull;</span>
-                                <span>
-                                  Cập nhật: {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('vi-VN') : 'Không rõ'}
-                                </span>
+                                <span>{file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('vi-VN') : ''}</span>
                               </div>
                             </div>
                           </div>
 
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleSelectRealFile(file);
-                            }}
-                            className={`px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all ${
+                          <span
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shrink-0 transition-all ${
                               isSelected
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700'
+                                ? 'bg-emerald-600 text-white'
+                                : 'bg-slate-100 text-slate-600 hover:bg-emerald-600 hover:text-white'
                             }`}
                           >
-                            {isSelected ? 'Đang liên kết' : 'Chọn & Liên kết'}
-                          </button>
+                            {isSelected ? 'Đang dùng' : 'Chọn'}
+                          </span>
                         </div>
                       );
                     })}
                   </div>
                 )}
+
+                {/* DÒNG DƯỚI CÙNG: Mở Google Picker iframe */}
+                <button
+                  type="button"
+                  onClick={handleOpenGooglePicker}
+                  disabled={isLoadingFiles}
+                  className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-emerald-50 hover:bg-emerald-100/90 active:scale-[0.99] text-emerald-800 font-bold rounded-xl border border-dashed border-emerald-300 transition-all cursor-pointer shadow-2xs text-xs"
+                >
+                  <FolderPlus className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>➕ Chọn thêm file từ Google Drive...</span>
+                </button>
               </div>
             </div>
 
-            {/* Drive Picker Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-              <a
-                href="https://drive.google.com"
-                target="_blank"
-                rel="noreferrer"
-                className="text-emerald-700 hover:underline flex items-center font-medium text-xs"
+            {/* Footer gọn */}
+            <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
+              <button
+                onClick={() => setShowDrivePickerModal(false)}
+                className="px-4 py-1.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold text-xs"
               >
-                <ExternalLink className="w-3.5 h-3.5 mr-1" /> Mở Google Drive cá nhân (tab mới)
-              </a>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => setShowDrivePickerModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold"
-                >
-                  Đóng
-                </button>
-              </div>
+                Đóng
+              </button>
             </div>
           </div>
         </div>

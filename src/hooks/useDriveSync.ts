@@ -91,6 +91,7 @@ export function useDriveSync({
   const isSwitchingFileRef = useRef<boolean>(false);
   const isSyncingRef = useRef<boolean>(false);
   const isPushingRef = useRef<boolean>(false);
+  const isAutoConnectingRef = useRef<boolean>(false);
   const lastLocalPushTimeRef = useRef<number>(0);
   const fileSwitchCooldownUntilRef = useRef<number>(0);
 
@@ -785,11 +786,14 @@ export function useDriveSync({
       sessionStorage.getItem('explicitly_unlinked') === 'true' ||
       localStorage.getItem('explicitly_unlinked') === 'true';
 
-    if (currentUser?.isOffline || isSwitchingFileRef.current || isExplicitlyUnlinked) return;
-
     const performAutoConnect = async () => {
+      if (currentUser?.isOffline || isSwitchingFileRef.current || isExplicitlyUnlinked || isAutoConnectingRef.current) return;
+      isAutoConnectingRef.current = true;
       const token = getGoogleAccessToken();
-      if (!token) return;
+      if (!token) {
+        isAutoConnectingRef.current = false;
+        return;
+      }
 
       try {
         console.info('[Central Hub Sync] Đang tự động quét tìm file trung tâm trên Google Drive...');
@@ -882,6 +886,8 @@ export function useDriveSync({
           summary: `Lỗi quét file: ${err?.message || err}`,
           errorMessage: err?.stack || err?.message,
         });
+      } finally {
+        isAutoConnectingRef.current = false;
       }
     };
 
@@ -1241,7 +1247,7 @@ export function useDriveSync({
 
     if (!token || !isValid) {
       try {
-        const freshToken = await trySilentRefresh();
+        const freshToken = await ensureGoogleAccessToken();
         if (freshToken) {
           token = freshToken;
           isValid = true;
