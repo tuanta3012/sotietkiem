@@ -30,7 +30,9 @@ import {
   Copy,
   RotateCcw,
   FolderPlus,
+  Smartphone,
 } from 'lucide-react';
+import { isMobilePhone } from '../utils/deviceDetector';
 import { openGooglePicker } from '../utils/googlePicker';
 import { User } from 'firebase/auth';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, WorkspaceMember, canChangeDriveFile } from '../types';
@@ -154,8 +156,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   }, [isOpen, syncErrorMessage, showToast]);
   const [showDrivePickerModal, setShowDrivePickerModal] = useState<boolean>(false);
-  const [showAddByUrlModal, setShowAddByUrlModal] = useState<boolean>(false);
-  const [urlToLinkInput, setUrlToLinkInput] = useState<string>('');
   const [isCreatingNewFile, setIsCreatingNewFile] = useState<boolean>(false);
   const [showCreateFileDialog, setShowCreateFileDialog] = useState<boolean>(false);
   const [newFileNameInput, setNewFileNameInput] = useState<string>('So_tiet_kiem');
@@ -183,6 +183,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   onUpdateSettingsRef.current = onUpdateSettings;
 
   const isLoadingFilesRef = React.useRef(false);
+  const androidFileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Sync settings when modified externally
   useEffect(() => {
@@ -499,6 +500,70 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
+  // Xử lý nạp file từ Trình quản lý file của Android (hỗ trợ chọn file từ Google Drive của máy)
+  const handleSelectAndroidFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!canChangeDriveFile(settings.currentRole)) {
+      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
+      return;
+    }
+
+    setSyncStatusStep(`Đang đọc dữ liệu bảng tính từ file "${file.name}"...`);
+    setSyncErrorMessage(null);
+    try {
+      const res = await parseExcelFile(file);
+      if (res.success && res.books.length > 0) {
+        const token = accessToken || getGoogleAccessToken();
+        if (token) {
+          const shouldUpload = window.confirm(
+            `Đã đọc thành công ${res.books.length} sổ tiết kiệm từ file "${file.name}".\n\nBạn có muốn tự động tạo và liên kết file này lên Google Drive để cập nhật 2 chiều tự động không?`
+          );
+
+          if (shouldUpload) {
+            setIsCreatingNewFile(true);
+            setSyncStatusStep(`Đang tạo và liên kết bảng tính "${file.name}" trên Google Drive...`);
+            const userEmail = (currentUser?.email || appUser?.email || '').trim().toLowerCase();
+            const created = await createRealGoogleDriveFile(
+              token,
+              file.name.replace(/\.[^/.]+$/, ''),
+              res.books,
+              [],
+              userEmail
+            );
+            setSelectedFileId(created.id);
+            setSelectedFileName(created.name);
+            setSheetUrl(created.webViewLink);
+            const nowStr = new Date().toLocaleString('vi-VN');
+            setLastSyncTime(nowStr);
+            onImportBooks(res.books, 'replace');
+            onUpdateSettings({
+              googleSheetUrl: created.webViewLink,
+              googleSheetName: created.name,
+              lastSyncTime: nowStr,
+              autoSync: true,
+            });
+            setGoogleSyncMessage(`✅ Đã nạp ${res.books.length} sổ và tạo file liên kết "${created.name}" trên Google Drive thành công!`);
+            await loadGoogleDriveFiles(token);
+            return;
+          }
+        }
+
+        onImportBooks(res.books, 'replace');
+        setGoogleSyncMessage(`✅ Đã nạp thành công ${res.books.length} sổ tiết kiệm từ file "${file.name}"!`);
+      } else {
+        setSyncErrorMessage(res.errors?.[0] || 'File không hợp lệ hoặc không tìm thấy cấu trúc sổ tiết kiệm.');
+      }
+    } catch (err: any) {
+      setSyncErrorMessage(`Lỗi đọc file: ${err.message || 'Không thể đọc nội dung file.'}`);
+    } finally {
+      setIsCreatingNewFile(false);
+      setSyncStatusStep(null);
+      e.target.value = '';
+    }
+  };
+
   // Mở cửa sổ Google Picker chính thức để chọn bảng tính trên Google Drive
   const handleOpenGooglePicker = async () => {
     if (!canChangeDriveFile(settings.currentRole)) {
@@ -507,13 +572,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
     const token = await validateTokenOrPrompt();
     if (!token) return;
-
-    // Trên thiết bị Android APK: Google Picker iframe không tương thích với WebView di động.
-    // Mở ngay hộp thoại thêm link/ID chuẩn mobile để người dùng thao tác mượt mà, không bị văng sang Chrome
-    if (Capacitor.isNativePlatform()) {
-      setShowAddByUrlModal(true);
-      return;
-    }
 
     setIsLoadingFiles(true);
     setSyncErrorMessage(null);
@@ -538,8 +596,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       }
     } catch (err: any) {
       console.warn('Google Picker notice:', err);
-      // Khi Picker gặp trục trặc trên trình duyệt, mở popup nhập link thay thế
-      setShowAddByUrlModal(true);
+      showToast(err?.message || 'Không thể mở cửa sổ Google Drive Picker', 'error');
     } finally {
       setIsLoadingFiles(false);
     }
@@ -1117,6 +1174,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
       <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
+        {/* Hidden Android / System Document File Picker */}
+        <input
+          type="file"
+          ref={androidFileInputRef}
+          accept=".xlsx,.xls,.csv"
+          onChange={handleSelectAndroidFile}
+          className="hidden"
+        />
         {/* Header */}
         <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center space-x-2.5 min-w-0">
@@ -1258,7 +1323,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         </div>
                       )}
 
-                      {/* DÒNG DƯỚI CÙNG: Chọn thêm file từ Google Drive (mở picker iframe) */}
+                      {/* DÒNG DƯỚI CÙNG: Chọn thêm file từ Google Drive */}
                       <button
                         type="button"
                         id="btn-open-google-picker-bottom"
@@ -1840,107 +1905,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs"
               >
                 Xác Nhận Nạp Đè
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL THÊM FILE GOOGLE DRIVE CHUẨN GIAO DIỆN MOBILE / ANDROID */}
-      {showAddByUrlModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl border border-slate-200 p-4 sm:p-5 space-y-3.5 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <span className="p-2 bg-emerald-100 text-emerald-700 rounded-xl">
-                  <FileSpreadsheet className="w-5 h-5" />
-                </span>
-                <div>
-                  <h3 className="font-bold text-slate-900 text-sm">Thêm File Từ Google Drive</h3>
-                  <p className="text-[11px] text-slate-500">Liên kết bảng tính Google Sheets bằng đường dẫn</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddByUrlModal(false);
-                  setUrlToLinkInput('');
-                }}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Hướng dẫn 3 bước cực kỳ đơn giản trên điện thoại */}
-            <div className="p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs space-y-1.5 text-emerald-900">
-              <p className="font-bold text-emerald-950">💡 Cách lấy link file trên điện thoại:</p>
-              <ol className="list-decimal list-inside space-y-1 text-[11px] text-emerald-800">
-                <li>Mở ứng dụng <strong>Google Drive</strong> hoặc <strong>Google Sheets</strong>.</li>
-                <li>Bấm dấu <strong>3 chấm (⋮)</strong> bên cạnh file muốn dùng.</li>
-                <li>Chọn <strong>&quot;Sao chép đường liên kết&quot;</strong>.</li>
-              </ol>
-            </div>
-
-            {/* Ô nhập và nút Dán 1-chạm */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-bold text-slate-700">Link hoặc ID Google Sheets:</label>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  placeholder="https://docs.google.com/spreadsheets/d/..."
-                  value={urlToLinkInput}
-                  onChange={(e) => setUrlToLinkInput(e.target.value)}
-                  className="flex-1 px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      if (navigator.clipboard?.readText) {
-                        const text = await navigator.clipboard.readText();
-                        if (text) {
-                          setUrlToLinkInput(text.trim());
-                          showToast('Đã dán từ bộ nhớ tạm!', 'success');
-                        }
-                      }
-                    } catch {
-                      showToast('Hãy nhấn giữ vào ô nhập và chọn Dán', 'info');
-                    }
-                  }}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl shrink-0 cursor-pointer border border-slate-200 flex items-center gap-1"
-                >
-                  <span>Dán</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Nút hành động */}
-            <div className="flex gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAddByUrlModal(false);
-                  setUrlToLinkInput('');
-                }}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                disabled={!urlToLinkInput.trim()}
-                onClick={() => {
-                  if (urlToLinkInput.trim()) {
-                    const url = urlToLinkInput.trim();
-                    setShowAddByUrlModal(false);
-                    setUrlToLinkInput('');
-                    handleConnectByUrl(url);
-                  }
-                }}
-                className="flex-1 py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs cursor-pointer shadow-xs"
-              >
-                Liên kết ngay
               </button>
             </div>
           </div>

@@ -112,10 +112,17 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
         .setMode(google.picker.DocsViewMode.LIST)
         .setMimeTypes('application/vnd.google-apps.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
 
+      // Tính toán kích thước vừa vặn theo màn hình thực tế (cả điện thoại và máy tính)
+      const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 360;
+      const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 640;
+      const pickerWidth = Math.max(320, Math.min(viewportWidth - 16, 700));
+      const pickerHeight = Math.max(380, Math.min(viewportHeight - 32, 560));
+
       const builder = new google.picker.PickerBuilder()
         .setOAuthToken(accessToken)
         .setAppId(projectNumber)
         .setOrigin(pickerOrigin)
+        .setSize(pickerWidth, pickerHeight)
         .addView(sheetsView)
         .setTitle('Chọn File Bảng Tính (Google Sheets)')
         .setLocale('vi')

@@ -110,6 +110,44 @@ jobs:
             sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
           fi
 
+          # Cấu hình triệt để ngăn chặn Google One khôi phục snapshot sao lưu ngoài ý muốn khi cài mới
+          mkdir -p android/app/src/main/res/xml
+          cat << 'EOF' > android/app/src/main/res/xml/data_extraction_rules.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <data-extraction-rules>
+              <cloud-backup>
+                  <exclude path="." />
+              </cloud-backup>
+              <device-transfer>
+                  <exclude path="." />
+              </device-transfer>
+          </data-extraction-rules>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/xml/backup_rules.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <full-backup-content>
+              <exclude domain="root" path="." />
+              <exclude domain="file" path="." />
+              <exclude domain="database" path="." />
+              <exclude domain="sharedpref" path="." />
+              <exclude domain="external" path="." />
+          </full-backup-content>
+          EOF
+
+          cat << 'EOF' > android/app/src/main/res/xml/file_paths.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths xmlns:android="http://schemas.android.com/apk/res/android">
+              <external-path name="my_images" path="." />
+              <cache-path name="cache" path="." />
+              <files-path name="files" path="." />
+          </paths>
+          EOF
+
+          if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
+            sed -i 's/android:allowBackup="true"/android:allowBackup="false" android:fullBackupOnly="false" android:dataExtractionRules="@xml\/data_extraction_rules" android:fullBackupContent="@xml\/backup_rules"/g' android/app/src/main/AndroidManifest.xml
+          fi
+
       # 7. Copy google-services.json (nếu có) & Tạo icon
       - name: Copy google-services.json
         run: |
