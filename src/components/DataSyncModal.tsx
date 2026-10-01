@@ -1318,9 +1318,16 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                                     </div>
                                   </div>
                                 </div>
-                                <span className="px-2 py-1 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-bold text-[10px] shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSelectRealFile(file);
+                                  }}
+                                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-bold text-xs shadow-xs shrink-0 cursor-pointer transition-all"
+                                >
                                   Chọn
-                                </span>
+                                </button>
                               </div>
                             );
                           })}
@@ -1331,7 +1338,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         </div>
                       )}
 
-                      {/* DÒNG DƯỚI CÙNG: Mở Google Picker trên Web Desktop hoặc Trình chọn file Android */}
+                      {/* DÒNG DƯỚI CÙNG: Mở Google Picker trên Web Desktop hoặc Nạp tệp Excel máy */}
                       {!isMobilePhone() ? (
                         <button
                           type="button"
@@ -1348,10 +1355,10 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           type="button"
                           onClick={() => androidFileInputRef.current?.click()}
                           disabled={isLoadingFiles}
-                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] text-slate-700 font-bold rounded-lg border border-dashed border-slate-300 transition-all cursor-pointer text-xs"
+                          className="w-full py-2.5 px-3 flex items-center justify-center space-x-1.5 bg-slate-50 hover:bg-slate-100 active:scale-[0.99] text-slate-700 font-medium rounded-lg border border-dashed border-slate-300 transition-all cursor-pointer text-xs"
                         >
-                          <Smartphone className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>📱 Mở tệp từ máy / Drive (Trình chọn file Android)...</span>
+                          <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>📁 Nạp từ tệp Excel/CSV trên máy (.xlsx, .csv)...</span>
                         </button>
                       )}
                     </div>
@@ -1648,8 +1655,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     disabled={isLoadingFiles}
                     className="flex items-center justify-center space-x-1.5 py-2.5 px-2.5 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-800 font-bold rounded-xl text-xs border border-slate-300 transition-all disabled:opacity-50 cursor-pointer"
                   >
-                    <Smartphone className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span className="truncate">Mở tệp từ máy / Drive</span>
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="truncate">Nạp tệp Excel/CSV từ máy</span>
                   </button>
                 </div>
               ) : (

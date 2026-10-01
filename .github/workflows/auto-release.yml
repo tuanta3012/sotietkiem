@@ -82,8 +82,8 @@ jobs:
             npx cap add android
           fi
 
-      # 6. Cập nhật SDK, strings.xml (server_client_id cho Google Auth) & Phiên bản
-      - name: Update Android Config, SDK & Strings
+      # 6. Cập nhật SDK, strings.xml, Cấu hình Chặn Google One Auto-Backup & Phiên bản
+      - name: Update Android Config, SDK, Anti-Backup Rules & Strings
         env:
           VERSION_CODE: ${{ steps.auto_version.outputs.CODE }}
           VERSION_NAME: ${{ steps.auto_version.outputs.NAME }}
@@ -100,17 +100,7 @@ jobs:
           </resources>
           EOF
 
-          if [ -f "android/variables.gradle" ]; then
-            sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
-            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
-            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
-          fi
-          if [ -f "android/app/build.gradle" ]; then
-            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
-            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
-          fi
-
-          # Cấu hình triệt để ngăn chặn Google One khôi phục snapshot sao lưu ngoài ý muốn khi cài mới
+          # Tạo thư mục và cấu hình XML chặn Google One khôi phục snapshot cũ
           mkdir -p android/app/src/main/res/xml
           cat << 'EOF' > android/app/src/main/res/xml/data_extraction_rules.xml
           <?xml version="1.0" encoding="utf-8"?>
@@ -139,13 +129,45 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <paths xmlns:android="http://schemas.android.com/apk/res/android">
               <external-path name="my_images" path="." />
-              <cache-path name="cache" path="." />
-              <files-path name="files" path="." />
+              <external-files-path name="my_external_files" path="." />
+              <files-path name="my_internal_files" path="." />
+              <cache-path name="my_cache" path="." />
           </paths>
           EOF
 
+          # Thiết lập cấu hình chống backup vào AndroidManifest.xml
           if [ -f "android/app/src/main/AndroidManifest.xml" ]; then
-            sed -i 's/android:allowBackup="true"/android:allowBackup="false" android:fullBackupOnly="false" android:dataExtractionRules="@xml\/data_extraction_rules" android:fullBackupContent="@xml\/backup_rules"/g' android/app/src/main/AndroidManifest.xml
+            node -e "
+              const fs = require('fs');
+              const manifestPath = 'android/app/src/main/AndroidManifest.xml';
+              let manifest = fs.readFileSync(manifestPath, 'utf8');
+              if (manifest.includes('<application')) {
+                manifest = manifest.replace(/android:allowBackup=\"[^\"]*\"/g, 'android:allowBackup=\"false\"');
+                if (!manifest.includes('android:allowBackup=\"false\"')) {
+                  manifest = manifest.replace('<application', '<application\n        android:allowBackup=\"false\"');
+                }
+                if (!manifest.includes('android:fullBackupOnly')) {
+                  manifest = manifest.replace('<application', '<application\n        android:fullBackupOnly=\"false\"');
+                }
+                if (!manifest.includes('android:dataExtractionRules')) {
+                  manifest = manifest.replace('<application', '<application\n        android:dataExtractionRules=\"@xml/data_extraction_rules\"');
+                }
+                if (!manifest.includes('android:fullBackupContent')) {
+                  manifest = manifest.replace('<application', '<application\n        android:fullBackupContent=\"@xml/backup_rules\"');
+                }
+                fs.writeFileSync(manifestPath, manifest, 'utf8');
+              }
+            "
+          fi
+
+          if [ -f "android/variables.gradle" ]; then
+            sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
+            sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
+          fi
+          if [ -f "android/app/build.gradle" ]; then
+            sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle
+            sed -i "s/versionName \"[^\"]*\"/versionName \"$VERSION_NAME\"/g" android/app/build.gradle
           fi
 
       # 7. Copy google-services.json (nếu có) & Tạo icon

@@ -3,22 +3,30 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { ToastProvider } from './context/ToastContext.tsx';
-import { enforceFreshInstallCleanState } from './utils/freshInstallGuard';
+import { enforceFreshInstallCleanState, autoCleanupStartupCache } from './utils/secureStorage.ts';
 import './index.css';
 
-async function bootstrap() {
-  // Đảm bảo dọn dẹp triệt để dữ liệu khôi phục ngoài ý muốn từ Google One snapshot khi cài mới APK
-  await enforceFreshInstallCleanState();
+async function bootstrapApp() {
+  try {
+    // Tầng 3 (Runtime Keystore Guard): Chặn triệt để Google One Zombie restore trên cài đặt mới
+    await enforceFreshInstallCleanState();
+    await autoCleanupStartupCache();
+  } catch (err) {
+    console.error('[Bootstrap] Lỗi khởi tạo Runtime Keystore Guard:', err);
+  }
 
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <ErrorBoundary>
-        <ToastProvider>
-          <App />
-        </ToastProvider>
-      </ErrorBoundary>
-    </StrictMode>
-  );
+  const container = document.getElementById('root');
+  if (container) {
+    createRoot(container).render(
+      <StrictMode>
+        <ErrorBoundary>
+          <ToastProvider>
+            <App />
+          </ToastProvider>
+        </ErrorBoundary>
+      </StrictMode>
+    );
+  }
 }
 
-bootstrap();
+bootstrapApp();

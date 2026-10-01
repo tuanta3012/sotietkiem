@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.tietkiemgiadinh.app">
+    package="com.tietkiem.giadinh">
 
+    <!-- Chặn triệt để sao lưu tự động và khôi phục dữ liệu đám mây từ Google One / Android Backup -->
     <application
         android:allowBackup="false"
         android:fullBackupOnly="false"
