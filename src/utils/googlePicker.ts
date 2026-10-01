@@ -90,11 +90,6 @@ export async function openGooglePicker(accessToken: string): Promise<PickedGoogl
     throw new Error('Vui lòng đăng nhập Google trước khi chọn file.');
   }
 
-  // Trên thiết bị Android (Capacitor WebView), Google cấm chạy iframe picker
-  if (Capacitor.isNativePlatform()) {
-    throw new Error('Trên ứng dụng điện thoại Android, tính năng chọn qua Google Picker không hỗ trợ trong WebView.');
-  }
-
   await loadPickerModule();
 
   if (!window.google?.picker) {

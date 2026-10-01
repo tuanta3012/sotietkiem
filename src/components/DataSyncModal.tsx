@@ -506,11 +506,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     const token = await validateTokenOrPrompt();
     if (!token) return;
 
-    if (Capacitor.isNativePlatform()) {
-      showToast('Tính năng chọn trực tiếp Google Picker không hỗ trợ trong WebView trên điện thoại.', 'info');
-      return;
-    }
-
     setIsLoadingFiles(true);
     setSyncErrorMessage(null);
     try {
