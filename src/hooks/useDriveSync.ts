@@ -1236,8 +1236,20 @@ export function useDriveSync({
     }
     if (typeof navigator !== 'undefined' && !navigator.onLine) return;
 
-    const token = getGoogleAccessToken();
-    const isValid = isGoogleTokenValid();
+    let token = getGoogleAccessToken();
+    let isValid = isGoogleTokenValid();
+
+    if (!token || !isValid) {
+      try {
+        const freshToken = await trySilentRefresh();
+        if (freshToken) {
+          token = freshToken;
+          isValid = true;
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     if (!token) {
       if (!isPassiveBackground) {
@@ -1337,8 +1349,8 @@ export function useDriveSync({
   useEffect(() => {
     if (!currentUser || currentUser.isOffline) return;
 
-    // 1. Khởi động ứng dụng (Cold start): Kiểm tra và kéo dữ liệu mới nhất tức thì
-    checkDriveTokenValidity(false);
+    // 1. Khởi động ứng dụng (Cold start): Kiểm tra âm thầm trong nền và kéo dữ liệu mới nhất tức thì
+    checkDriveTokenValidity(true);
     checkRemoteSheetChanges(true);
 
     let lastCheckTime = Date.now();
