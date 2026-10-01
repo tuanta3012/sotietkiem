@@ -443,9 +443,9 @@ export const AppModals: React.FC<AppModalsProps> = ({
       )}
 
       {/* Drive Token Expired Notification Modal */}
-      {isDriveTokenExpired && (
+      {isDriveTokenExpired && !currentUser?.isOffline && (
         <DriveTokenExpiredModal
-          isOpen={isDriveTokenExpired}
+          isOpen={isDriveTokenExpired && !currentUser?.isOffline}
           onClose={() => {
             try {
               sessionStorage.setItem('dismissed_drive_prompt', 'true');

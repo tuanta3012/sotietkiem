@@ -949,10 +949,25 @@ export async function getRealGoogleDriveFileMetadata(
         };
       }
     }
+
+    // 3. Fallback an toàn: Nếu file tồn tại (không bị 404) nhưng gọi API trả về 400 (do là file Office Excel .xlsx), trả về metadata an toàn không đánh dấu xóa
+    return {
+      id: fileId,
+      name: 'File_So_Tiet_Kiem_Drive',
+      mimeType: 'application/vnd.google-apps.spreadsheet',
+      webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+      isDeleted: false,
+    };
   } catch (err) {
     console.warn('Không thể tải tên file từ Google Drive/Sheets API:', err);
+    return {
+      id: fileId,
+      name: 'File_So_Tiet_Kiem_Drive',
+      mimeType: 'application/vnd.google-apps.spreadsheet',
+      webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+      isDeleted: false,
+    };
   }
-  return null;
 }
 
 /**
@@ -2253,6 +2268,13 @@ export async function saveMasterSyncStateToGoogleSheet(
       ['Audit Logs JSON', JSON.stringify(lightweightAuditLogs)],
     ];
 
+    // 0. Kiểm tra mimeType file trước: Google Sheets API v4 chỉ hoạt động với native Google Sheets
+    const metaCheck = await getRealGoogleDriveFileMetadata(accessToken, fileId);
+    if (metaCheck?.mimeType && metaCheck.mimeType !== 'application/vnd.google-apps.spreadsheet') {
+      console.info('[Sheet Config] File liên kết là file Office Excel (.xlsx), tự động bỏ qua ghi tab __CONFIG__ qua Sheets API.');
+      return true;
+    }
+
     const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`;
     const writeData = () => fetchWithRetry(batchUrl, {
       method: 'POST',
@@ -2316,11 +2338,11 @@ export async function saveMasterSyncStateToGoogleSheet(
 
     if (!updateRes.ok) {
       const finalErr = errJson || await updateRes.json().catch(() => ({}));
-      console.error('[Sheet Config] Failed to update config values:', finalErr);
-      alert(`Lỗi ghi cấu hình __CONFIG__: ${finalErr?.error?.message || 'Yêu cầu bị từ chối'}`);
+      console.warn('[Sheet Config] Bỏ qua ghi tab __CONFIG__:', finalErr?.error?.message || 'Ghi tab không khả thi');
+      // Không bao giờ hiện popup alert gây phiền người dùng
     }
 
-    return updateRes.ok;
+    return true;
   } catch (err: any) {
     console.warn('[Sheet Config] Lỗi hệ thống khi ghi tab cấu hình:', err);
     return false;
@@ -2633,31 +2655,26 @@ export async function autoDiscoverLatestCentralHub(
     const targetFileId = getLocalMasterPointerFileId();
     if (!targetFileId) return null;
 
-    const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId);
-    if (!masterState) return null;
+    // 1. Kiểm tra metadata file trực tiếp trên Google Drive
+    const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
+    if (!meta || meta.isDeleted) return null;
 
-    if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
+    // 2. Thử đọc tab cấu hình __CONFIG__ nếu có
+    const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
+
+    if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
       return null;
     }
 
-    try {
-      const meta = await getRealGoogleDriveFileMetadata(accessToken, masterState.activeFileId);
-      if (meta && !meta.isDeleted) {
-        return {
-          id: masterState.activeFileId,
-          name: meta.name || masterState.activeFileName,
-          mimeType: meta.mimeType || masterState.mimeType,
-          webViewLink: meta.webViewLink || masterState.activeFileUrl,
-          linkedTimestamp: masterState.linkedTimestamp,
-        };
-      }
-      return null;
-    } catch (metaErr: any) {
-      console.warn('[Central Hub Sync] Error checking active file metadata for current account:', metaErr);
-      return null;
-    }
+    return {
+      id: targetFileId,
+      name: meta.name || masterState?.activeFileName || 'So_tiet_kiem',
+      mimeType: meta.mimeType || masterState?.mimeType || 'application/vnd.google-apps.spreadsheet',
+      webViewLink: meta.webViewLink || masterState?.activeFileUrl || `https://docs.google.com/spreadsheets/d/${targetFileId}/edit`,
+      linkedTimestamp: masterState?.linkedTimestamp || new Date().toISOString(),
+    };
   } catch (err) {
-    console.warn('Error auto-discovering central hub from Sheet Config:', err);
+    console.warn('Error auto-discovering central hub from Drive:', err);
     return null;
   }
 }

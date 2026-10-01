@@ -48,6 +48,14 @@ export function useDriveSync({
   const [detectedDesyncHub, setDetectedDesyncHub] = useState<{ id: string; name: string; webViewLink?: string; linkedTimestamp?: string } | null>(null);
   const [isDriveTokenExpired, setIsDriveTokenExpired] = useState<boolean>(false);
 
+  // Đảm bảo ở chế độ offline (hoặc người dùng ngoại tuyến), tuyệt đối không mở cảnh báo hết hạn token Drive
+  useEffect(() => {
+    if (!currentUser || currentUser.isOffline) {
+      setIsDriveTokenExpired(false);
+      setSyncDriveStatus(null);
+    }
+  }, [currentUser]);
+
   // Refs và cơ chế quản lý đồng bộ 2 chiều phản xạ (Reactive 2-Way Sync)
   const isTabVisibleRef = useRef<boolean>(
     typeof document !== 'undefined' ? document.visibilityState === 'visible' : true
@@ -1222,7 +1230,11 @@ export function useDriveSync({
   // Kiểm tra tính hợp lệ của Token Google Drive định kỳ & tự động kiểm tra liên kết file trung tâm
   const checkDriveTokenValidity = useCallback(async (isPassiveBackground = false) => {
     if (!isTabVisibleRef.current) return; // Skip checking token when tab is hidden
-    if (!currentUser || currentUser.isOffline) return;
+    if (!currentUser || currentUser.isOffline) {
+      setIsDriveTokenExpired(false);
+      return;
+    }
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return;
 
     const token = getGoogleAccessToken();
     const isValid = isGoogleTokenValid();
@@ -1323,6 +1335,7 @@ export function useDriveSync({
 
   // SMART SYNC: Lắng nghe sự kiện mở app/máy (Cold start, Focus, Visibility, Android Resume) & Polling nền 5 phút
   useEffect(() => {
+    if (!currentUser || currentUser.isOffline) return;
 
     // 1. Khởi động ứng dụng (Cold start): Kiểm tra và kéo dữ liệu mới nhất tức thì
     checkDriveTokenValidity(false);
