@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.tietkiem.giadinh">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
     <!-- Chặn triệt để sao lưu tự động và khôi phục dữ liệu đám mây từ Google One / Android Backup -->
     <application
         android:allowBackup="false"

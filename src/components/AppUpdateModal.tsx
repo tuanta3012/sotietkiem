@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2 } from 'lucide-react';
+import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2, AlertCircle, ExternalLink, Play } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
@@ -29,140 +29,160 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
+  const [isReadyToInstall, setIsReadyToInstall] = useState(false);
+  const [downloadedFilePath, setDownloadedFilePath] = useState<string>('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   if (!isOpen || !updateInfo) return null;
 
+  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl || '';
+
+  const triggerPackageInstall = async (fileUriOrPath: string) => {
+    try {
+      setStatusMessage('Đang kích hoạt Trình Cài Đặt Android...');
+      let targetPath = fileUriOrPath;
+
+      // Đảm bảo lấy đúng URI hệ thống từ Filesystem nếu có
+      if (!targetPath.startsWith('file://') && !targetPath.startsWith('content://')) {
+        try {
+          const uriRes = await Filesystem.getUri({
+            path: `sotietkiem_v${updateInfo.version}.apk`,
+            directory: Directory.Cache,
+          });
+          if (uriRes?.uri) {
+            targetPath = uriRes.uri;
+          }
+        } catch {}
+      }
+
+      await FileOpener.open({
+        filePath: targetPath,
+        contentType: 'application/vnd.android.package-archive',
+      });
+      setStatusMessage('Đang hiển thị màn hình cài đặt nâng cấp hệ thống...');
+    } catch (fileOpenerErr: any) {
+      console.warn('FileOpener trigger:', fileOpenerErr);
+      try {
+        const shareUri = fileUriOrPath.startsWith('file://') || fileUriOrPath.startsWith('content://')
+          ? fileUriOrPath
+          : `file://${fileUriOrPath.startsWith('/') ? '' : '/'}${fileUriOrPath}`;
+
+        await Share.share({
+          title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
+          url: shareUri,
+          dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer) để nâng cấp',
+        });
+      } catch (shareErr) {
+        console.warn('Share intent error:', shareErr);
+        if (targetLink) {
+          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+        }
+      }
+    }
+  };
+
   const handleUpdate = async () => {
-    const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
     if (!targetLink) return;
 
     setIsDownloading(true);
-    setDownloadProgress(10);
-    setStatusMessage('Đang khởi tạo kết nối tải APK...');
+    setIsReadyToInstall(false);
+    setErrorMessage(null);
+    setDownloadProgress(5);
+    setStatusMessage('Đang kết nối đến máy chủ...');
 
     try {
       if (Capacitor.isNativePlatform()) {
         const fileName = `sotietkiem_v${updateInfo.version}.apk`;
-        setStatusMessage('Đang tải tệp APK trực tiếp về bộ nhớ máy...');
-        setDownloadProgress(25);
-
         let savedUri = '';
-        let currentProgress = 25;
-        let progressInterval: any = null;
-        let progressListener: any = null;
 
+        // Phương án 1: Tải với fetch + ReadableStream để đo phần trăm tải thực tế chính xác 100%
         try {
-          // 1. Start simulated smooth increment (always runs as a minimum progress baseline, slowing down as it approaches 85%)
-          progressInterval = setInterval(() => {
-            if (currentProgress < 85) {
-              // Smooth ease-out curve: increment gets smaller as we approach 85%
-              const increment = Math.max(0.1, (85 - currentProgress) * 0.04);
-              currentProgress += increment;
-              setDownloadProgress(Math.round(currentProgress));
-            }
-          }, 120);
+          setStatusMessage('Đang tải tệp APK...');
+          const response = await fetch(targetLink, { redirect: 'follow' });
+          if (!response.ok) throw new Error(`Máy chủ trả về mã lỗi: ${response.status}`);
 
-          // 2. Register native progress listener
-          try {
-            progressListener = await Filesystem.addListener('progress', (progress) => {
-              if (progress && typeof progress.bytes === 'number' && typeof progress.contentLength === 'number' && progress.contentLength > 0) {
-                const percent = Math.round((progress.bytes / progress.contentLength) * 100);
-                // Map the real 0-100% to a visually smooth 25% - 85% range
-                const mappedPercent = 25 + Math.round(percent * 0.6); // 25 to 85
-                
-                // Only advance the progress if the real mapped percent is higher than our current simulated progress
-                if (mappedPercent > currentProgress) {
-                  currentProgress = mappedPercent;
-                  setDownloadProgress(Math.round(currentProgress));
-                }
+          const contentLength = response.headers.get('content-length');
+          const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+
+          if (response.body && totalBytes > 0) {
+            const reader = response.body.getReader();
+            let receivedBytes = 0;
+            const chunks: Uint8Array[] = [];
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (value) {
+                chunks.push(value);
+                receivedBytes += value.length;
+                const percent = Math.min(95, Math.round((receivedBytes / totalBytes) * 95));
+                setDownloadProgress(percent);
+                const receivedMB = (receivedBytes / (1024 * 1024)).toFixed(1);
+                const totalMB = (totalBytes / (1024 * 1024)).toFixed(1);
+                setStatusMessage(`Đang tải tệp APK: ${receivedMB} MB / ${totalMB} MB (${percent}%)`);
               }
-            });
-          } catch (listenerErr) {
-            console.warn('Could not register native progress listener:', listenerErr);
-          }
+            }
 
-          // 3. Run native download directly via Filesystem.downloadFile
+            // Gộp các chunks thành Uint8Array
+            const fullBuffer = new Uint8Array(receivedBytes);
+            let position = 0;
+            for (const chunk of chunks) {
+              fullBuffer.set(chunk, position);
+              position += chunk.length;
+            }
+
+            setStatusMessage('Đang lưu tệp cài đặt vào bộ nhớ...');
+            setDownloadProgress(96);
+
+            // Chuyển đổi sang base64 theo từng phần an toàn không tràn bộ nhớ
+            let binary = '';
+            const len = fullBuffer.byteLength;
+            const chunkSize = 8192;
+            for (let i = 0; i < len; i += chunkSize) {
+              const sub = fullBuffer.subarray(i, Math.min(i + chunkSize, len));
+              binary += String.fromCharCode.apply(null, sub as any);
+            }
+            const base64Data = btoa(binary);
+
+            const writeRes = await Filesystem.writeFile({
+              path: fileName,
+              data: base64Data,
+              directory: Directory.Cache,
+            });
+
+            savedUri = writeRes.uri;
+          } else {
+            // Fallback nếu không có stream hoặc content-length
+            setStatusMessage('Đang tải trực tiếp tệp cài đặt...');
+            const downloadRes = await Filesystem.downloadFile({
+              url: targetLink,
+              path: fileName,
+              directory: Directory.Cache,
+            });
+            savedUri = (downloadRes as any).uri || downloadRes.path || '';
+          }
+        } catch (streamErr) {
+          console.warn('Stream download fallback to direct downloadFile:', streamErr);
+          setStatusMessage('Đang tải tệp APK...');
           const downloadRes = await Filesystem.downloadFile({
             url: targetLink,
             path: fileName,
             directory: Directory.Cache,
-            progress: true,
           });
           savedUri = (downloadRes as any).uri || downloadRes.path || '';
-        } catch (downloadErr) {
-          console.warn('Filesystem.downloadFile failed, trying fetch fallback:', downloadErr);
-          currentProgress = 40;
-          setDownloadProgress(40);
-          const response = await fetch(targetLink, { redirect: 'follow' });
-          if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
-          const blob = await response.blob();
-          
-          currentProgress = 70;
-          setDownloadProgress(70);
-          setStatusMessage('Đang lưu tệp cài đặt...');
-          
-          const reader = new FileReader();
-          const base64Data = await new Promise<string>((resolve, reject) => {
-            reader.onloadend = () => {
-              const res = reader.result as string;
-              resolve(res.includes(',') ? res.split(',')[1] : res);
-            };
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-
-          const writeFileRes = await Filesystem.writeFile({
-            path: fileName,
-            data: base64Data,
-            directory: Directory.Cache,
-          });
-          savedUri = writeFileRes.uri;
-        } finally {
-          // 4. Clean up progress tracking
-          if (progressInterval) {
-            clearInterval(progressInterval);
-          }
-          if (progressListener) {
-            try {
-              await progressListener.remove();
-            } catch (err) {
-              console.warn('Error removing progress listener:', err);
-            }
-          }
         }
 
-        setDownloadProgress(95);
-        setStatusMessage('Đã tải xong! Đang kích hoạt Trình Cài Đặt Android...');
-
-        try {
-          // Attempt 1: Direct Native FileOpener to launch Android Package Installer
-          await FileOpener.open({
-            filePath: savedUri,
-            contentType: 'application/vnd.android.package-archive',
-          });
-          setDownloadProgress(100);
-          setStatusMessage('Đang hiển thị màn hình cài đặt nâng cấp...');
-        } catch (fileOpenerErr) {
-          console.warn('FileOpener native trigger failed, trying Share intent fallback:', fileOpenerErr);
-          const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
-            ? savedUri
-            : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
-
-          try {
-            await Share.share({
-              title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
-              url: formattedUri,
-              dialogTitle: 'Mở bằng Trình Cài Đặt Gói (Package Installer) để nâng cấp',
-            });
-          } catch (shareErr) {
-            console.warn('Share intent error, opening HTTPS release link:', shareErr);
-            window.open(targetLink, '_system') || window.open(targetLink, '_blank');
-          }
-        }
-
+        // Tải hoàn tất
+        setDownloadProgress(100);
+        setDownloadedFilePath(savedUri);
         setIsDownloading(false);
-        onClose();
+        setIsReadyToInstall(true);
+        setStatusMessage('Đã tải xong APK! Sẵn sàng nâng cấp.');
+
+        // Tự động kích hoạt màn hình cài đặt Android
+        await triggerPackageInstall(savedUri);
       } else {
+        // Môi trường Web browser
         setDownloadProgress(100);
         window.open(targetLink, '_system') || window.open(targetLink, '_blank');
         setIsDownloading(false);
@@ -170,13 +190,14 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
       }
     } catch (err: any) {
       console.error('Update download error:', err);
-      setStatusMessage('Đang mở trình duyệt hệ thống để tải trực tiếp...');
-      setTimeout(() => {
-        try {
-          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
-        } catch {}
-        setIsDownloading(false);
-      }, 1000);
+      setIsDownloading(false);
+      setErrorMessage(err?.message || 'Không thể tải tệp APK tự động. Bạn có thể mở tải bằng Trình duyệt.');
+    }
+  };
+
+  const handleOpenBrowserDownload = () => {
+    if (targetLink) {
+      window.open(targetLink, '_system') || window.open(targetLink, '_blank');
     }
   };
 
@@ -199,7 +220,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           <button
             onClick={onClose}
             className="absolute top-4 right-4 text-slate-400 hover:text-slate-100 p-1.5 rounded-lg hover:bg-slate-800 transition-colors"
-            title="Bỏ qua"
+            title="Đóng"
           >
             <X className="w-4 h-4" />
           </button>
@@ -207,48 +228,144 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
 
         {/* Icon & Title */}
         <div className="flex flex-col items-center text-center space-y-2 pt-2">
-          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shadow-inner">
+          <div className={`p-3 rounded-full border shadow-inner ${
+            isReadyToInstall
+              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+              : errorMessage
+              ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+          }`}>
             {isDownloading ? (
               <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
+            ) : isReadyToInstall ? (
+              <CheckCircle2 className="w-10 h-10 text-emerald-400" />
+            ) : errorMessage ? (
+              <AlertCircle className="w-10 h-10 text-rose-400" />
             ) : (
               <ArrowUpCircle className="w-10 h-10 animate-bounce" />
             )}
           </div>
           <h2 className="text-lg font-extrabold tracking-tight text-white px-2">
-            {isDownloading ? `Đang tải v${updateInfo.version}...` : `Đã có bản cập nhật mới (v${updateInfo.version})!`}
+            {isDownloading
+              ? `Đang tải v${updateInfo.version}...`
+              : isReadyToInstall
+              ? `Đã tải xong v${updateInfo.version}!`
+              : errorMessage
+              ? 'Tải bản cập nhật chưa hoàn tất'
+              : `Đã có bản cập nhật mới (v${updateInfo.version})!`}
           </h2>
-          <p className="text-xs text-slate-400 px-4">
-            {isDownloading ? statusMessage : 'Bạn có muốn tải về để vá lỗi và trải nghiệm tính năng tốt nhất không?'}
+          <p className="text-xs text-slate-400 px-2">
+            {isDownloading
+              ? statusMessage
+              : isReadyToInstall
+              ? 'Bấm nút Cài Đặt Nâng Cấp bên dưới để hoàn tất cập nhật ứng dụng.'
+              : errorMessage
+              ? errorMessage
+              : 'Bạn có muốn tải về để vá lỗi và trải nghiệm tính năng tốt nhất không?'}
           </p>
         </div>
 
-        {isDownloading ? (
-          /* Download Progress Bar */
+        {/* TRẠNG THÁI 1: ĐANG TẢI */}
+        {isDownloading && (
           <div className="space-y-3 py-3">
             <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
               <div 
-                className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-300"
+                className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-200"
                 style={{ width: `${downloadProgress}%` }}
               />
             </div>
             <div className="flex justify-between text-[11px] text-slate-400 font-medium">
-              <span>{statusMessage}</span>
-              <span className="text-emerald-400 font-bold">{downloadProgress}%</span>
+              <span className="truncate pr-2">{statusMessage}</span>
+              <span className="text-emerald-400 font-bold shrink-0">{downloadProgress}%</span>
             </div>
             <div className="text-center pt-2 border-t border-slate-800/60">
               <button
                 type="button"
-                onClick={() => {
-                  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
-                  if (targetLink) window.open(targetLink, '_system') || window.open(targetLink, '_blank');
-                }}
-                className="text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium"
+                onClick={handleOpenBrowserDownload}
+                className="inline-flex items-center space-x-1 text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium"
               >
-                Mở tải về trực tiếp bằng Trình duyệt
+                <span>Mở tải về trực tiếp bằng Trình duyệt</span>
+                <ExternalLink className="w-3 h-3" />
               </button>
             </div>
           </div>
-        ) : (
+        )}
+
+        {/* TRẠNG THÁI 2: ĐÃ TẢI XONG - SẴN SÀNG CÀI ĐẶT */}
+        {isReadyToInstall && !isDownloading && (
+          <div className="space-y-4 py-1">
+            <div className="p-3.5 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs space-y-2 text-slate-300">
+              <div className="flex items-center gap-1.5 font-bold text-emerald-400">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>Tệp cài đặt APK đã sẵn sàng</span>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Nếu hệ thống Android hiện thông báo <em>&quot;Cho phép cài đặt ứng dụng từ nguồn này&quot;</em>, vui lòng bật <strong>Cho phép</strong> rồi bấm nút Cài đặt.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => triggerPackageInstall(downloadedFilePath)}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-sm flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>🚀 Cài Đặt Nâng Cấp Ngay</span>
+              </button>
+
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleOpenBrowserDownload}
+                  className="flex-1 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors flex items-center justify-center space-x-1"
+                >
+                  <Download className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Tải lại qua Browser</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="py-2 px-4 rounded-lg border border-slate-800 hover:bg-slate-800 text-slate-400 font-semibold text-xs transition-colors"
+                >
+                  Đóng
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TRẠNG THÁI 3: LỖI TẢI XUỐNG */}
+        {errorMessage && !isDownloading && !isReadyToInstall && (
+          <div className="space-y-4 py-1">
+            <div className="p-3 bg-rose-950/40 border border-rose-500/30 rounded-xl text-xs space-y-1 text-rose-300">
+              <p className="font-bold">⚠️ Có lỗi trong quá trình tải trực tiếp</p>
+              <p className="text-[11px] text-rose-400">{errorMessage}</p>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleOpenBrowserDownload}
+                className="w-full py-3 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-[0.98] transition-all cursor-pointer"
+              >
+                <ExternalLink className="w-4 h-4" />
+                <span>Mở Trình duyệt tải APK về máy</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleUpdate}
+                className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition-colors"
+              >
+                Thử tải lại trong ứng dụng
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* TRẠNG THÁI 4: BAN ĐẦU (CHƯA TẢI) */}
+        {!isDownloading && !isReadyToInstall && !errorMessage && (
           <>
             {/* Version Badge Box */}
             <div className="grid grid-cols-2 gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 text-center">
@@ -297,7 +414,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               </button>
               <button
                 onClick={handleUpdate}
-                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-500/10 transition-all active:scale-[0.98]"
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-500/10 transition-all active:scale-[0.98] cursor-pointer"
               >
                 <Download className="w-4 h-4 shrink-0" />
                 <span>Cập nhật ngay</span>
