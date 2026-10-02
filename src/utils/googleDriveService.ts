@@ -2676,10 +2676,11 @@ export async function setMasterSyncUnlinked(
       return;
     }
 
+    const activeId = currentMaster.activeFileId;
+
     // Thu hồi quyền Google Drive của tất cả thành viên không phải Admin
     try {
-      if (currentMaster.activeFileId && currentMaster.members && currentMaster.members.length > 0) {
-        const activeId = currentMaster.activeFileId;
+      if (activeId && currentMaster.members && currentMaster.members.length > 0) {
         for (const member of currentMaster.members) {
           if (member.role !== 'ADMIN' && member.email) {
             revokeFilePermission(accessToken, activeId, member.email).catch(() => {});
@@ -2691,6 +2692,30 @@ export async function setMasterSyncUnlinked(
     }
 
     const nowIso = new Date().toISOString();
+
+    // KHẮC PHỤC LỖI KHÔNG GHI UNLINK LÊN SHEET:
+    // Ta ghi trạng thái "unlinked" trực tiếp lên Google Sheet hiện tại TRƯỚC khi xóa pointer cục bộ
+    if (activeId) {
+      const unlinkedSheetState: MasterSyncState = {
+        ...currentMaster,
+        status: 'unlinked',
+        lastAction: 'unlink',
+        activeFileId: activeId, // Giữ nguyên ID để Sheet API biết file nào cần ghi nhận
+        activeFileName: '',
+        activeFileUrl: '',
+        linkedTimestamp: nowIso,
+        linkedAccountEmail: userEmail || 'Google User',
+        adminEmail: currentMaster.adminEmail || userEmail?.toLowerCase() || 'admin',
+        members: currentMaster.members || [],
+        updatedAt: nowIso,
+      };
+
+      await saveMasterSyncStateToGoogleSheet(accessToken, activeId, unlinkedSheetState).catch((sheetErr) => {
+        console.warn('[Unlink Sync] Lỗi ghi trực tiếp trạng thái unlinked lên Google Sheet:', sheetErr);
+      });
+    }
+
+    // Sau đó cập nhật cấu hình master cục bộ (với activeFileId trống) để dọn dẹp máy này
     await saveMasterSyncStateOnDrive(accessToken, {
       status: 'unlinked',
       lastAction: 'unlink',
@@ -2703,6 +2728,7 @@ export async function setMasterSyncUnlinked(
       members: currentMaster.members || [],
       updatedAt: nowIso,
     });
+
     saveLocalMasterPointerFileId(null);
     saveLocalMasterPointerState(null);
   } catch (saveErr) {
