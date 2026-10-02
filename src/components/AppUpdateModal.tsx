@@ -11,6 +11,7 @@ export interface AppUpdateInfo {
   apkUrl?: string;
   changelog: string[];
   releaseDate?: string;
+  notes?: string;
 }
 
 export interface AppUpdateModalProps {
@@ -42,143 +43,155 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
 
     try {
       if (Capacitor.isNativePlatform()) {
-        const fileName = `app_update_v${updateInfo.version}.apk`;
+        const fileName = `sotietkiem_v${updateInfo.version}.apk`;
         setStatusMessage('Đang tải tệp APK trực tiếp về bộ nhớ máy...');
         setDownloadProgress(25);
 
-        let savedUri = '';
-        let currentProgress = 25;
-        let progressInterval: any = null;
-        let progressListener: any = null;
+        // 1. TRÌNH GIẢ LẬP TIẾN TRÌNH MƯỢT MÀ (CHẠY SONG SƠNG)
+        let progressVal = 25;
+        const progressInterval = setInterval(() => {
+          // Tăng ngẫu nhiên từ 1% đến 3% mỗi 150ms để tạo hiệu ứng chuyển động mượt mà
+          const step = Math.floor(Math.random() * 3) + 1;
+          progressVal = Math.min(progressVal + step, 82); // Giới hạn tối đa 82% để chờ tải tệp thực tế hoàn thành
+          setDownloadProgress(progressVal);
+        }, 150);
 
+        // 2. BỘ LẮNG NGHE ĐO LƯỜNG TIẾN TRÌNH THỰC TẾ TỪ NATIVE BRIDGE
+        let filesystemListener: any = null;
         try {
-          // 1. Chạy tiến trình giả lập tăng mượt mà (Ease-out curve tiến dần về 85%)
-          progressInterval = setInterval(() => {
-            if (currentProgress < 85) {
-              const increment = Math.max(0.1, (85 - currentProgress) * 0.04);
-              currentProgress += increment;
-              setDownloadProgress(Math.round(currentProgress));
+          filesystemListener = await Filesystem.addListener('progress' as any, (progress: any) => {
+            const bytes = progress.bytes || progress.bytesWritten || 0;
+            const total = progress.chunk || progress.contentLength || 0;
+            if (total > 0) {
+              const realPercent = Math.round((bytes / total) * 100);
+              // Giữ tiến trình không bị lùi hoặc nhảy vọt đột ngột
+              progressVal = Math.max(progressVal, Math.min(realPercent, 84));
+              setDownloadProgress(progressVal);
             }
-          }, 120);
+          });
+        } catch (listenerErr) {
+          console.warn('Không đăng ký được progress listener:', listenerErr);
+        }
 
-          // 2. Lắng nghe tiến trình download thực từ plugin Filesystem của Capacitor
-          try {
-            progressListener = await Filesystem.addListener('progress', (progress) => {
-              if (progress && typeof progress.bytes === 'number' && typeof progress.contentLength === 'number' && progress.contentLength > 0) {
-                const percent = Math.round((progress.bytes / progress.contentLength) * 100);
-                const mappedPercent = 25 + Math.round(percent * 0.6); // Ánh xạ 0-100% về dải 25-85%
-                if (mappedPercent > currentProgress) {
-                  currentProgress = mappedPercent;
-                  setDownloadProgress(Math.round(currentProgress));
-                }
-              }
-            });
-          } catch (listenerErr) {
-            console.warn('Không thể đăng ký native progress listener:', listenerErr);
-          }
-
-          // 3. Tải file bằng native downloadFile
+        let savedUri = '';
+        try {
+          // Thực hiện lệnh tải native qua plugin Filesystem
           const downloadRes = await Filesystem.downloadFile({
             url: targetLink,
             path: fileName,
             directory: Directory.Cache,
             progress: true,
           });
-          savedUri = (downloadRes as any).uri || downloadRes.path || '';
-        } catch (downloadErr) {
-          console.warn('Filesystem.downloadFile thất bại, chuyển sang phương án tải Blob:', downloadErr);
-          currentProgress = 40;
-          setDownloadProgress(40);
-          const response = await fetch(targetLink, { redirect: 'follow' });
-          if (!response.ok) throw new Error('Không thể tải file APK từ máy chủ.');
-          const blob = await response.blob();
-          
-          currentProgress = 70;
-          setDownloadProgress(70);
-          setStatusMessage('Đang xử lý gói cài đặt Android...');
 
+          // Giải phóng bộ nhớ & bộ lắng nghe ngay khi tải xong
+          clearInterval(progressInterval);
+          if (filesystemListener) {
+            filesystemListener.remove();
+          }
+
+          if (downloadRes.path) {
+            savedUri = downloadRes.path;
+          } else {
+            const uriRes = await Filesystem.getUri({ path: fileName, directory: Directory.Cache });
+            savedUri = uriRes.uri;
+          }
+          setDownloadProgress(88);
+        } catch (downloadErr) {
+          // Dọn dẹp luồng trong trường hợp lỗi tải trực tiếp
+          clearInterval(progressInterval);
+          if (filesystemListener) {
+            filesystemListener.remove();
+          }
+
+          console.warn('Filesystem.downloadFile thất bại, kích hoạt Fallback Fetch:', downloadErr);
+          setStatusMessage('Đang chuyển hướng tải qua kênh dự phòng...');
+          setDownloadProgress(40);
+
+          let fetchProgressVal = 40;
+          const fetchInterval = setInterval(() => {
+            const step = Math.floor(Math.random() * 2) + 1;
+            fetchProgressVal = Math.min(fetchProgressVal + step, 68);
+            setDownloadProgress(fetchProgressVal);
+          }, 180);
+
+          // KÊNH DỰ PHÒNG 1: Dùng fetch tiêu chuẩn để lấy Blob dữ liệu
+          const response = await fetch(targetLink, { redirect: 'follow' });
+          if (!response.ok) {
+            clearInterval(fetchInterval);
+            throw new Error('Không thể tải file APK từ máy chủ.');
+          }
+          const blob = await response.blob();
+
+          clearInterval(fetchInterval);
+          setDownloadProgress(75);
+          setStatusMessage('Đang lưu tệp cài đặt...');
+
+          // Chuyển Blob thành mã hóa Base64 để ghi đè cứng thông qua Filesystem
           const reader = new FileReader();
-          const base64Promise = new Promise<string>((resolve, reject) => {
+          const base64Data = await new Promise<string>((resolve, reject) => {
             reader.onloadend = () => {
-              const base64data = (reader.result as string).split(',')[1];
-              resolve(base64data);
+              const res = reader.result as string;
+              resolve(res.includes(',') ? res.split(',')[1] : res);
             };
             reader.onerror = reject;
+            reader.readAsDataURL(blob);
           });
-          reader.readAsDataURL(blob);
-          const base64Data = await base64Promise;
 
-          const writeRes = await Filesystem.writeFile({
+          const writeFileRes = await Filesystem.writeFile({
             path: fileName,
             data: base64Data,
             directory: Directory.Cache,
           });
-          savedUri = writeRes.uri;
-        } finally {
-          if (progressInterval) clearInterval(progressInterval);
-          if (progressListener && typeof progressListener.remove === 'function') {
-            try {
-              await progressListener.remove();
-            } catch {}
-          }
+          savedUri = writeFileRes.uri;
         }
 
         setDownloadProgress(95);
-        setStatusMessage('Đã tải xong APK! Đang mở trình cài đặt Android...');
-
-        let resolvedPath = savedUri;
-        try {
-          const uriRes = await Filesystem.getUri({
-            directory: Directory.Cache,
-            path: fileName,
-          });
-          if (uriRes?.uri) resolvedPath = uriRes.uri;
-        } catch (e) {
-          console.warn('Lỗi lấy getUri:', e);
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 600));
-        setDownloadProgress(100);
+        setStatusMessage('Đã tải xong! Đang kích hoạt Trình Cài Đặt Android...');
 
         try {
+          // KÍCH HOẠT INTENT CÀI ĐẶT
           await FileOpener.open({
-            filePath: resolvedPath,
-            contentType: 'application/vnd.android.package-archive',
+            filePath: savedUri,
+            contentType: 'application/vnd.android.package-archive', // Định dạng chuẩn của tệp cài đặt APK
           });
-          setIsDownloading(false);
-          onClose();
-        } catch (openErr: any) {
-          console.warn('FileOpener trực tiếp thất bại, thử chia sẻ mở file:', openErr);
+          setDownloadProgress(100);
+          setStatusMessage('Đang hiển thị màn hình cài đặt nâng cấp...');
+        } catch (fileOpenerErr) {
+          console.warn('FileOpener native trigger thất bại, kích hoạt Fallback Share:', fileOpenerErr);
+          
+          // KÊNH DỰ PHÒNG 2: Sử dụng Share Intent chuyển tệp cài đặt cho Package Installer hệ thống
+          const formattedUri = savedUri.startsWith('file://') || savedUri.startsWith('content://')
+            ? savedUri
+            : `file://${savedUri.startsWith('/') ? '' : '/'}${savedUri}`;
+
           try {
             await Share.share({
-              title: 'Cài đặt bản cập nhật APK',
-              url: resolvedPath,
-              dialogTitle: 'Chọn Trình cài đặt gói để cập nhật',
+              title: `Cập nhật ứng dụng v${updateInfo.version}`,
+              url: formattedUri,
+              dialogTitle: 'Mở bằng Trình Cài Đặt Gói (Package Installer) để nâng cấp',
             });
-            setIsDownloading(false);
-            onClose();
           } catch (shareErr) {
-            setStatusMessage('Mở trình duyệt để tải về trực tiếp...');
-            window.open(targetLink, '_system') || window.open(targetLink, '_blank');
-            setIsDownloading(false);
+            console.warn('Share intent thất bại, chuyển tiếp tải trực tiếp:', shareErr);
+            // KÊNH DỰ PHÒNG CUỐI CÙNG: Mở liên kết tải bằng trình duyệt hệ điều hành bên ngoài
+            window.open(targetLink, '_system') || (window.location.href = targetLink);
           }
         }
+
+        setIsDownloading(false);
+        onClose();
       } else {
-        // Nền tảng Web / Trình duyệt: Tải qua Tab mới
-        setStatusMessage('Đang mở liên kết tải về trên trình duyệt...');
+        // Nếu chạy trên nền Web: Mở tab mới tải file bình thường
         setDownloadProgress(100);
-        window.open(targetLink, '_blank');
-        setTimeout(() => {
-          setIsDownloading(false);
-          onClose();
-        }, 1500);
+        window.open(targetLink, '_blank') || (window.location.href = targetLink);
+        setIsDownloading(false);
+        onClose();
       }
     } catch (err: any) {
-      console.error('Lỗi quy trình cập nhật APK:', err);
-      setStatusMessage('Gặp sự cố khi cài đặt tự động. Chuyển sang tải bằng trình duyệt...');
+      console.error('Lỗi nghiêm trọng trong tiến trình tải cập nhật:', err);
+      setStatusMessage('Đang mở trình duyệt hệ thống để tải trực tiếp...');
       setTimeout(() => {
         try {
-          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+          window.open(targetLink, '_system') || (window.location.href = targetLink);
         } catch {}
         setIsDownloading(false);
       }, 1000);
@@ -187,19 +200,16 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-      {/* Nền làm mờ */}
+      {/* Nền mờ phía sau */}
       <div 
         className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity" 
         onClick={!isDownloading ? onClose : undefined}
       />
 
-      {/* Hộp thoại Modal */}
-      <div className="relative w-full max-w-md transform overflow-hidden rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl transition-all p-6 text-slate-100 flex flex-col space-y-5 animate-in fade-in-50 zoom-in-95 duration-150">
-        
-        {/* Dải gradient trang trí */}
-        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-teal-500 via-emerald-500 to-blue-500" />
+      {/* Khung Modal giao diện tối tân */}
+      <div className="relative w-full max-w-md transform overflow-hidden rounded-3xl bg-slate-900 border border-slate-800 shadow-2xl transition-all p-6 text-slate-100 flex flex-col space-y-5">
+        <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-400" />
 
-        {/* Nút đóng */}
         {!isDownloading && (
           <button
             onClick={onClose}
@@ -210,9 +220,8 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           </button>
         )}
 
-        {/* Icon & Tiêu đề */}
         <div className="flex flex-col items-center text-center space-y-2 pt-2">
-          <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-full border border-emerald-500/20 shadow-inner">
+          <div className="p-3.5 bg-emerald-500/10 text-emerald-400 rounded-2xl border border-emerald-500/20 shadow-inner">
             {isDownloading ? (
               <Loader2 className="w-10 h-10 animate-spin text-emerald-400" />
             ) : (
@@ -223,16 +232,15 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             {isDownloading ? `Đang tải v${updateInfo.version}...` : `Đã có bản cập nhật mới (v${updateInfo.version})!`}
           </h2>
           <p className="text-xs text-slate-400 px-4">
-            {isDownloading ? statusMessage : 'Bạn có muốn tải về để cập nhật tính năng mới nhất không?'}
+            {isDownloading ? statusMessage : 'Bạn có muốn nâng cấp để vá lỗi và trải nghiệm tính năng tốt nhất không?'}
           </p>
         </div>
 
         {isDownloading ? (
-          /* Thanh tiến trình tải APK */
           <div className="space-y-3 py-3">
             <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700">
               <div 
-                className="bg-gradient-to-r from-teal-500 to-emerald-500 h-full rounded-full transition-all duration-300"
+                className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-300"
                 style={{ width: `${downloadProgress}%` }}
               />
             </div>
@@ -240,80 +248,65 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <span>{statusMessage}</span>
               <span className="text-emerald-400 font-bold">{downloadProgress}%</span>
             </div>
-            <div className="text-center pt-2 border-t border-slate-800/60">
-              <button
-                type="button"
-                onClick={() => {
-                  const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl;
-                  if (targetLink) window.open(targetLink, '_system') || window.open(targetLink, '_blank');
-                }}
-                className="text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium cursor-pointer"
-              >
-                Mở tải về trực tiếp bằng Trình duyệt
-              </button>
-            </div>
           </div>
         ) : (
           <>
-            {/* Hộp so sánh phiên bản */}
-            <div className="grid grid-cols-2 gap-3 bg-slate-950/60 rounded-xl p-3 border border-slate-800/80 text-center">
+            <div className="grid grid-cols-2 gap-3 bg-slate-950/60 rounded-2xl p-3 border border-slate-800/80 text-center">
               <div>
                 <span className="block text-[10px] text-slate-500 uppercase font-bold tracking-wider">Phiên bản hiện tại</span>
                 <span className="text-sm font-semibold text-slate-300">v{currentVersion}</span>
               </div>
               <div className="border-l border-slate-800">
                 <span className="block text-[10px] text-emerald-500 uppercase font-bold tracking-wider">Phiên bản mới nhất</span>
-                <span className="text-sm font-bold text-emerald-400">v{updateInfo.version}</span>
+                <span className="text-sm font-extrabold text-emerald-400">v{updateInfo.version}</span>
               </div>
             </div>
 
-            {/* Chi tiết nội dung cập nhật (Changelog) */}
-            <div className="space-y-2 bg-slate-950/40 rounded-xl p-3.5 border border-slate-800/60 max-h-44 overflow-y-auto">
-              <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
-                <span className="font-semibold text-slate-300">Nội dung thay đổi:</span>
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-300 border-b border-slate-800 pb-1.5">
+                <span>Danh sách thay đổi:</span>
                 {updateInfo.releaseDate && (
-                  <span className="flex items-center gap-1 text-[11px] text-slate-400">
-                    <Calendar className="w-3 h-3 text-slate-400" />
-                    {updateInfo.releaseDate}
+                  <span className="flex items-center space-x-1 text-[10px] text-slate-500">
+                    <Calendar className="w-3 h-3" />
+                    <span>{updateInfo.releaseDate}</span>
                   </span>
                 )}
               </div>
-              <ul className="space-y-1.5 text-xs text-slate-300 pt-1">
+              <ul className="space-y-2 text-slate-300 text-xs">
                 {updateInfo.changelog && updateInfo.changelog.length > 0 ? (
-                  updateInfo.changelog.map((item, index) => (
-                    <li key={index} className="flex items-start gap-2 leading-relaxed">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                      <span>{item}</span>
+                  updateInfo.changelog.map((item, idx) => (
+                    <li key={idx} className="flex items-start space-x-2 text-slate-300">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{item}</span>
                     </li>
                   ))
                 ) : (
-                  <li className="flex items-start gap-2 text-slate-400">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
-                    <span>Nâng cấp hiệu năng và sửa lỗi hệ thống.</span>
+                  <li className="text-slate-400 italic text-center py-2">
+                    {updateInfo.notes || 'Nâng cấp hiệu năng hệ thống, sửa lỗi và tối ưu hóa trải nghiệm.'}
                   </li>
                 )}
               </ul>
             </div>
 
-            {/* Các nút bấm hành động */}
-            <div className="flex flex-col gap-2 pt-2">
+            <div className="flex space-x-3 pt-2">
               <button
-                type="button"
-                onClick={handleUpdate}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-sm shadow-lg shadow-emerald-900/30 transition-all active:scale-[0.98] cursor-pointer"
-              >
-                <Download className="w-4 h-4" />
-                <span>Cập nhật ngay bây giờ</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={onClose}
-                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
+                className="flex-1 py-2.5 rounded-2xl border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-slate-100 font-bold text-xs transition-all"
               >
-                Để sau (Nhắc tôi lần sau)
+                Để sau
+              </button>
+              <button
+                onClick={handleUpdate}
+                className="flex-1 py-2.5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-1.5 shadow-lg shadow-emerald-500/10 transition-all active:scale-[0.98]"
+              >
+                <Download className="w-4 h-4 shrink-0" />
+                <span>Cập nhật ngay</span>
               </button>
             </div>
+
+            <p className="text-[10px] text-emerald-500 text-center font-medium pt-1">
+              ✓ Giữ nguyên 100% dữ liệu đã lưu trữ trong bộ nhớ máy
+            </p>
           </>
         )}
       </div>
