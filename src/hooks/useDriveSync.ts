@@ -632,6 +632,39 @@ export function useDriveSync({
       try {
         setIsSyncingDrive(true);
 
+        // KIỂM TRA TRẠNG THÁI TRÊN DRIVE TRƯỚC KHI GHI (TRÁNH GHI ĐÈ KHI THIẾT BỊ KHÁC ĐÃ UNLINK)
+        try {
+          const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
+          if (currentMaster && (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink')) {
+            console.warn('[Central Hub Sync] Phát hiện tệp cấu hình đã được hủy liên kết từ thiết bị khác. Hủy đẩy dữ liệu và tự động ngắt liên kết.');
+            
+            setExplicitlyUnlinked(true);
+            setBooks([]);
+            try {
+              localStorage.setItem('savings_books_v3', JSON.stringify([]));
+              localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
+              localStorage.setItem('savings_books_cleared', 'true');
+              clearStaticHistoryFromStorage();
+            } catch {}
+
+            setSettings((prev) => ({
+              ...prev,
+              googleSheetUrl: '',
+              googleSheetName: '',
+              members: [],
+              lastSyncTime: undefined,
+              lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
+            }));
+
+            setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã ngắt kết nối để bảo mật dữ liệu.');
+            setIsSyncingDrive(false);
+            isPushingRef.current = false;
+            return; // Dừng ngay lập tức, không cho phép ghi đè lên file!
+          }
+        } catch (masterCheckErr) {
+          console.warn('[Auto-Push] Bỏ qua kiểm tra master state do lỗi kết nối:', masterCheckErr);
+        }
+
         // Kiềm tra timestamp (modifiedTime) của file trên Drive trước khi ghi đè
         try {
           const remoteMeta = await getRealGoogleDriveFileMetadata(token, fileId);
