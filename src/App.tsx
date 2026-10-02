@@ -1475,7 +1475,7 @@ export default function App() {
         {/* Footer */}
         <footer className="bg-white border-t border-slate-200 mt-auto py-4 px-4 text-center text-xs text-slate-400">
           <p>
-            Quản Lý Sổ Tiết Kiệm Gia Đình &bull; Gửi gối đầu &bull; Tối ưu hóa huy động vốn tại Ngân hàng Việt Nam
+            Sổ tiết kiệm &bull; Gửi gối đầu &bull; Tối ưu hóa huy động vốn tại Ngân hàng Việt Nam
           </p>
         </footer>
 
@@ -1491,7 +1491,7 @@ export default function App() {
       <LoginConflictResolveModal
         isOpen={!!conflictHub}
         onClose={resolveConflictClose}
-        fileName={conflictHub?.name || 'Sổ Tiết Kiệm Gia Đình'}
+        fileName={conflictHub?.name || 'Sổ tiết kiệm'}
         localBooksCount={books.length}
         onResolveMerge={resolveConflictMerge}
         onResolveOverwriteLocal={resolveConflictOverwriteLocal}

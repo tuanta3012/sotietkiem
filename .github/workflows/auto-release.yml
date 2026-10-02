@@ -40,8 +40,8 @@ jobs:
           echo "NAME=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
           echo "Auto Generated versionCode: $BUILD_NUMBER, versionName: $PACKAGE_VERSION"
 
-      # 3. Tạo init.gradle cấp hệ thống giải quyết triệt để lỗi BouncyCastle (bcprov)
-      - name: Create Gradle Init Script for BouncyCastle
+      # 3. Tạo init.gradle cấp hệ thống giải quyết triệt để lỗi BouncyCastle (bcprov) và androidx.browser metadata
+      - name: Create Gradle Init Script for Dependencies & Browser Version
         run: |
           mkdir -p ~/.gradle
           cat << 'EOF' > ~/.gradle/init.gradle
@@ -50,6 +50,7 @@ jobs:
                   configurations.all {
                       resolutionStrategy {
                           force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                          force 'androidx.browser:browser:1.8.0'
                           dependencySubstitution {
                               substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
                           }
@@ -59,6 +60,7 @@ jobs:
               configurations.all {
                   resolutionStrategy {
                       force 'org.bouncycastle:bcprov-jdk15to18:1.70'
+                      force 'androidx.browser:browser:1.8.0'
                       dependencySubstitution {
                           substitute module('org.bouncycastle:bcprov-jdk18on') using module('org.bouncycastle:bcprov-jdk15to18:1.70')
                       }
@@ -92,8 +94,8 @@ jobs:
           cat << 'EOF' > android/app/src/main/res/values/strings.xml
           <?xml version='1.0' encoding='utf-8'?>
           <resources>
-              <string name="app_name">Tiết Kiệm Gia Đình</string>
-              <string name="title_activity_main">Tiết Kiệm Gia Đình</string>
+              <string name="app_name">Sổ tiết kiệm</string>
+              <string name="title_activity_main">Sổ tiết kiệm</string>
               <string name="package_name">com.tietkiemgiadinh.app</string>
               <string name="custom_url_scheme">com.tietkiemgiadinh.app</string>
               <string name="server_client_id">864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com</string>
@@ -162,8 +164,19 @@ jobs:
 
           if [ -f "android/variables.gradle" ]; then
             sed -i "s/minSdkVersion = .*/minSdkVersion = 23/g" android/variables.gradle
-            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 35/g" android/variables.gradle
+            sed -i "s/compileSdkVersion = .*/compileSdkVersion = 36/g" android/variables.gradle
             sed -i "s/targetSdkVersion = .*/targetSdkVersion = 35/g" android/variables.gradle
+          fi
+          if [ -f "android/build.gradle" ]; then
+            node -e "
+              const fs = require('fs');
+              const file = 'android/build.gradle';
+              let content = fs.readFileSync(file, 'utf8');
+              if (!content.includes('androidx.browser:browser:1.8.0')) {
+                content += '\nallprojects { configurations.all { resolutionStrategy { force \"androidx.browser:browser:1.8.0\" } } }\n';
+                fs.writeFileSync(file, content, 'utf8');
+              }
+            "
           fi
           if [ -f "android/app/build.gradle" ]; then
             sed -i "s/versionCode [0-9]*/versionCode $VERSION_CODE/g" android/app/build.gradle

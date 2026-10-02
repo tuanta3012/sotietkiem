@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Sổ Tiết Kiệm Gia Đình",
-  "short_name": "Tiết Kiệm",
+  "name": "Sổ tiết kiệm",
+  "short_name": "Sổ tiết kiệm",
   "description": "Quản lý danh mục sổ tiết kiệm vợ chồng, theo dõi lịch đáo hạn gối đầu và tối ưu huy động vốn.",
   "start_url": "/",
   "scope": "/",

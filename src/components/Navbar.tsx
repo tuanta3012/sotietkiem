@@ -151,7 +151,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div className="min-w-0">
               <div className="flex items-center space-x-1.5 sm:space-x-2">
                 <h1 className="text-sm sm:text-lg font-bold tracking-tight text-white truncate">
-                  Tiết kiệm gia đình
+                  Sổ tiết kiệm
                 </h1>
               </div>
             </div>

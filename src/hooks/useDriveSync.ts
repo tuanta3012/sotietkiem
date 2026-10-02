@@ -671,7 +671,7 @@ export function useDriveSync({
               status: 'active',
               lastAction: 'link',
               activeFileId: fileId,
-              activeFileName: settings.googleSheetName || 'Sổ Tiết Kiệm Gia Đình',
+              activeFileName: settings.googleSheetName || 'Sổ tiết kiệm',
               activeFileUrl: settings.googleSheetUrl,
               linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
               linkedAccountEmail: currentUser?.email,

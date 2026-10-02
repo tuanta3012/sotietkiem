@@ -133,7 +133,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
 
         {/* Title */}
         <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight drop-shadow-sm">
-          Sổ Tiết Kiệm Gia Đình
+          Sổ tiết kiệm
         </h1>
       </div>
 

@@ -63,9 +63,9 @@ export const BiometricUnlockModal: React.FC<BiometricUnlockModalProps> = ({
       if (Capacitor.isNativePlatform()) {
         // BẮT BUỘC gọi verifyIdentity với useFallback: true trên file APK Android / iOS đóng gói
         await NativeBiometric.verifyIdentity({
-          reason: 'Mở khóa ứng dụng Tiết Kiệm Gia Đình',
+          reason: 'Mở khóa ứng dụng Sổ tiết kiệm',
           title: 'Xác thực bảo mật',
-          subtitle: 'Tiết Kiệm Gia Đình',
+          subtitle: 'Sổ tiết kiệm',
           description: 'Vân tay, Khuôn mặt (bao gồm 2D) hoặc Hình vẽ mở khóa máy (Pattern / PIN)',
           useFallback: true,
           maxAttempts: 5,

@@ -86,7 +86,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           : `file://${fileUriOrPath.startsWith('/') ? '' : '/'}${fileUriOrPath}`;
 
         await Share.share({
-          title: `Cập nhật Tiết Kiệm Gia Đình v${updateInfo.version}`,
+          title: `Cập nhật Sổ tiết kiệm v${updateInfo.version}`,
           url: shareUri,
           dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer)',
         });
