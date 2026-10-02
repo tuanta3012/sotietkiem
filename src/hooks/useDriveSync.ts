@@ -640,6 +640,7 @@ export function useDriveSync({
             
             setExplicitlyUnlinked(true);
             setBooks([]);
+            if (setSettlementAdjustments) setSettlementAdjustments([]);
             try {
               localStorage.setItem('savings_books_v3', JSON.stringify([]));
               localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
@@ -1074,6 +1075,7 @@ export function useDriveSync({
                   // Thực hiện hủy liên kết và làm sạch toàn bộ dữ liệu cục bộ
                   setExplicitlyUnlinked(true);
                   setBooks([]);
+                  if (setSettlementAdjustments) setSettlementAdjustments([]);
                   try {
                     localStorage.setItem('savings_books_v3', JSON.stringify([]));
                     localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
@@ -1372,6 +1374,7 @@ export function useDriveSync({
             } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
               setExplicitlyUnlinked(true);
               setBooks([]);
+              if (setSettlementAdjustments) setSettlementAdjustments([]);
               if (settingsRef.current.googleSheetUrl) {
                 setSettings((prev) => ({
                   ...prev,

@@ -66,20 +66,7 @@ const TabLoadingFallback = () => (
 
 import { CURRENT_APP_VERSION } from './version';
 
-const UPDATE_SERVER_URL = 'https://raw.githubusercontent.com/tuanta3012/sotietkiem/main/version.json';
-
-function isNewerVersion(current: string, latest: string): boolean {
-  const parse = (v: string) => v.replace(/^v/i, '').split('.').map(Number);
-  const currParts = parse(current);
-  const lateParts = parse(latest);
-  for (let i = 0; i < Math.max(currParts.length, lateParts.length); i++) {
-    const c = currParts[i] || 0;
-    const l = lateParts[i] || 0;
-    if (l > c) return true;
-    if (c > l) return false;
-  }
-  return false;
-}
+import { useAppUpdate } from './hooks/useAppUpdate';
 
 const CURRENT_DATE = new Date().toISOString().split('T')[0];
 
@@ -410,95 +397,26 @@ export default function App() {
 
 
 
-  // 3. Tự động kiểm tra cập nhật APK từ xa
-  const [updateInfo, setUpdateInfo] = useState<{
-    version: string;
-    downloadUrl?: string;
-    apkUrl?: string;
-    changelog: string[];
-    releaseDate?: string;
-  } | null>(null);
-  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
-
-  const checkAppUpdate = useCallback(async (manual: boolean = false) => {
-    // Nếu là phiên bản chạy Google Play, tắt hoàn toàn việc kiểm tra cập nhật APK trực tiếp
-    if ((import.meta as any).env.VITE_APP_MODE === 'play') {
-      if (manual) {
-        showToast('Tính năng cập nhật trực tiếp bị tắt trên phiên bản Google Play Store.', 'info');
-      }
-      return;
-    }
-
-    if (manual) {
-      showToast('Đang kết nối tới máy chủ GitHub kiểm tra phiên bản mới...', 'info');
-    }
-
-    // Tự động ẩn thông báo cập nhật in-app khi tải từ Google Play để tránh vi phạm chính sách đăng tải
-    if (Capacitor.isNativePlatform()) {
-      try {
-        const info = await CapApp.getInfo();
-        if ((info as any).installerPackageName === 'com.android.vending' && !manual) {
-          console.info('[Update Check] Ứng dụng chạy từ Google Play Store. Tự động ẩn thông báo cập nhật in-app.');
-          return;
-        }
-      } catch (e) {
-        console.warn('[Update Check] Không thể đọc installerPackageName:', e);
-      }
-    }
-
-    try {
-      const res = await fetch(`${UPDATE_SERVER_URL}?_t=${Date.now()}`);
-      if (res.ok) {
-        const data = await res.json();
-        const latestVersion = data.version || data.versionName;
-        if (data && latestVersion) {
-          const isNewer = isNewerVersion(CURRENT_APP_VERSION, latestVersion);
-          if (isNewer) {
-            setUpdateInfo({
-              version: latestVersion,
-              downloadUrl: data.downloadUrl || data.apkUrl || 'https://github.com/tuanta3012/sotietkiem/releases',
-              apkUrl: data.apkUrl || data.downloadUrl,
-              changelog: Array.isArray(data.changelog)
-                ? data.changelog
-                : (data.notes 
-                    ? [data.notes] 
-                    : (data.changelog ? [data.changelog] : ['Nâng cấp hiệu năng và khắc phục lỗi hệ thống.'])),
-              releaseDate: data.releaseDate || data.date,
-            });
-            setIsUpdateModalOpen(true);
-            if (manual) {
-              showToast(`Đã tìm thấy bản cập nhật mới v${latestVersion}!`, 'success');
-            }
-          } else {
-            if (manual) {
-              showToast(`Bạn đang sử dụng phiên bản APK mới nhất (v${CURRENT_APP_VERSION}).`, 'success', 4000);
-            }
-          }
-        } else {
-          if (manual) {
-            showToast('Dữ liệu phiên bản trên GitHub không đầy đủ hoặc bị lỗi.', 'error', 4000);
-          }
-        }
+  // 3. Tự động kiểm tra cập nhật APK từ xa bằng useAppUpdate hook
+  const {
+    updateInfo,
+    isUpdateModalOpen,
+    setIsUpdateModalOpen,
+    checkAppUpdate,
+  } = useAppUpdate({
+    currentVersion: CURRENT_APP_VERSION,
+    updateServerUrl: 'https://github.com/tuanta3012/sotietkiem/raw/refs/heads/main/version.json',
+    autoCheckDelayMs: 2000,
+    onNotification: (msg, type) => {
+      if (type === 'info') {
+        showToast(msg, 'info');
+      } else if (type === 'success') {
+        showToast(msg, 'success', 4000);
       } else {
-        if (manual) {
-          showToast(`Không thể kết nối đến GitHub (HTTP ${res.status}).`, 'error', 4000);
-        }
+        showToast(msg, 'error', 4000);
       }
-    } catch (err: any) {
-      console.warn('Lỗi kiểm tra cập nhật APK:', err);
-      if (manual) {
-        showToast('Không thể kết nối tới máy chủ GitHub. Vui lòng kiểm tra lại kết nối Internet.', 'error', 4000);
-      }
-    }
-  }, [showToast]);
-
-  useEffect(() => {
-    // Tự động kiểm tra cập nhật APK sau 2 giây khi khởi chạy
-    const timer = setTimeout(() => {
-      checkAppUpdate(false);
-    }, 2000);
-    return () => clearTimeout(timer);
-  }, [checkAppUpdate]);
+    },
+  });
 
   // Giữ phiên Google OAuth và Firebase Auth luôn đồng bộ bền vững khi mở app hoặc refresh trang
   useEffect(() => {
