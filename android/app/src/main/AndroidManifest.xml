@@ -38,7 +38,7 @@
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
-                android:name="android.support.load.file_provider_paths"
+                android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"
             />
         </provider>

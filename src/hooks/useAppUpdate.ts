@@ -27,11 +27,20 @@ export function useAppUpdate({
   autoCheckDelayMs = 2000,
   onNotification,
 }: UseAppUpdateOptions) {
+  const isPlayStore = (import.meta as any).env?.VITE_APP_MODE === 'play';
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState<boolean>(false);
   const [isChecking, setIsChecking] = useState<boolean>(false);
 
   const checkAppUpdate = useCallback(async (manual: boolean = false) => {
+    // Không thực hiện kiểm tra hoặc mở modal trên bản phát hành Google Play AAB
+    if (isPlayStore) {
+      if (manual && onNotification) {
+        onNotification(`Phiên bản ứng dụng: v${currentVersion}`, 'info');
+      }
+      return;
+    }
+
     setIsChecking(true);
     if (manual && onNotification) {
       onNotification('Đang kiểm tra phiên bản mới từ máy chủ...', 'info');
@@ -79,13 +88,14 @@ export function useAppUpdate({
   }, [currentVersion, updateServerUrl, onNotification]);
 
   useEffect(() => {
+    if (isPlayStore) return;
     if (autoCheckDelayMs > 0) {
       const timer = setTimeout(() => {
         checkAppUpdate(false);
       }, autoCheckDelayMs);
       return () => clearTimeout(timer);
     }
-  }, [checkAppUpdate, autoCheckDelayMs]);
+  }, [checkAppUpdate, autoCheckDelayMs, isPlayStore]);
 
   return {
     updateInfo,
