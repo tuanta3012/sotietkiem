@@ -405,7 +405,7 @@ export default function App() {
     checkAppUpdate,
   } = useAppUpdate({
     currentVersion: CURRENT_APP_VERSION,
-    updateServerUrl: 'https://github.com/tuanta3012/sotietkiem/raw/refs/heads/main/version.json',
+    updateServerUrl: 'https://raw.githubusercontent.com/tuanta3012/sotietkiem/main/version.json',
     autoCheckDelayMs: 2000,
     onNotification: (msg, type) => {
       if (type === 'info') {
