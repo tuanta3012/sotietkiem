@@ -834,7 +834,7 @@ export function useDriveSync({
   // Tự động nhận diện và kết nối file trung tâm khi login hoặc mở app trên thiết bị mới
   useEffect(() => {
     const performAutoConnect = async () => {
-      if (currentUser?.isOffline || isSwitchingFileRef.current || isExplicitlyUnlinked() || isAutoConnectingRef.current) return;
+      if (currentUser?.isOffline || isSwitchingFileRef.current || isAutoConnectingRef.current) return;
       isAutoConnectingRef.current = true;
       const token = getGoogleAccessToken();
       if (!token) {
@@ -844,85 +844,79 @@ export function useDriveSync({
 
       try {
         console.info('[Central Hub Sync] Đang tự động quét tìm file trung tâm trên Google Drive...');
-        const masterState = await getMasterSyncStateFromDrive(token);
-        if (!masterState || masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
-          if (settingsRef.current.googleSheetUrl) {
-            console.info('[Central Hub Sync] File master đã ở trạng thái unlinked trên Drive -> Hủy liên kết cục bộ.');
-            setExplicitlyUnlinked(true);
-            setBooks([]);
-            setSettings((prev) => ({
-              ...prev,
-              googleSheetUrl: undefined,
-              googleSheetName: undefined,
-              members: [],
-              lastSyncTime: undefined,
-            }));
+
+        // 1. Trường hợp máy chưa có file liên kết cục bộ (hoặc máy 2 vừa mở app sau khi máy 1 tạo/liên kết lại)
+        if (!settingsRef.current.googleSheetUrl) {
+          const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
+          if (hub && hub.id) {
+            const masterState = await getMasterSyncStateFromDrive(token, hub.id);
+            if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+              applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
+              const link = hub.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+              const fileName = hub.name || masterState.activeFileName || 'Sổ tiết kiệm';
+              console.info(`[Central Hub Sync] Phát hiện file trung tâm "${fileName}". Tự động kết nối và nạp dữ liệu ngay lập tức...`);
+              setSyncDriveStatus(`Đang tự động đồng bộ file trung tâm "${fileName}"...`);
+              setExplicitlyUnlinked(false);
+
+              try {
+                sessionStorage.removeItem('explicitly_unlinked');
+              } catch {}
+
+              // Tải dữ liệu từ file trung tâm
+              try {
+                const res = await downloadRealGoogleDriveFile(token, hub.id, hub.mimeType);
+                if (res.success) {
+                  applyMasterSettlements(res.settlements || []);
+                  if (res.books && res.books.length > 0) {
+                    const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
+                    const mergedBooks = sortAndReindexBooks(activeRemote);
+                    setBooks(mergedBooks);
+                    localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
+                  }
+                  const nowStr = new Date().toLocaleString('vi-VN');
+                  setSettings((prev) => ({
+                    ...prev,
+                    googleSheetUrl: link,
+                    googleSheetName: fileName,
+                    lastSyncTime: nowStr,
+                    lastLocalLinkTimestamp: masterState.linkedTimestamp || new Date().toISOString(),
+                    autoSync: true,
+                  }));
+                  setSyncDriveStatus(`⚡ Đã tự động kết nối & đồng bộ file trung tâm "${fileName}"`);
+                }
+              } catch (dlErr: any) {
+                console.warn('Lỗi tải dữ liệu cho file tự động phát hiện:', dlErr);
+              }
+            }
           }
+          isAutoConnectingRef.current = false;
+          return;
+        }
+
+        // 2. Trường hợp máy đã có file liên kết cục bộ: kiểm tra xem file master trên Drive có bị unlinked không
+        const currentUrl = settingsRef.current.googleSheetUrl;
+        const match = currentUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || currentUrl?.match(/id=([a-zA-Z0-9-_]+)/);
+        const currentFileId = match ? match[1] : undefined;
+        const masterState = await getMasterSyncStateFromDrive(token, currentFileId);
+
+        if (!masterState || masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
+          console.info('[Central Hub Sync] File master đã ở trạng thái unlinked trên Drive -> Hủy liên kết cục bộ.');
+          setExplicitlyUnlinked(true);
+          setBooks([]);
+          if (setSettlementAdjustments) setSettlementAdjustments([]);
+          setSettings((prev) => ({
+            ...prev,
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            members: [],
+            lastSyncTime: undefined,
+          }));
           isAutoConnectingRef.current = false;
           return;
         }
 
         // Master state tồn tại và active
         applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
-
-        if (!settingsRef.current.googleSheetUrl) {
-          const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
-          if (hub) {
-            const link = hub.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${masterState.activeFileId}/edit`;
-            const fileName = hub.name || masterState.activeFileName;
-            console.info(`[Central Hub Sync] Phát hiện file trung tâm "${fileName}". Tự động kết nối và nạp dữ liệu ngay lập tức...`);
-            setSyncDriveStatus(`Đang tự động đồng bộ file trung tâm "${fileName}"...`);
-
-            try {
-              sessionStorage.removeItem('explicitly_unlinked');
-            } catch {}
-
-            // Tải dữ liệu từ file trung tâm
-            try {
-              const res = await downloadRealGoogleDriveFile(token, hub.id, hub.mimeType);
-              if (res.success) {
-                applyMasterSettlements(res.settlements || []);
-                if (res.books && res.books.length > 0) {
-                  const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-                  const mergedBooks = sortAndReindexBooks(activeRemote);
-                  setBooks(mergedBooks);
-                  localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
-                }
-              }
-            } catch (err: any) {
-              console.warn('Lỗi tải dữ liệu cho file tự động phát hiện:', err);
-              recordSyncAuditLog({
-                type: 'SYNC_ERROR',
-                title: 'Lỗi tải file tự động phát hiện',
-                status: 'error',
-                userEmail: currentUser?.email,
-                currentRole: settingsRef.current?.currentRole,
-                summary: `Lỗi tải file tự động: ${err?.message || err}`,
-                errorMessage: err?.stack || err?.message,
-                details: { hubId: hub.id, fileName },
-              });
-              if (
-                err?.message?.includes('FILE_NOT_FOUND') ||
-                err?.message?.includes('404') ||
-                err?.message?.includes('xóa')
-              ) {
-                setSyncDriveStatus('⚠️ File trung tâm chưa được chia sẻ quyền truy cập cho tài khoản này.');
-                return;
-              }
-            }
-
-            const nowStr = new Date().toLocaleString('vi-VN');
-            setSettings((prev) => ({
-              ...prev,
-              googleSheetUrl: link,
-              googleSheetName: fileName,
-              lastSyncTime: nowStr,
-              lastLocalLinkTimestamp: masterState.linkedTimestamp,
-              autoSync: true,
-            }));
-            setSyncDriveStatus(`⚡ Đã tự động kết nối & đồng bộ file trung tâm "${fileName}"`);
-          }
-        }
       } catch (err: any) {
         console.warn('Lỗi quét tìm file trung tâm tự động:', err);
         recordSyncAuditLog({
@@ -1350,32 +1344,30 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
-            if (isExplicitlyUnlinked()) {
-              // Bỏ qua nếu đã hủy liên kết
-              return;
-            }
-
-            const masterState = token ? await getMasterSyncStateFromDrive(token) : null;
-            if (masterState && masterState.status === 'active' && masterState.activeFileId) {
-              // Luôn đồng bộ danh sách thành viên & vai trò (ADMIN, EDITOR, VIEWER)
-              applyMasterStateToSettings(masterState, currentUser.email, setSettings, settingsRef.current, token);
-
-              // Nếu chưa gắn link bảng tính, tự động gắn link bảng tính từ masterState
-              if (!settingsRef.current.googleSheetUrl && masterState.activeFileId) {
-                const sheetUrl = masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${masterState.activeFileId}/edit`;
+            if (!settingsRef.current.googleSheetUrl) {
+              const hub = await autoDiscoverLatestCentralHub(token, currentUser.email);
+              if (hub && hub.id) {
+                const sheetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
                 setSettings((prev) => ({
                   ...prev,
                   googleSheetUrl: sheetUrl,
-                  googleSheetName: masterState.activeFileName || 'Bảng tính tiết kiệm',
+                  googleSheetName: hub.name || 'Bảng tính tiết kiệm',
                 }));
+                setExplicitlyUnlinked(false);
                 console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ master workspace...');
                 await syncBooksFromDriveRef.current(false, token);
               }
-            } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
-              setExplicitlyUnlinked(true);
-              setBooks([]);
-              if (setSettlementAdjustments) setSettlementAdjustments([]);
-              if (settingsRef.current.googleSheetUrl) {
+            } else {
+              const currentUrl = settingsRef.current.googleSheetUrl;
+              const match = currentUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || currentUrl?.match(/id=([a-zA-Z0-9-_]+)/);
+              const currentFileId = match ? match[1] : undefined;
+              const masterState = token ? await getMasterSyncStateFromDrive(token, currentFileId) : null;
+              if (masterState && masterState.status === 'active' && masterState.activeFileId) {
+                applyMasterStateToSettings(masterState, currentUser.email, setSettings, settingsRef.current, token);
+              } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
+                setExplicitlyUnlinked(true);
+                setBooks([]);
+                if (setSettlementAdjustments) setSettlementAdjustments([]);
                 setSettings((prev) => ({
                   ...prev,
                   googleSheetUrl: undefined,

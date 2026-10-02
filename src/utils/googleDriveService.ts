@@ -2743,11 +2743,6 @@ export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   _userEmail?: string
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
-  if (isExplicitlyUnlinked()) {
-    console.info('[Central Hub Sync] 🚫 Người dùng đã chủ động Hủy liên kết -> Không tự động tìm file.');
-    return null;
-  }
-
   try {
     const targetFileId = getLocalMasterPointerFileId();
     if (targetFileId) {
@@ -2756,6 +2751,7 @@ export async function autoDiscoverLatestCentralHub(
       if (meta && !meta.isDeleted) {
         const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          setExplicitlyUnlinked(false);
           return {
             id: targetFileId,
             name: meta.name || masterState.activeFileName || 'Sổ tiết kiệm',
@@ -2777,6 +2773,7 @@ export async function autoDiscoverLatestCentralHub(
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(masterState);
+          setExplicitlyUnlinked(false);
           return {
             id: file.id,
             name: file.name || masterState.activeFileName || 'Sổ tiết kiệm',

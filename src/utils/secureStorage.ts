@@ -146,104 +146,21 @@ export async function enforceFreshInstallCleanState(): Promise<boolean> {
 
   try {
     if (isNative) {
-      let keystoreToken: string | null = null;
-      let keystoreError = false;
-
-      try {
-        const result = await SecureStoragePlugin.get({ key: KEYSTORE_GUARD_KEY });
-        keystoreToken = result?.value || null;
-      } catch (err) {
-        // Keystore bị reset khi app bị gỡ cài đặt hoặc khóa bảo mật bị hủy
-        keystoreError = true;
-        keystoreToken = null;
-      }
-
+      // Đảm bảo token cài đặt được ghi nhận mà tuyệt đối không xóa dữ liệu hợp lệ của người dùng
       const prefResult = await Preferences.get({ key: PREFS_GUARD_KEY }).catch(() => ({ value: null }));
-      const localPrefsToken =
-        prefResult?.value || (typeof localStorage !== 'undefined' ? localStorage.getItem(PREFS_GUARD_KEY) : null);
-
-      // Kiểm tra xem có dấu vết dữ liệu cũ bị Google One tiêm vào không
-      const hasZombieSavingsData =
-        typeof localStorage !== 'undefined' &&
-        (Boolean(localStorage.getItem('savings_books_v3')) ||
-          Boolean(localStorage.getItem('savings_auth_user_v3')) ||
-          Boolean(localStorage.getItem('savings_settings_v3')) ||
-          Boolean(localStorage.getItem('google_drive_file_id')));
-
-      // Nếu Keystore không có token (hoặc bị lỗi do cài mới) NHƯNG SharedPreferences / localStorage lại có dữ liệu hoặc token cũ
-      // => ĐÂY CHẮC CHẮN LÀ ZOMBIE RESTORE TỪ GOOGLE ONE TRÊN BẢN CÀI MỚI!
-      if (!keystoreToken && (localPrefsToken || hasZombieSavingsData || keystoreError)) {
-        console.warn(
-          '[KeystoreGuard] 🚨 Phát hiện dữ liệu Zombie từ Google One Backup trên bản cài mới! Đang kích hoạt làm sạch toàn diện...'
-        );
-
-        // 1. Quét sạch Preferences của Capacitor
-        try {
-          await Preferences.clear();
-        } catch {
-          // ignore
-        }
-
-        // 2. Quét sạch LocalStorage & SessionStorage
-        if (typeof localStorage !== 'undefined') {
-          localStorage.clear();
-        }
-        if (typeof sessionStorage !== 'undefined') {
-          sessionStorage.clear();
-        }
-
-        // 3. Quét sạch CacheStorage
-        if (typeof window !== 'undefined' && 'caches' in window) {
-          try {
-            const cacheKeys = await caches.keys();
-            await Promise.all(cacheKeys.map((key) => caches.delete(key)));
-          } catch {
-            // ignore
-          }
-        }
-
-        // 4. Tạo token cài đặt mới và lưu vào cả Keystore phần cứng lẫn Preferences
-        const newToken = `stk_fresh_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+      if (!prefResult?.value) {
+        const newToken = `stk_install_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
         try {
           await SecureStoragePlugin.set({ key: KEYSTORE_GUARD_KEY, value: newToken });
-        } catch (e) {
-          console.warn('[KeystoreGuard] Không thể ghi token vào Keystore:', e);
-        }
+        } catch {}
         await Preferences.set({ key: PREFS_GUARD_KEY, value: newToken }).catch(() => {});
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem(PREFS_GUARD_KEY, newToken);
         }
-
-        console.info(
-          '[KeystoreGuard] ✅ Đã quét sạch hoàn toàn dữ liệu Zombie cũ. Hệ thống bắt đầu với trạng thái hoàn toàn mới.'
-        );
-        return true; // Đã thực hiện làm sạch
-      }
-
-      // Nếu cả Keystore lẫn Preferences chưa có token (cài mới hoàn toàn và sạch)
-      if (!keystoreToken) {
-        const newToken = `stk_fresh_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-        try {
-          await SecureStoragePlugin.set({ key: KEYSTORE_GUARD_KEY, value: newToken });
-        } catch {
-          // ignore
-        }
-        await Preferences.set({ key: PREFS_GUARD_KEY, value: newToken }).catch(() => {});
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(PREFS_GUARD_KEY, newToken);
-        }
-        return false;
-      }
-    } else {
-      // Trên môi trường Web/Preview
-      if (typeof localStorage !== 'undefined' && !localStorage.getItem(PREFS_GUARD_KEY)) {
-        const newToken = `stk_web_${Date.now()}`;
-        localStorage.setItem(PREFS_GUARD_KEY, newToken);
-        await Preferences.set({ key: PREFS_GUARD_KEY, value: newToken }).catch(() => {});
       }
     }
   } catch (err) {
-    console.error('[KeystoreGuard] Lỗi trong quá trình kiểm tra fresh install guard:', err);
+    console.warn('[KeystoreGuard] Bỏ qua kiểm tra token khởi động an toàn:', err);
   }
   return false;
 }
