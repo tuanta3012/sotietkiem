@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
 import { Share } from '@capacitor/share';
+import { Browser } from '@capacitor/browser';
 
 interface UpdateInfo {
   version: string;
@@ -36,6 +37,18 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   if (!isOpen || !updateInfo) return null;
 
   const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl || '';
+
+  const openExternalUrl = async (url: string) => {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        await Browser.open({ url });
+      } else {
+        window.open(url, '_blank');
+      }
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
 
   // Kích hoạt Trình Cài Đặt Gói APK của Android
   const triggerPackageInstall = async (fileUriOrPath: string) => {
@@ -79,9 +92,9 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         });
       } catch (shareErr) {
         console.warn('Share intent error:', shareErr);
-        // Fallback 2: Mở link tải trực tiếp qua Browser
+        // Fallback 2: Mở link tải trực tiếp qua Real Browser App (Chrome)
         if (targetLink) {
-          window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+          await openExternalUrl(targetLink);
         }
       }
     }
@@ -147,7 +160,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
       } else {
         // Môi trường Web browser
         setDownloadProgress(100);
-        window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+        await openExternalUrl(targetLink);
         setIsDownloading(false);
         onClose();
       }
@@ -158,9 +171,9 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
     }
   };
 
-  const handleOpenBrowserDownload = () => {
+  const handleOpenBrowserDownload = async () => {
     if (targetLink) {
-      window.open(targetLink, '_system') || window.open(targetLink, '_blank');
+      await openExternalUrl(targetLink);
     }
   };
 

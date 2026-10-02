@@ -351,6 +351,19 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
     [books, settlements]
   );
 
+  // Auto scroll history tables to bottom (latest 5 rows)
+  const table1ScrollRef = useRef<HTMLDivElement>(null);
+  const table2ScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (table1ScrollRef.current) {
+      table1ScrollRef.current.scrollTop = table1ScrollRef.current.scrollHeight;
+    }
+    if (table2ScrollRef.current) {
+      table2ScrollRef.current.scrollTop = table2ScrollRef.current.scrollHeight;
+    }
+  }, [dynamicAnnualInterest, dynamicBalanceGrowth]);
+
   // Dynamic Bank Breakdown
   const bankBreakdown = useMemo(() => {
     const map = new Map<string, { count: number; amount: number; name: string; color: string }>();
@@ -851,104 +864,107 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {/* BẢNG 1: LÃI HÀNG NĂM */}
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <div className="bg-slate-100 px-3.5 py-2 border-b border-slate-200 flex items-center justify-between">
-                <div>
-                  <span className="font-bold text-xs text-slate-800 block">
-                    LÃI HÀNG NĂM
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    Tổng lãi thực tế của các sổ tất toán trong năm (chốt 31/12)
-                  </span>
-                </div>
+            <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+              <div className="bg-slate-100 px-3.5 py-2 border-b border-slate-200 flex items-center justify-between shrink-0">
+                <span className="font-bold text-xs text-slate-800">LÃI HÀNG NĂM</span>
                 <span className="text-[10px] text-slate-500 font-mono">Đơn vị: Triệu VNĐ</span>
               </div>
-              <table className="w-full text-xs text-left">
-                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                  <tr>
-                    <th className="py-2 px-3">Lãi hàng năm</th>
-                    <th className="py-2 px-3 text-right">Số tiền</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {dynamicAnnualInterest.map((row) => {
-                    const isProvisional = row.year >= 2027;
+              <div
+                ref={table1ScrollRef}
+                className="max-h-[190px] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              >
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
+                    <tr>
+                      <th className="py-2 px-2.5 sm:px-3 whitespace-nowrap bg-slate-50">Lãi hàng năm</th>
+                      <th className="py-2 px-2.5 sm:px-3 text-right whitespace-nowrap bg-slate-50">Số tiền</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {dynamicAnnualInterest.map((row) => {
+                      const isProvisional = row.year >= 2027;
 
-                    return (
-                      <tr key={row.year} className={`hover:bg-slate-50 ${row.year >= 2026 ? 'bg-amber-50/60 font-semibold' : ''}`}>
-                        <td className="py-2 px-3 font-mono font-bold text-slate-900">
-                          {isProvisional ? (
-                            <div className="flex items-center space-x-1.5">
-                              <span>{row.year}</span>
-                              <span className="text-[10px] text-emerald-900 bg-emerald-100 px-1.5 py-0.5 rounded font-normal">
-                                Tạm tính
-                              </span>
-                            </div>
-                          ) : (
-                            row.year
-                          )}
-                        </td>
-                        <td className={`py-2 px-3 text-right font-mono font-bold ${row.year >= 2026 ? 'text-amber-800' : 'text-emerald-700'}`}>
-                          {settings.privacyMode ? '••••••' : row.interestEarnedMillion.toLocaleString('vi-VN')}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  <tr className="bg-slate-900 text-white font-bold border-t-2 border-slate-800">
-                    <td className="py-2.5 px-3 uppercase text-amber-300">Tổng Cộng Lãi</td>
-                    <td className="py-2.5 px-3 text-right font-mono text-emerald-300">
-                      {settings.privacyMode ? '••••••' : dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      return (
+                        <tr key={row.year} className={`hover:bg-slate-50 ${row.year >= 2026 ? 'bg-amber-50/60 font-semibold' : ''}`}>
+                          <td className="py-2 px-2.5 sm:px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                            {isProvisional ? (
+                              <div className="flex items-center space-x-1.5 whitespace-nowrap">
+                                <span>{row.year}</span>
+                                <span className="text-[9px] sm:text-[10px] text-emerald-900 bg-emerald-100 px-1.5 py-0.5 rounded font-normal whitespace-nowrap shrink-0 inline-block">
+                                  Tạm tính
+                                </span>
+                              </div>
+                            ) : (
+                              row.year
+                            )}
+                          </td>
+                          <td className={`py-2 px-2.5 sm:px-3 text-right font-mono font-bold whitespace-nowrap ${row.year >= 2026 ? 'text-amber-800' : 'text-emerald-700'}`}>
+                            {settings.privacyMode ? '••••••' : row.interestEarnedMillion.toLocaleString('vi-VN')}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="bg-slate-900 text-white font-bold border-t-2 border-slate-800 px-2.5 sm:px-3 py-2 flex items-center justify-between text-xs shrink-0">
+                <span className="uppercase text-amber-300 whitespace-nowrap">Tổng Cộng Lãi</span>
+                <span className="font-mono text-emerald-300 text-right whitespace-nowrap">
+                  {settings.privacyMode ? '••••••' : dynamicAnnualInterest.reduce((s, x) => s + x.interestEarnedMillion, 0).toLocaleString('vi-VN')}
+                </span>
+              </div>
             </div>
 
             {/* BẢNG 2: SỐ DƯ CUỐI NĂM & THU NHẬP NĂM */}
-            <div className="border border-slate-200 rounded-xl overflow-hidden">
-              <div className="bg-slate-100 px-3.5 py-2 border-b border-slate-200 flex items-center justify-between">
+            <div className="border border-slate-200 rounded-xl overflow-hidden flex flex-col">
+              <div className="bg-slate-100 px-3.5 py-2 border-b border-slate-200 flex items-center justify-between shrink-0">
                 <span className="font-bold text-xs text-slate-800">
                   SỐ DƯ CUỐI NĂM
                 </span>
                 <span className="text-[10px] text-slate-500 font-mono">Đơn vị: Triệu VNĐ</span>
               </div>
-              <table className="w-full text-xs text-left">
-                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
-                  <tr>
-                    <th className="py-2 px-3">Số dư cuối năm</th>
-                    <th className="py-2 px-3 text-right">Số tiền</th>
-                    <th className="py-2 px-3 text-right text-indigo-700">Thu nhập năm</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-slate-700">
-                  {dynamicBalanceGrowth.map((row) => {
-                    const isCurrentYear = row.year === 2026;
+              <div
+                ref={table2ScrollRef}
+                className="max-h-[190px] overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+              >
+                <table className="w-full text-xs text-left border-collapse">
+                  <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 sticky top-0 z-10 shadow-2xs">
+                    <tr>
+                      <th className="py-2 px-2 sm:px-3 whitespace-nowrap w-[44%] sm:w-auto bg-slate-50">Số dư cuối năm</th>
+                      <th className="py-2 px-2 sm:px-3 text-right whitespace-nowrap w-[28%] sm:w-auto bg-slate-50">Số tiền</th>
+                      <th className="py-2 px-2 sm:px-3 text-right text-indigo-700 whitespace-nowrap w-[28%] sm:w-auto bg-slate-50">Thu nhập năm</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {dynamicBalanceGrowth.map((row) => {
+                      const isCurrentYear = row.year === 2026;
 
-                    return (
-                      <tr key={row.year} className={`hover:bg-slate-50 ${isCurrentYear ? 'bg-indigo-50/60 font-semibold' : ''}`}>
-                        <td className="py-2 px-3 font-mono font-bold text-slate-900">
-                          {isCurrentYear ? (
-                            <div className="flex items-center space-x-1.5">
-                              <span>2026</span>
-                              <span className="text-[10px] text-emerald-900 bg-emerald-100 px-1.5 py-0.5 rounded font-normal">
-                                Tạm tính
-                              </span>
-                            </div>
-                          ) : (
-                            row.year
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
-                          {settings.privacyMode ? '••••••' : row.balanceMillion.toLocaleString('vi-VN')}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono font-bold text-indigo-700">
-                          {settings.privacyMode ? (row.annualIncomeMillion ? '••••••' : '') : (row.annualIncomeMillion ? row.annualIncomeMillion.toLocaleString('vi-VN') : '')}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                      return (
+                        <tr key={row.year} className={`hover:bg-slate-50 ${isCurrentYear ? 'bg-indigo-50/60 font-semibold' : ''}`}>
+                          <td className="py-2 px-2 sm:px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
+                            {isCurrentYear ? (
+                              <div className="flex items-center space-x-1 sm:space-x-1.5 whitespace-nowrap">
+                                <span>2026</span>
+                                <span className="text-[9px] sm:text-[10px] text-emerald-900 bg-emerald-100 px-1 sm:px-1.5 py-0.5 rounded font-normal whitespace-nowrap shrink-0 inline-block">
+                                  Tạm tính
+                                </span>
+                              </div>
+                            ) : (
+                              row.year
+                            )}
+                          </td>
+                          <td className="py-2 px-2 sm:px-3 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
+                            {settings.privacyMode ? '••••••' : row.balanceMillion.toLocaleString('vi-VN')}
+                          </td>
+                          <td className="py-2 px-2 sm:px-3 text-right font-mono font-bold text-indigo-700 whitespace-nowrap">
+                            {settings.privacyMode ? (row.annualIncomeMillion ? '••••••' : '') : (row.annualIncomeMillion ? row.annualIncomeMillion.toLocaleString('vi-VN') : '')}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

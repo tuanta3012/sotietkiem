@@ -284,7 +284,7 @@ export async function ensureGoogleAuthInitialized(): Promise<void> {
         'openid',
         'https://www.googleapis.com/auth/drive.file',
       ],
-      grantOfflineAccess: true,
+      grantOfflineAccess: false,
     });
     isGoogleAuthInitialized = true;
   } catch (err) {
@@ -671,37 +671,54 @@ export async function validateAndEnsureToken(): Promise<string> {
  * Sign out (removes all saved tokens, sessions, and credentials)
  */
 export async function signOutGoogle(): Promise<void> {
-  if (Capacitor.isNativePlatform()) {
-    try {
-      await GoogleAuth.signOut();
-    } catch (err) {
-      console.warn('[GoogleAuth] Native signOut warning:', err);
-    }
+  // 1. Dọn sạch toàn bộ Token, User Profile và Session trong Storage trước
+  cachedAccessToken = null;
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(ID_TOKEN_KEY);
+    localStorage.removeItem(USER_PROFILE_KEY);
+    localStorage.removeItem('google_drive_ever_logged_in');
+    localStorage.removeItem(MASTER_POINTER_FILE_ID_KEY);
+    localStorage.removeItem('savings_auth_user_v3');
+    localStorage.removeItem('savings_settings_v3');
+
+    sessionStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+
+    Preferences.remove({ key: TOKEN_KEY }).catch(() => {});
+    Preferences.remove({ key: TOKEN_EXPIRES_AT_KEY }).catch(() => {});
+    Preferences.remove({ key: REFRESH_TOKEN_KEY }).catch(() => {});
+    Preferences.remove({ key: ID_TOKEN_KEY }).catch(() => {});
+    Preferences.remove({ key: USER_PROFILE_KEY }).catch(() => {});
+    Preferences.remove({ key: 'google_drive_ever_logged_in' }).catch(() => {});
+    Preferences.remove({ key: 'savings_auth_user_v3' }).catch(() => {});
+
+    // Secure storage clean
+    removeSecureItem(TOKEN_KEY).catch(() => {});
+    removeSecureItem(TOKEN_EXPIRES_AT_KEY).catch(() => {});
+    removeSecureItem(REFRESH_TOKEN_KEY).catch(() => {});
+    removeSecureItem(ID_TOKEN_KEY).catch(() => {});
+    removeSecureItem(USER_PROFILE_KEY).catch(() => {});
+  } catch (storageErr) {
+    console.warn('Storage cleanup error:', storageErr);
   }
+
+  // 2. Đăng xuất Firebase Auth an toàn
   try {
     await signOut(auth);
-  } finally {
-    cachedAccessToken = null;
+  } catch (fbErr) {
+    console.warn('Firebase signOut error:', fbErr);
+  }
+
+  // 3. Đăng xuất Native GoogleAuth có bọc try/catch chống sập ứng dụng
+  if (Capacitor.isNativePlatform()) {
     try {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
-      localStorage.removeItem(REFRESH_TOKEN_KEY);
-      localStorage.removeItem(ID_TOKEN_KEY);
-      localStorage.removeItem(USER_PROFILE_KEY);
-      localStorage.removeItem('google_drive_ever_logged_in');
-      localStorage.removeItem(MASTER_POINTER_FILE_ID_KEY);
-
-      sessionStorage.removeItem(TOKEN_KEY);
-      sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
-
-      // Secure storage clean
-      removeSecureItem(TOKEN_KEY).catch(() => {});
-      removeSecureItem(TOKEN_EXPIRES_AT_KEY).catch(() => {});
-      removeSecureItem(REFRESH_TOKEN_KEY).catch(() => {});
-      removeSecureItem(ID_TOKEN_KEY).catch(() => {});
-      removeSecureItem(USER_PROFILE_KEY).catch(() => {});
-    } catch {
-      // ignore
+      await ensureGoogleAuthInitialized();
+      await (GoogleAuth as any).signOut();
+    } catch (err) {
+      console.warn('[GoogleAuth] Native signOut safe warning:', err);
     }
   }
 }
@@ -787,8 +804,6 @@ export async function listRealGoogleDriveFiles(
     url.searchParams.set('pageSize', '100');
     url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, size, webViewLink, iconLink, shared)');
     url.searchParams.set('orderBy', 'modifiedTime desc');
-    url.searchParams.set('includeItemsFromAllDrives', 'true');
-    url.searchParams.set('supportsAllDrives', 'true');
     url.searchParams.set('spaces', 'drive');
     url.searchParams.set('q', query);
 
@@ -807,6 +822,10 @@ export async function listRealGoogleDriveFiles(
       if (errorData?.error?.status === 'UNAUTHENTICATED' || errorData?.error?.code === 401 || errorData?.error?.message?.includes('invalid authentication credentials')) {
         setGoogleAccessToken(null);
         throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
+      }
+      if (res.status === 403 && errorData?.error?.message?.includes('insufficient authentication scopes')) {
+        setGoogleAccessToken(null);
+        throw new Error('Tài khoản Google chưa cấp quyền Google Drive (drive.file). Vui lòng đăng xuất và đăng nhập lại để cấp quyền.');
       }
       throw new Error(errorData?.error?.message || `Lỗi từ Google Drive API (Mã ${res.status})`);
     }
@@ -1864,6 +1883,37 @@ export async function createRealGoogleDriveFile(
     } else {
       console.error('Lỗi khi tạo file mới trên Google Drive:', error);
     }
+    throw error;
+  }
+}
+
+/**
+ * Delete a file on the user's real Google Drive
+ */
+export async function deleteRealGoogleDriveFile(
+  accessToken: string,
+  fileId: string
+): Promise<boolean> {
+  try {
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}`;
+    const res = await fetchWithRetry(url, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!res.ok && res.status !== 404) {
+      if (res.status === 401) {
+        setGoogleAccessToken(null);
+        throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
+      }
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `Không thể xóa tệp trên Google Drive (Mã ${res.status})`);
+    }
+    return true;
+  } catch (error: any) {
+    console.error('Lỗi khi xóa tệp trên Google Drive:', error);
     throw error;
   }
 }
