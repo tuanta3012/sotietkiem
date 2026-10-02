@@ -2657,30 +2657,28 @@ export async function touchMasterSyncStateOnDrive(
  */
 export async function setMasterSyncUnlinked(
   accessToken: string,
-  userEmail?: string
+  userEmail?: string,
+  explicitFileId?: string
 ): Promise<void> {
   try {
     setExplicitlyUnlinked(true);
 
-    const currentMaster = await getMasterSyncStateFromDrive(accessToken);
-    if (!currentMaster) {
-      saveLocalMasterPointerFileId(null);
-      saveLocalMasterPointerState(null);
-      return;
-    }
+    const targetFileId = explicitFileId || getLocalMasterPointerFileId();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken, targetFileId);
 
+    const adminEmailVal = currentMaster?.adminEmail || currentMaster?.linkedAccountEmail || userEmail || 'admin';
     const cleanUser = userEmail?.trim().toLowerCase();
-    const adminEmail = (currentMaster.adminEmail || currentMaster.linkedAccountEmail || '').trim().toLowerCase();
-    if (cleanUser && adminEmail && cleanUser !== adminEmail) {
-      console.warn(`[Central Hub Sync] Tài khoản ${cleanUser} không phải Admin (${adminEmail}). Từ chối hủy liên kết.`);
+    const adminEmailClean = adminEmailVal.trim().toLowerCase();
+    if (cleanUser && adminEmailClean && cleanUser !== adminEmailClean) {
+      console.warn(`[Central Hub Sync] Tài khoản ${cleanUser} không phải Admin (${adminEmailClean}). Từ chối hủy liên kết.`);
       return;
     }
 
-    const activeId = currentMaster.activeFileId;
+    const activeId = targetFileId || currentMaster?.activeFileId;
 
     // Thu hồi quyền Google Drive của tất cả thành viên không phải Admin
     try {
-      if (activeId && currentMaster.members && currentMaster.members.length > 0) {
+      if (activeId && currentMaster?.members && currentMaster.members.length > 0) {
         for (const member of currentMaster.members) {
           if (member.role !== 'ADMIN' && member.email) {
             revokeFilePermission(accessToken, activeId, member.email).catch(() => {});
@@ -2697,7 +2695,7 @@ export async function setMasterSyncUnlinked(
     // Ta ghi trạng thái "unlinked" trực tiếp lên Google Sheet hiện tại TRƯỚC khi xóa pointer cục bộ
     if (activeId) {
       const unlinkedSheetState: MasterSyncState = {
-        ...currentMaster,
+        ...(currentMaster || {}),
         status: 'unlinked',
         lastAction: 'unlink',
         activeFileId: activeId, // Giữ nguyên ID để Sheet API biết file nào cần ghi nhận
@@ -2705,8 +2703,8 @@ export async function setMasterSyncUnlinked(
         activeFileUrl: '',
         linkedTimestamp: nowIso,
         linkedAccountEmail: userEmail || 'Google User',
-        adminEmail: currentMaster.adminEmail || userEmail?.toLowerCase() || 'admin',
-        members: currentMaster.members || [],
+        adminEmail: adminEmailVal,
+        members: currentMaster?.members || [],
         updatedAt: nowIso,
       };
 
@@ -2724,8 +2722,8 @@ export async function setMasterSyncUnlinked(
       activeFileUrl: '',
       linkedTimestamp: nowIso,
       linkedAccountEmail: userEmail || 'Google User',
-      adminEmail: currentMaster.adminEmail || userEmail?.toLowerCase() || 'admin',
-      members: currentMaster.members || [],
+      adminEmail: adminEmailVal,
+      members: currentMaster?.members || [],
       updatedAt: nowIso,
     });
 

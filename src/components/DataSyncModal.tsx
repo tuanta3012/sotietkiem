@@ -945,14 +945,22 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setIsUnlinking(true);
     setSyncStatusStep('Đang hủy liên kết và làm sạch dữ liệu trên ứng dụng...');
 
-    if (selectedFileId) {
-      const token = accessToken || getGoogleAccessToken();
-      if (token) {
-        try {
-          await setMasterSyncUnlinked(token, currentUser?.email || appUser?.email);
-        } catch {
-          // ignore
-        }
+    // Lấy File ID từ selectedFileId hoặc fallback qua settings.googleSheetUrl để đảm bảo tính chính xác tuyệt đối
+    const currentUrl = settings.googleSheetUrl;
+    let fileIdToUnlink = selectedFileId;
+    if (!fileIdToUnlink && currentUrl) {
+      const match = currentUrl.match(/\/d\/([a-zA-Z0-9-_]+)/) || currentUrl.match(/id=([a-zA-Z0-9-_]+)/);
+      if (match && match[1]) {
+        fileIdToUnlink = match[1];
+      }
+    }
+
+    const token = accessToken || getGoogleAccessToken();
+    if (token) {
+      try {
+        await setMasterSyncUnlinked(token, currentUser?.email || appUser?.email, fileIdToUnlink);
+      } catch (err) {
+        console.warn('Lỗi khi ghi nhận unlink lên Google Drive:', err);
       }
     }
 
