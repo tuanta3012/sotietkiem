@@ -2693,26 +2693,64 @@ export async function autoDiscoverLatestCentralHub(
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
   try {
     const targetFileId = getLocalMasterPointerFileId();
-    if (!targetFileId) return null;
-
-    // 1. Kiểm tra metadata file trực tiếp trên Google Drive
-    const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
-    if (!meta || meta.isDeleted) return null;
-
-    // 2. Thử đọc tab cấu hình __CONFIG__ nếu có
-    const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
-
-    if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
-      return null;
+    if (targetFileId) {
+      // 1. Kiểm tra metadata file trực tiếp trên Google Drive từ pointer cục bộ
+      const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
+      if (meta && !meta.isDeleted) {
+        const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
+        if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
+          return {
+            id: targetFileId,
+            name: meta.name || masterState?.activeFileName || 'Sổ tiết kiệm',
+            mimeType: meta.mimeType || masterState?.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: meta.webViewLink || masterState?.activeFileUrl || `https://docs.google.com/spreadsheets/d/${targetFileId}/edit`,
+            linkedTimestamp: masterState?.linkedTimestamp || new Date().toISOString(),
+          };
+        }
+      }
     }
 
-    return {
-      id: targetFileId,
-      name: meta.name || masterState?.activeFileName || 'So_tiet_kiem',
-      mimeType: meta.mimeType || masterState?.mimeType || 'application/vnd.google-apps.spreadsheet',
-      webViewLink: meta.webViewLink || masterState?.activeFileUrl || `https://docs.google.com/spreadsheets/d/${targetFileId}/edit`,
-      linkedTimestamp: masterState?.linkedTimestamp || new Date().toISOString(),
-    };
+    // 2. TỰ ĐỘNG KHÁM PHÁ TRÊN GOOGLE DRIVE (Dành cho Thiết bị 2 / Thiết bị mới):
+    // Truy vấn danh sách các file bảng tính (Google Sheets / Excel) có sẵn trên Google Drive của tài khoản
+    const driveFiles = await listRealGoogleDriveFiles(accessToken).catch(() => []);
+    if (driveFiles && driveFiles.length > 0) {
+      // Ưu tiên 1: Đọc tab __CONFIG__ của các file trên Drive để tìm file đang active
+      for (const file of driveFiles) {
+        if (!file.id || !file.isSheetOrExcel) continue;
+        const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
+        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          saveLocalMasterPointerFileId(file.id);
+          saveLocalMasterPointerState(masterState);
+          return {
+            id: file.id,
+            name: file.name || masterState.activeFileName || 'Sổ tiết kiệm',
+            mimeType: file.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: file.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
+            linkedTimestamp: masterState.linkedTimestamp || file.modifiedTime || new Date().toISOString(),
+          };
+        }
+      }
+
+      // Ưu tiên 2: Nếu chưa ghi status='active' nhưng có file Google Sheet/Excel hợp lệ (ví dụ file "Tiet kiem")
+      // Lấy file gần nhất được sửa đổi mà chưa bị đánh dấu hủy liên kết
+      for (const file of driveFiles) {
+        if (!file.id || !file.isSheetOrExcel) continue;
+        const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
+        if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
+          saveLocalMasterPointerFileId(file.id);
+          if (masterState) saveLocalMasterPointerState(masterState);
+          return {
+            id: file.id,
+            name: file.name,
+            mimeType: file.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
+            linkedTimestamp: masterState?.linkedTimestamp || file.modifiedTime || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    return null;
   } catch (err) {
     console.warn('Error auto-discovering central hub from Drive:', err);
     return null;

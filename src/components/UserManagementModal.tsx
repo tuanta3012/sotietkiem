@@ -12,6 +12,8 @@ import {
   LogOut,
   Mail,
   UserCheck,
+  CloudOff,
+  FolderSync,
 } from 'lucide-react';
 import { AppSettings, AuthUser, WorkspaceMember, UserRole, canManageMembers } from '../types';
 
@@ -22,6 +24,7 @@ interface UserManagementModalProps {
   settings: AppSettings;
   onSaveMembers: (updatedMembers: WorkspaceMember[]) => Promise<void>;
   onLeaveWorkspace?: () => void;
+  onOpenSyncModal?: () => void;
 }
 
 export const UserManagementModal: React.FC<UserManagementModalProps> = ({
@@ -31,6 +34,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   settings,
   onSaveMembers,
   onLeaveWorkspace,
+  onOpenSyncModal,
 }) => {
   if (!isOpen) return null;
 
@@ -78,8 +82,14 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
+  const hasLinkedDriveFile = Boolean(settings.googleSheetUrl && settings.googleSheetUrl.trim().length > 0);
+
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasLinkedDriveFile) {
+      setErrorMsg('Vui lòng kết nối hoặc tạo file Google Drive trước khi thêm thành viên.');
+      return;
+    }
     if (!newName.trim() || !newEmail.trim()) {
       setErrorMsg('Vui lòng nhập tên và Gmail thành viên.');
       return;
@@ -226,7 +236,30 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           )}
 
           {/* Form Thêm Thành Viên (Dành cho ADMIN) */}
-          {isAdmin ? (
+          {!hasLinkedDriveFile ? (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-xs">
+              <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                <CloudOff className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Chưa liên kết file Google Drive</span>
+              </div>
+              <p className="text-amber-800 leading-relaxed text-[11px]">
+                Ứng dụng chưa kết nối với file Google Sheet nào trên Google Drive. Để thêm và cấp quyền cho các thành viên gia đình, bạn cần kết nối hoặc tạo mới một file Google Sheet trước.
+              </p>
+              {onOpenSyncModal && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenSyncModal();
+                  }}
+                  className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center space-x-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <FolderSync className="w-4 h-4" />
+                  <span>Kết nối hoặc Tạo file Google Drive ngay</span>
+                </button>
+              )}
+            </div>
+          ) : isAdmin ? (
             <form onSubmit={handleAddMember} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
               <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                 <UserPlus className="w-3.5 h-3.5 text-emerald-600" />

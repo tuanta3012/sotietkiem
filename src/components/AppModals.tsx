@@ -470,6 +470,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
           settings={settings}
           onSaveMembers={handleSaveMembers}
           onLeaveWorkspace={onLeaveWorkspace}
+          onOpenSyncModal={() => setIsSyncModalOpen(true)}
         />
       )}
     </>

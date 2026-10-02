@@ -30,9 +30,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
-  const [downloadedFilePath, setDownloadedFilePath] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [installError, setInstallError] = useState<boolean>(false);
 
   if (!isOpen || !updateInfo) return null;
 
@@ -53,7 +51,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
   // Kích hoạt Trình Cài Đặt Gói APK của Android
   const triggerPackageInstall = async (fileUriOrPath: string) => {
     try {
-      setStatusMessage('Đang mở màn hình cài đặt Android...');
       let targetPath = fileUriOrPath;
 
       // Đảm bảo lấy đúng file URI từ Filesystem
@@ -73,13 +70,10 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         filePath: targetPath,
         contentType: 'application/vnd.android.package-archive',
       });
-      setStatusMessage('Đã mở Trình Cài Đặt Android thành công!');
-      setInstallError(false);
     } catch (fileOpenerErr: any) {
       console.warn('FileOpener trigger error:', fileOpenerErr);
-      setInstallError(true);
       
-      // Fallback 1: Thử chia sẻ file qua Share Intent để Android gợi ý Package Installer
+      // Fallback 1: Thử chia sẻ file qua Share Intent
       try {
         const shareUri = fileUriOrPath.startsWith('file://') || fileUriOrPath.startsWith('content://')
           ? fileUriOrPath
@@ -92,7 +86,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         });
       } catch (shareErr) {
         console.warn('Share intent error:', shareErr);
-        // Fallback 2: Mở link tải trực tiếp qua Real Browser App (Chrome)
         if (targetLink) {
           await openExternalUrl(targetLink);
         }
@@ -104,7 +97,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
     if (!targetLink) return;
 
     setIsDownloading(true);
-    setInstallError(false);
     setErrorMessage(null);
     setDownloadProgress(10);
     setStatusMessage('Đang kết nối đến máy chủ...');
@@ -114,11 +106,9 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         const fileName = `sotietkiem_v${updateInfo.version}.apk`;
         let savedUri = '';
 
-        // Tải file APK trực tiếp bằng Filesystem.downloadFile của native Android
         setStatusMessage('Đang tải tệp APK...');
         setDownloadProgress(35);
 
-        // Mô phỏng tiến trình tải mượt mà trong khi download chạy ngầm
         const progressInterval = setInterval(() => {
           setDownloadProgress((prev) => {
             if (prev >= 90) {
@@ -127,7 +117,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
             }
             return prev + 15;
           });
-        }, 400);
+        }, 350);
 
         try {
           const downloadRes = await Filesystem.downloadFile({
@@ -151,12 +141,14 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         }
 
         setDownloadProgress(100);
-        setDownloadedFilePath(savedUri);
-        setIsDownloading(false);
-        setStatusMessage('Đã tải xong APK! Đang tự động mở cài đặt...');
+        setStatusMessage('Tải xong! Đang tự động mở Trình Cài Đặt Android...');
 
-        // Tự động kích hoạt cài đặt ngay lập tức
+        // Kích hoạt Trình Cài Đặt Android ngay lập tức
         await triggerPackageInstall(savedUri);
+
+        // Đóng modal ứng dụng ngay lập tức để chuyển hoàn toàn sang giao diện Cài Đặt của Android
+        setIsDownloading(false);
+        onClose();
       } else {
         // Môi trường Web browser
         setDownloadProgress(100);
@@ -259,43 +251,8 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           </div>
         )}
 
-        {/* TRẠNG THÁI: CẦN CẤP QUYỀN HOẶC MỞ LẠI FILE CÀI ĐẶT */}
-        {downloadedFilePath && !isDownloading && (
-          <div className="space-y-3 py-1">
-            <div className="p-3 bg-emerald-950/40 border border-emerald-500/30 rounded-xl text-xs space-y-1.5 text-slate-300">
-              <div className="flex items-center gap-1.5 font-bold text-emerald-400">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Tệp APK đã tải xong vào máy</span>
-              </div>
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Nếu màn hình cài đặt chưa tự hiện lên, vui lòng bấm nút <strong>Cài Đặt Ngay</strong> bên dưới và bật <em>"Cho phép nguồn này"</em> nếu Android yêu cầu.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => triggerPackageInstall(downloadedFilePath)}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 active:scale-[0.98] transition-all cursor-pointer"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>🚀 Cài Đặt Ngay</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleOpenBrowserDownload}
-                className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs transition-colors flex items-center justify-center space-x-1.5 cursor-pointer"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-                <span>Mở tải bằng Trình duyệt</span>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* TRẠNG THÁI: LỖI TẢI XUỐNG */}
-        {errorMessage && !isDownloading && !downloadedFilePath && (
+        {errorMessage && !isDownloading && (
           <div className="space-y-3 py-1">
             <div className="p-3 bg-rose-950/40 border border-rose-500/30 rounded-xl text-xs space-y-1 text-rose-300">
               <p className="font-bold">⚠️ Có lỗi khi tải tệp cài đặt</p>
@@ -324,7 +281,7 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         )}
 
         {/* TRẠNG THÁI: BAN ĐẦU (CHƯA TẢI) */}
-        {!isDownloading && !downloadedFilePath && !errorMessage && (
+        {!isDownloading && !errorMessage && (
           <>
             {/* Version Badge Box */}
             <div className="grid grid-cols-2 gap-2.5 bg-slate-950/60 rounded-xl p-2.5 border border-slate-800/80 text-center">
