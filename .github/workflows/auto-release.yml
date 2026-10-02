@@ -30,15 +30,17 @@ jobs:
           distribution: 'zulu'
           java-version: '21'
 
-      # 2. Tự động lấy versionName từ package.json & versionCode từ Git Commit Count
+      # 2. Tự động lấy versionName, buildAab từ package.json & versionCode từ Git Commit Count
       - name: Determine Auto Version
         id: auto_version
         run: |
           BUILD_NUMBER=$(git rev-list --count HEAD 2>/dev/null || echo "1")
           PACKAGE_VERSION=$(node -p "try { require('./package.json').version || '1.0.0' } catch(e) { '1.0.0' }")
+          BUILD_AAB=$(node -p "try { Boolean(require('./package.json').buildAab) } catch(e) { false }")
           echo "CODE=$BUILD_NUMBER" >> $GITHUB_OUTPUT
           echo "NAME=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
-          echo "Auto Generated versionCode: $BUILD_NUMBER, versionName: $PACKAGE_VERSION"
+          echo "BUILD_AAB=$BUILD_AAB" >> $GITHUB_OUTPUT
+          echo "Auto Generated versionCode: $BUILD_NUMBER, versionName: $PACKAGE_VERSION, buildAab: $BUILD_AAB"
 
       # 3. Tạo init.gradle cấp hệ thống giải quyết triệt để lỗi BouncyCastle (bcprov) và androidx.browser metadata
       - name: Create Gradle Init Script for Dependencies & Browser Version
@@ -293,16 +295,19 @@ jobs:
           mkdir -p dist-release
           cp android/app/build/outputs/apk/debug/app-debug.apk dist-release/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk
 
-      # 10. Biên dịch phiên bản AAB cho Google Play (Dọn sạch hoàn toàn Kiểm tra cập nhật)
+      # 10. Biên dịch phiên bản AAB cho Google Play (Chỉ chạy khi buildAab: true trong package.json)
       - name: Build Web Assets for Google Play AAB
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
         env:
           VITE_APP_MODE: play
         run: npm run build
 
       - name: Sync AAB Assets to Android
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
         run: npx cap sync android
 
       - name: Sanitize AndroidManifest for Google Play Compliance
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
         run: |
           node -e "
             const fs = require('fs');
@@ -316,19 +321,30 @@ jobs:
           "
 
       - name: Compile AAB file
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
         run: |
           cd android
           ./gradlew bundleRelease --no-daemon
 
-      - name: Copy & Rename AAB
+      - name: Copy & Store AAB in Dedicated Directory
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
         run: |
+          mkdir -p dist-aab
           if [ -f "android/app/build/outputs/bundle/release/app-release.aab" ]; then
-            cp android/app/build/outputs/bundle/release/app-release.aab dist-release/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
+            cp android/app/build/outputs/bundle/release/app-release.aab dist-aab/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
           elif [ -f "android/app/build/outputs/bundle/debug/app-debug.aab" ]; then
-            cp android/app/build/outputs/bundle/debug/app-debug.aab dist-release/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
+            cp android/app/build/outputs/bundle/debug/app-debug.aab dist-aab/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
           fi
 
-      # 11. Tự động tạo GitHub Release & đính kèm cả file APK lẫn AAB
+      - name: Upload AAB to GitHub Actions Artifacts (Private Storage for Play Store)
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sotietkiem_v${{ steps.auto_version.outputs.NAME }}_aab
+          path: dist-aab/*.aab
+          retention-days: 30
+
+      # 11. Tự động tạo GitHub Release (CHỈ đính kèm file APK, tuyệt đối không chứa file AAB)
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -338,8 +354,7 @@ jobs:
           body: |
             Bản cập nhật tự động xuất bản từ AI Studio:
             - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.apk**: Bản APK cài đặt trực tiếp bên ngoài (có tích hợp thông báo cập nhật tự động).
-            - **sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab**: File Android App Bundle để tải lên Google Play Console (dọn sạch hoàn toàn hiển thị và tính năng cập nhật, 100% tuân thủ chính sách kiểm duyệt).
-          files: dist-release/*
+          files: dist-release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

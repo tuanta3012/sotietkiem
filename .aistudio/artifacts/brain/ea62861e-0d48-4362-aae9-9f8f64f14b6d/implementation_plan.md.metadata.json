@@ -1,6 +1,6 @@
 {
-  "summary":  "Giải đáp 3 thắc mắc lớn: Chính sách Google Play Store, luồng GitHub Actions build song song APK/AAB + ZIP Bundle, và mô hình kết hợp Song Song (Hybrid Dual-Mode Update) giữ nguyên cơ chế thông báo hiện tại.",
-  "updatedAt":  "2026-10-02T03:10:17.116429098Z",
+  "summary":  "Kế hoạch tối ưu hóa dung lượng APK siêu an toàn (Zero-Risk): chỉ nén hình ảnh Splash Screen và Asset mà hoàn toàn không đụng vào ProGuard hay cấu hình Gradle.",
+  "updatedAt":  "2026-10-02T13:07:36.537474731Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

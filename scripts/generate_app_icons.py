@@ -29,31 +29,33 @@ def main():
         'convert', master_png,
         '-background', '#06B46F',
         '-flatten',
+        '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9',
         solid_master_png
     ])
 
     # 2. stk_app_icon.png in public (512x512) and src/assets/images
-    run(['convert', solid_master_png, '-resize', '512x512', 'public/stk_app_icon.png'])
-    run(['convert', solid_master_png, '-resize', '512x512', 'src/assets/images/stk_app_icon.png'])
+    run(['convert', solid_master_png, '-resize', '512x512', '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9', 'public/stk_app_icon.png'])
+    run(['convert', solid_master_png, '-resize', '512x512', '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9', 'src/assets/images/stk_app_icon.png'])
 
     # 3. Web favicon (64x64 & 32x32)
-    run(['convert', solid_master_png, '-resize', '64x64', 'public/favicon.png'])
-    run(['convert', solid_master_png, '-resize', '32x32', 'public/favicon-32x32.png'])
-    run(['convert', solid_master_png, '-resize', '16x16', 'public/favicon-16x16.png'])
+    run(['convert', solid_master_png, '-resize', '64x64', '-strip', 'public/favicon.png'])
+    run(['convert', solid_master_png, '-resize', '32x32', '-strip', 'public/favicon-32x32.png'])
+    run(['convert', solid_master_png, '-resize', '16x16', '-strip', 'public/favicon-16x16.png'])
 
     # 4. Apple Touch Icon (180x180)
-    run(['convert', solid_master_png, '-resize', '180x180', 'public/apple-touch-icon.png'])
+    run(['convert', solid_master_png, '-resize', '180x180', '-strip', '-colors', '256', '-depth', '8', 'public/apple-touch-icon.png'])
 
     # 5. PWA icons
-    run(['convert', solid_master_png, '-resize', '192x192', 'public/pwa-192x192.png'])
-    run(['convert', solid_master_png, '-resize', '512x512', 'public/pwa-512x512.png'])
+    run(['convert', solid_master_png, '-resize', '192x192', '-strip', '-colors', '256', '-depth', '8', 'public/pwa-192x192.png'])
+    run(['convert', solid_master_png, '-resize', '512x512', '-strip', '-colors', '256', '-depth', '8', 'public/pwa-512x512.png'])
 
     # 5b. Capacitor assets source icons (resources/ & resources/android/)
-    run(['convert', '-size', '1024x1024', 'xc:#06B46F', 'resources/icon-background.png'])
+    run(['convert', '-size', '1024x1024', 'xc:#06B46F', '-strip', '-colors', '16', 'resources/icon-background.png'])
     run([
         'convert', '-size', '1024x1024', 'xc:none',
         '(', solid_master_png, '-resize', '840x840', ')',
         '-gravity', 'center', '-composite',
+        '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9',
         'resources/icon-foreground.png'
     ])
     os.makedirs('resources/android', exist_ok=True)
@@ -65,6 +67,7 @@ def main():
         'convert', '-size', '2732x2732', 'xc:#0f172a',
         '(', solid_master_png, '-resize', '768x768', ')',
         '-gravity', 'center', '-composite',
+        '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9',
         'resources/splash.png'
     ])
 
@@ -83,13 +86,13 @@ def main():
         os.makedirs(dir_path, exist_ok=True)
         
         # ic_launcher.png (legacy full-bleed icon, no transparent corners)
-        run(['convert', solid_master_png, '-resize', f'{size}x{size}', os.path.join(dir_path, 'ic_launcher.png')])
+        run(['convert', solid_master_png, '-resize', f'{size}x{size}', '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9', os.path.join(dir_path, 'ic_launcher.png')])
         
         # ic_launcher_round.png
-        run(['convert', solid_master_png, '-resize', f'{size}x{size}', os.path.join(dir_path, 'ic_launcher_round.png')])
+        run(['convert', solid_master_png, '-resize', f'{size}x{size}', '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9', os.path.join(dir_path, 'ic_launcher_round.png')])
         
         # ic_launcher_background.png (Full-bleed solid green adaptive background)
-        run(['convert', '-size', f'{fg_size}x{fg_size}', 'xc:#06B46F', os.path.join(dir_path, 'ic_launcher_background.png')])
+        run(['convert', '-size', f'{fg_size}x{fg_size}', 'xc:#06B46F', '-strip', '-colors', '16', os.path.join(dir_path, 'ic_launcher_background.png')])
         
         # ic_launcher_foreground.png (Logo centered, enlarged by 25% within safe zone)
         logo_size = int(fg_size * 0.82)
@@ -97,6 +100,7 @@ def main():
             'convert', '-size', f'{fg_size}x{fg_size}', 'xc:none',
             '(', solid_master_png, '-resize', f'{logo_size}x{logo_size}', ')',
             '-gravity', 'center', '-composite',
+            '-strip', '-colors', '256', '-depth', '8', '-define', 'png:compression-level=9',
             os.path.join(dir_path, 'ic_launcher_foreground.png')
         ])
 

@@ -1,96 +1,68 @@
-# Chiến Lược Nạp File Từ Host & Live Update OTA - Giải Đáp Thắc Mắc & Quy Trình Song Song
+# Kế hoạch Tối ưu hóa Dung lượng Siêu An toàn (Zero-Risk Asset Compression)
 
-Bản kế hoạch làm rõ 3 câu hỏi quan trọng về **Chính sách Google Play Store**, **Luồng GitHub Actions build APK/AAB song song**, và **Mô hình kết hợp 2 lớp Cập Nhật (Hybrid Dual-Mode)**.
+Kế hoạch này tập trung tối ưu hóa và nén hình ảnh Splash Screen, Icon và Assets đồ họa thô. **Hoàn toàn không can thiệp vào ProGuard hay cấu hình Gradle**, đảm bảo 100% không ảnh hưởng đến việc viết code và nâng cấp tính năng ở các phiên bản tiếp theo.
 
 ---
 
-## Decision Summary & Confirmed Parameters
+## Quyết định của người dùng & Phân tích giải pháp
 
 > [!IMPORTANT]
-> - **Chính sách Google Play**: **100% Tuân thủ & Hợp lệ**. Google cho phép nạp động file HTML/JS/CSS/Assets qua WebView/Capacitor.
-> - **Luồng GitHub Actions**: **Build SONG SONG cả file APK + AAB + Bundle ZIP** trong 1 luồng duy nhất (vừa cho user mới cài APK v1.0.5, vừa cho user cũ nhận ZIP hotfix).
-> - **Cơ chế Thông báo Cập nhật hiện tại**: **GIỮ NGUYÊN & KẾT HỢP**. Hệ thống dùng mô hình 2 lớp: Live Update cho lỗi nhỏ/giao diện, và Thông báo Update APK/PlayStore cho bản nâng cấp lớn.
+> **Quyết định đã chọn: KHÔNG DÙNG PROGUARD, CHỈ NÉN ASSET ĐỒ HỌA**
+> * **Zero-Risk 100%**: Mã nguồn React, TypeScript, cấu hình Capacitor và Android Gradle giữ nguyên bản. Bạn tiếp tục phát triển tính năng, thêm trang mới hay sửa logic như bình thường mà không cần bất kỳ kiến thức nào về Android ProGuard.
+> * **Mục tiêu**: Giảm trực tiếp ~2.5MB - 3MB dung lượng bộ cài đặt nhờ nén ảnh Splash và Icon kích thước lớn.
 
 ---
 
-## 1. Giải Đáp 3 Thắc Mắc Lớn Của Bạn
+## 1. Phân tích nguyên nhân dung lượng ảnh đồ họa
 
-### ❓ Thắc mắc 1: Cơ chế cập nhật ngầm file bundle zip này có vi phạm chính sách Play Store không?
-👉 **TRẢ LỜI: KHÔNG VI PHẠM (Hợp Lệ 100%)**.
-- Điều khoản của Google Play Store (mục *Device and Network Abuse*) quy định: **Cho phép các ứng dụng chạy môi trường WebView/JavaScript (như React/Capacitor/Cordova) tự động tải mã JavaScript/HTML/Assets từ Server** để cập nhật nội dung/giao diện.
-- **Chỉ bị cấm khi**: Bạn nạp mã thực thi Native C/C++ (.so) hoặc mã Android Binary (.dex) bên ngoài, hoặc cố tình thay đổi bản chất ứng dụng (ví dụ: đăng ký app tiết kiệm nhưng nạp code biến thành app cờ bạc/cho vay).
-- Các tập đoàn lớn (như Facebook, Shopee, Grab, Uber) đều áp dụng cơ chế Live Update (CodePush) này cho phần mã React Native / Web của họ.
+Hiện tại trong thư mục `resources/`:
+* `resources/splash.png`: **2.6MB** (kích thước 2732x2732 px, định dạng PNG thô chưa nén). Khi công cụ Capacitor Assets tạo ra các biến thể drawable cho các mật độ màn hình (hdpi, xhdpi, xxhdpi, xxxhdpi), nó nhân bản dung lượng này lên nhiều lần.
+* `resources/icon-foreground.png`: **3.2MB**.
+* `resources/android/`: **3.2MB**.
 
----
-
-### ❓ Thắc mắc 2: Auto flow GitHub Actions có còn build file APK + AAB v1.0.5 cho user mới cài không?
-👉 **TRẢ LỜI: VẪN BUILD ĐẦY ĐỦ VÀ ĐỒNG THỜI CẢ APK + AAB + BUNDLE ZIP!**
-Luồng GitHub Actions sẽ tự động thực hiện 3 công việc trong 1 lần push tag `v1.0.5`:
-
-1. **Build APK + AAB v1.0.5**: Để người dùng mới tải trực tiếp APK bản mới nhất hoặc publish lên Google Play Store.
-2. **Build Bundle ZIP (`bundle-v1.0.5.zip`)**: File nén nhỏ gọn chứa mã HTML/JS/CSS.
-3. **Cập nhật `version.json` trên GitHub Releases**: Để ứng dụng của người dùng cũ (đang ở v1.0.4) tự động tải file ZIP này về cập nhật ngầm chỉ trong vài giây.
+Bằng cách sử dụng các thuật toán nén ảnh chuẩn (ImageMagick / pngquant tối ưu bảng màu 256 màu và nén PNG mức cao), các file ảnh này sẽ giảm từ **~9MB tổng dung lượng ảnh thô xuống chỉ còn dưới 1MB**, trong khi chất lượng hiển thị trên màn hình điện thoại vẫn sắc nét và chuẩn xác 100%.
 
 ---
 
-### ❓ Thắc mắc 3: Có phải bỏ cơ chế auto update và thông báo đã làm trước đây không?
-👉 **TRẢ LỜI: KHÔNG BỎ, MÀ KẾT HỢP THÀNH MÔ HÌNH 2 LỚP (HYBRID DUAL-MODE UPDATE)!**
+## 2. Chi tiết các bước thực hiện
 
-| Loại Cập Nhật | Nội Dung Thay Đổi | Luồng Xử Lý Của Hệ Thống | Trải Nghiệm Người Dùng |
-| :--- | :--- | :--- | :--- |
-| **Lớp 1: Live Update (Cập nhật tĩnh)** | Sửa lỗi JS, đổi lãi suất ngân hàng, cập nhật giao diện UI, đổi quy tắc sync Drive. | App tự động nạp ngầm file `bundle.zip` (1-2 MB) từ GitHub Releases khi khởi động. | Người dùng **không phải bấm nút nào**, app tự mới ở lần bật tiếp theo. |
-| **Lớp 2: Native Store Update (Cập nhật APK)** | Thay đổi plugin Native Capacitor (ví dụ: nâng cấp camera, Bluetooth, đổi SDK Android). | Triggers cơ chế **Thông Báo Auto Update Hiện Tại**: *"Có phiên bản APK Native mới v2.0, vui lòng bấm Tải Về!"* | Hiện popup thông báo báo cho người dùng tải file APK mới hoặc chuyển sang Google Play Store. |
+### A. Tối ưu script sinh ảnh `scripts/generate_app_icons.py`
+Cập nhật script tạo ảnh với các tham số nén PNG tối ưu của ImageMagick:
+* Thêm `-quality 85` và `-define png:compression-level=9` khi xuất ảnh Splash Screen và Icons.
+* Giảm kích thước vùng đệm dư thừa của file Splash mà vẫn giữ nguyên tỷ lệ và độ sắc nét cho logo trung tâm.
+
+### B. Thực hiện nén trực tiếp các tệp trong `resources/` và `public/`
+* Chạy nén lại các tệp:
+  - `resources/splash.png` (từ 2.6MB -> ~200-300KB)
+  - `resources/icon-foreground.png` (từ 3.2MB -> ~150KB)
+  - `resources/icon.png` và `resources/master_solid.png`
+* Chạy lại `python3 scripts/generate_app_icons.py` để đồng bộ lại các icon mipmap trong `android/app/src/main/res/`.
+
+### C. Giữ nguyên toàn bộ cấu hình phát triển
+* Không chạm vào `proguard-rules.pro`.
+* Không thay đổi `build.gradle`.
+* Giữ nguyên 100% quy trình build hiện tại trong `.github/workflows/auto-release.yml`.
 
 ---
 
-## 2. Sơ Đồ Kiến Trúc Luồng GitHub Actions Build Song Song
+## 3. Kiến trúc luồng tối ưu Asset
 
 ```
-                            Git Push Tag (v1.0.5)
-                                      │
-                                      ▼
-                        ┌───────────────────────────┐
-                        │   GitHub Actions Engine   │
-                        └─────────────┬─────────────┘
-                                      │
-            ┌─────────────────────────┼─────────────────────────┐
-            │                         │                         │
-            ▼                         ▼                         ▼
-  ┌───────────────────┐     ┌───────────────────┐     ┌───────────────────┐
-  │  Build Web Bundle │     │  Build Android    │     │  Build Android    │
-  │  dist/ ➔ ZIP      │     │  APK (App Debug/  │     │  AAB (Google Play │
-  │                   │     │  Release)         │     │  Bundle)          │
-  └─────────┬─────────┘     └─────────┬─────────┘     └─────────┬─────────┘
-            │                         │                         │
-            └─────────────────────────┼─────────────────────────┘
-                                      │
-                                      ▼
-                   ┌─────────────────────────────────────┐
-                   │  Publish All Artifacts to           │
-                   │  GitHub Releases / Tag v1.0.5       │
-                   │  - App-v1.0.5.apk                  │
-                   │  - App-v1.0.5.aab                  │
-                   │  - bundle-v1.0.5.zip               │
-                   │  - version.json                     │
-                   └─────────────────────────────────────┘
+[Master Image Assets]
+       │
+       ▼ (ImageMagick Nén Mức 9 + Tối ưu hóa Palette)
+[Compressed Splash & Icons] (Giảm ~80% dung lượng thô)
+       │
+       ▼ (Đồng bộ vào Android mipmap / drawables)
+[Thư mục Android Res & Web Assets siêu nhẹ]
+       │
+       ▼ (Gradle Assemble thông thường)
+[Bản APK nhẹ hơn ~2.5MB - 3MB, an toàn tuyệt đối]
 ```
 
 ---
 
-## 3. Lộ Trình Triển Khai Tiếp Theo (Implementation Plan)
-
-### Bước 1: Giữ Nguyên & Kết Hợp Service Thông Báo Hiện Tại
-- Giữ nguyên cơ chế thông báo cập nhật hiện tại.
-- Tích hợp thêm module `liveUpdateService.ts` chạy ngầm ở Lớp 1 (mã tĩnh JS/UI). Nếu Lớp 1 giải quyết được phiên bản (phiên bản JS mới khớp với server), hệ thống sẽ không bật popup thông báo APK ép người dùng nữa.
-
-### Bước 2: Cập Nhật GitHub Actions Workflow
-- Bổ sung bước tự động tạo file `bundle-v${VERSION}.zip` và `version.json` đính kèm cùng file APK/AAB lên GitHub Releases.
-
-### Bước 3: Kiểm Thử Đầy Đủ
-- Kiểm thử luồng tải ZIP ngầm khi chuyển từ v1.0.4 ➔ v1.0.5.
-- Kiểm thử luồng thông báo APK khi phát hiện phiên bản Native thay đổi lớn (ví dụ v2.0.0).
-
----
-
-## Quyết Định Của Bạn
-Toàn bộ thắc mắc đã được giải đáp chi tiết. Bạn vui lòng xem qua và nhấn **Proceed** nếu muốn bắt đầu tích hợp nhé!
+## 4. Kế hoạch kiểm tra
+1. Kiểm tra dung lượng thư mục `resources/` trước và sau khi nén.
+2. Kiểm tra giao diện icon và màn hình khởi động (splash screen) không bị vỡ hạt hay biến dạng.
+3. Chạy `npm run lint` & `npm run build` để xác nhận toàn bộ hệ thống hoạt động hoàn hảo.
