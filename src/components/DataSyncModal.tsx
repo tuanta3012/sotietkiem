@@ -59,6 +59,8 @@ import {
   setMasterSyncLinked,
   setMasterSyncUnlinked,
   autoDiscoverLatestCentralHub,
+  isExplicitlyUnlinked,
+  setExplicitlyUnlinked,
   RealDriveFile,
 } from '../utils/googleDriveService';
 
@@ -420,9 +422,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
             setSelectedFileName('');
             setSelectedFileId(null);
             onUpdateSettings({ googleSheetUrl: undefined, googleSheetName: undefined });
-            try {
-              sessionStorage.setItem('explicitly_unlinked', 'true');
-            } catch {}
+            setExplicitlyUnlinked(true);
             setSyncErrorMessage(`❌ Đồng bộ thất bại: File liên kết đã bị xóa trên Google Drive. Đã tự động hủy liên kết!`);
             onDriveFileNotFound();
             return;
@@ -526,7 +526,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setSelectedFileId(file.id);
     setSelectedFileName(file.name);
     setFileIsDeleted(false);
-    try { sessionStorage.removeItem('explicitly_unlinked'); } catch {}
+    setExplicitlyUnlinked(false);
     const link = file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`;
     setSheetUrl(link);
     setShowDrivePickerModal(false);
@@ -636,7 +636,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     const cleanUrl = urlToConnect.trim();
     setSheetUrl(cleanUrl);
     setShowDrivePickerModal(false);
-    try { sessionStorage.removeItem('explicitly_unlinked'); } catch {}
+    setExplicitlyUnlinked(false);
 
     // Support docs.google.com/spreadsheets/d/<ID>, drive.google.com/file/d/<ID>, or raw ID
     const match = cleanUrl.match(/\/d\/([a-zA-Z0-9-_]+)/) || cleanUrl.match(/id=([a-zA-Z0-9-_]+)/);
@@ -732,9 +732,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           setIsDiscoveringHub(false);
           if (latestHub) {
             // Tự động kết nối và đồng bộ ngay lập tức không cần hỏi lại
-            try {
-              sessionStorage.removeItem('explicitly_unlinked');
-            } catch {}
+            setExplicitlyUnlinked(false);
 
             setSelectedFileId(latestHub.id);
             setSelectedFileName(latestHub.name);
@@ -926,7 +924,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         setSelectedFileId('');
         setSelectedFileName('');
         onUpdateSettings({ googleSheetUrl: '', googleSheetName: '' });
-        try { sessionStorage.setItem('explicitly_unlinked', 'true'); } catch {}
+        setExplicitlyUnlinked(true);
         onDriveFileNotFound?.();
         setSyncErrorMessage('File liên kết trên Google Drive đã bị xóa hoặc không còn tồn tại. Đã tự động hủy liên kết.');
       } else {
@@ -967,7 +965,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
       localStorage.setItem('savings_books_cleared', 'true');
       clearStaticHistoryFromStorage();
-      sessionStorage.setItem('explicitly_unlinked', 'true');
+      setExplicitlyUnlinked(true);
     } catch {
       // ignore
     }
@@ -1017,7 +1015,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       setSelectedFileName(created.name);
       setSheetUrl(created.webViewLink);
       setFileIsDeleted(false);
-      try { sessionStorage.removeItem('explicitly_unlinked'); } catch {}
+      setExplicitlyUnlinked(false);
 
       const nowStr = new Date().toLocaleString('vi-VN');
       setLastSyncTime(nowStr);

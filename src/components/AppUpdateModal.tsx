@@ -1,10 +1,8 @@
 import React, { useState } from 'react';
-import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2, AlertCircle, ExternalLink, Play, Sparkles } from 'lucide-react';
+import { ArrowUpCircle, X, Download, Calendar, CheckCircle2, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { FileOpener } from '@capacitor-community/file-opener';
-import { Share } from '@capacitor/share';
-import { Browser } from '@capacitor/browser';
 
 interface UpdateInfo {
   version: string;
@@ -36,20 +34,8 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
 
   const targetLink = updateInfo.apkUrl || updateInfo.downloadUrl || '';
 
-  const openExternalUrl = async (url: string) => {
-    try {
-      if (Capacitor.isNativePlatform()) {
-        await Browser.open({ url });
-      } else {
-        window.open(url, '_blank');
-      }
-    } catch {
-      window.open(url, '_blank');
-    }
-  };
-
   // Kích hoạt Trình Cài Đặt Gói APK của Android
-  const triggerPackageInstall = async (fileUriOrPath: string) => {
+  const triggerPackageInstall = async (fileUriOrPath: string): Promise<boolean> => {
     try {
       let targetPath = fileUriOrPath;
 
@@ -70,26 +56,10 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
         filePath: targetPath,
         contentType: 'application/vnd.android.package-archive',
       });
+      return true;
     } catch (fileOpenerErr: any) {
       console.warn('FileOpener trigger error:', fileOpenerErr);
-      
-      // Fallback 1: Thử chia sẻ file qua Share Intent
-      try {
-        const shareUri = fileUriOrPath.startsWith('file://') || fileUriOrPath.startsWith('content://')
-          ? fileUriOrPath
-          : `file://${fileUriOrPath.startsWith('/') ? '' : '/'}${fileUriOrPath}`;
-
-        await Share.share({
-          title: `Cập nhật Sổ tiết kiệm v${updateInfo.version}`,
-          url: shareUri,
-          dialogTitle: 'Chọn Trình Cài Đặt Gói (Package Installer)',
-        });
-      } catch (shareErr) {
-        console.warn('Share intent error:', shareErr);
-        if (targetLink) {
-          await openExternalUrl(targetLink);
-        }
-      }
+      return false;
     }
   };
 
@@ -99,15 +69,27 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
     setIsDownloading(true);
     setErrorMessage(null);
     setDownloadProgress(10);
-    setStatusMessage('Đang kết nối đến máy chủ...');
+    setStatusMessage('Đang kết nối máy chủ...');
 
     try {
       if (Capacitor.isNativePlatform()) {
         const fileName = `sotietkiem_v${updateInfo.version}.apk`;
         let savedUri = '';
 
-        setStatusMessage('Đang tải tệp APK...');
-        setDownloadProgress(35);
+        setStatusMessage('Đang lấy liên kết tệp...');
+        setDownloadProgress(20);
+
+        // 1. Giải mã URL chuyển hướng (HTTP 302 Redirect) của GitHub Releases nếu có
+        let directUrl = targetLink;
+        try {
+          const headRes = await fetch(targetLink, { method: 'HEAD', redirect: 'follow' });
+          if (headRes.url && headRes.url.includes('objects.githubusercontent.com')) {
+            directUrl = headRes.url;
+          }
+        } catch {}
+
+        setStatusMessage('Đang tải tệp nâng cấp APK...');
+        setDownloadProgress(40);
 
         const progressInterval = setInterval(() => {
           setDownloadProgress((prev) => {
@@ -115,13 +97,13 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               clearInterval(progressInterval);
               return 90;
             }
-            return prev + 15;
+            return prev + 10;
           });
         }, 350);
 
         try {
           const downloadRes = await Filesystem.downloadFile({
-            url: targetLink,
+            url: directUrl,
             path: fileName,
             directory: Directory.Cache,
           });
@@ -137,35 +119,61 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
           }
         } catch (downloadErr: any) {
           clearInterval(progressInterval);
-          throw downloadErr;
+          console.warn('Filesystem.downloadFile error, trying fetch blob:', downloadErr);
+
+          // Fallback: Tải tệp qua JS fetch -> Blob -> Base64 -> Filesystem.writeFile
+          try {
+            setStatusMessage('Đang tải dữ liệu nâng cấp...');
+            const fetchRes = await fetch(directUrl);
+            if (!fetchRes.ok) throw new Error(`HTTP ${fetchRes.status}`);
+            const blob = await fetchRes.blob();
+
+            const base64Data = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const res = reader.result as string;
+                const base64 = res.split(',')[1] || res;
+                resolve(base64);
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(blob);
+            });
+
+            const writeRes = await Filesystem.writeFile({
+              path: fileName,
+              data: base64Data,
+              directory: Directory.Cache,
+            });
+
+            savedUri = writeRes.uri;
+          } catch (fetchErr: any) {
+            throw new Error('Không thể tải tệp nâng cấp tự động. Vui lòng thử lại sau.');
+          }
         }
 
         setDownloadProgress(100);
-        setStatusMessage('Tải xong! Đang tự động mở Trình Cài Đặt Android...');
+        setStatusMessage('Tải hoàn tất! Đang tự động kích hoạt cài đặt...');
 
-        // Kích hoạt Trình Cài Đặt Android ngay lập tức
-        await triggerPackageInstall(savedUri);
+        // 2. Kích hoạt Mở Trình Cài Đặt Android trực tiếp
+        const opened = await triggerPackageInstall(savedUri);
 
-        // Đóng modal ứng dụng ngay lập tức để chuyển hoàn toàn sang giao diện Cài Đặt của Android
         setIsDownloading(false);
-        onClose();
+        if (opened) {
+          onClose();
+        } else {
+          setErrorMessage('Không thể mở Trình Cài Đặt Android. Vui lòng thử lại.');
+        }
       } else {
         // Môi trường Web browser
         setDownloadProgress(100);
-        await openExternalUrl(targetLink);
+        window.open(targetLink, '_blank');
         setIsDownloading(false);
         onClose();
       }
     } catch (err: any) {
       console.error('Update download error:', err);
       setIsDownloading(false);
-      setErrorMessage(err?.message || 'Không thể tải tệp APK tự động. Bạn có thể mở tải bằng Trình duyệt.');
-    }
-  };
-
-  const handleOpenBrowserDownload = async () => {
-    if (targetLink) {
-      await openExternalUrl(targetLink);
+      setErrorMessage(err?.message || 'Có lỗi khi tải tệp nâng cấp tự động.');
     }
   };
 
@@ -238,16 +246,6 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <span className="truncate pr-2">{statusMessage}</span>
               <span className="text-emerald-400 font-bold shrink-0">{downloadProgress}%</span>
             </div>
-            <div className="text-center pt-1 border-t border-slate-800/60">
-              <button
-                type="button"
-                onClick={handleOpenBrowserDownload}
-                className="inline-flex items-center space-x-1 text-xs text-teal-400 underline hover:text-teal-300 transition-colors font-medium cursor-pointer"
-              >
-                <span>Mở tải về trực tiếp bằng Trình duyệt</span>
-                <ExternalLink className="w-3 h-3" />
-              </button>
-            </div>
           </div>
         )}
 
@@ -259,24 +257,14 @@ export const AppUpdateModal: React.FC<AppUpdateModalProps> = ({
               <p className="text-[11px] text-rose-400">{errorMessage}</p>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleOpenBrowserDownload}
-                className="w-full py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-[0.98] transition-all cursor-pointer"
-              >
-                <ExternalLink className="w-4 h-4" />
-                <span>Mở Trình duyệt tải APK</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleUpdate}
-                className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition-colors cursor-pointer"
-              >
-                Thử tải lại trong ứng dụng
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={handleUpdate}
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-400 hover:to-emerald-400 text-slate-950 font-extrabold text-xs flex items-center justify-center space-x-2 shadow-lg active:scale-[0.98] transition-all cursor-pointer"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>Thử tải lại</span>
+            </button>
           </div>
         )}
 

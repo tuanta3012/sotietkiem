@@ -16,6 +16,8 @@ import {
   saveMasterSyncStateOnDrive,
   touchMasterSyncStateOnDrive,
   applyMasterStateToSettings,
+  isExplicitlyUnlinked,
+  setExplicitlyUnlinked,
 } from '../utils/googleDriveService';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
 import { resolveUserRole } from '../utils/roleHelper';
@@ -797,12 +799,8 @@ export function useDriveSync({
 
   // Tự động nhận diện và kết nối file trung tâm khi login hoặc mở app trên thiết bị mới
   useEffect(() => {
-    const isExplicitlyUnlinked =
-      sessionStorage.getItem('explicitly_unlinked') === 'true' ||
-      localStorage.getItem('explicitly_unlinked') === 'true';
-
     const performAutoConnect = async () => {
-      if (currentUser?.isOffline || isSwitchingFileRef.current || isExplicitlyUnlinked || isAutoConnectingRef.current) return;
+      if (currentUser?.isOffline || isSwitchingFileRef.current || isExplicitlyUnlinked() || isAutoConnectingRef.current) return;
       isAutoConnectingRef.current = true;
       const token = getGoogleAccessToken();
       if (!token) {
@@ -815,17 +813,18 @@ export function useDriveSync({
         const masterState = await getMasterSyncStateFromDrive(token);
         if (!masterState || masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
           if (settingsRef.current.googleSheetUrl) {
-            console.info('[Central Hub Sync] File master JSON không tồn tại trên Drive -> Xóa liên kết cục bộ.');
+            console.info('[Central Hub Sync] File master đã ở trạng thái unlinked trên Drive -> Hủy liên kết cục bộ.');
+            setExplicitlyUnlinked(true);
+            setBooks([]);
             setSettings((prev) => ({
               ...prev,
               googleSheetUrl: undefined,
               googleSheetName: undefined,
+              members: [],
               lastSyncTime: undefined,
             }));
-            try {
-              localStorage.removeItem('master_pointer_file_id');
-            } catch {}
           }
+          isAutoConnectingRef.current = false;
           return;
         }
 
@@ -1037,36 +1036,28 @@ export function useDriveSync({
               if (currentMaster) {
                 applyMasterStateToSettings(currentMaster, currentUser?.email, setSettings, settingsRef.current, token);
                 if (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink') {
-                  const unlinkMs = currentMaster.updatedAt
-                    ? new Date(currentMaster.updatedAt).getTime()
-                    : currentMaster.linkedTimestamp
-                    ? new Date(currentMaster.linkedTimestamp).getTime()
-                    : 0;
-                  const localMs = settings.lastLocalLinkTimestamp ? new Date(settings.lastLocalLinkTimestamp).getTime() : 0;
-                  if (unlinkMs >= localMs || unlinkMs === 0) {
-                    console.info('[Central Hub Sync] Phát hiện thiết bị khác đã hủy liên kết file trung tâm. Tự động ngắt kết nối và dọn dẹp dữ liệu...');
-                    
-                    // Thực hiện hủy liên kết và làm sạch toàn bộ dữ liệu cục bộ để đồng nhất triết lý Tập trung hóa
-                    setBooks([]);
-                    try {
-                      localStorage.setItem('savings_books_v3', JSON.stringify([]));
-                      localStorage.setItem('savings_books_cleared', 'true');
-                      clearStaticHistoryFromStorage();
-                      sessionStorage.setItem('explicitly_unlinked', 'true');
-                    } catch {
-                      // ignore
-                    }
+                  console.info('[Central Hub Sync] Phát hiện thiết bị khác đã hủy liên kết file trung tâm. Tự động ngắt kết nối và dọn dẹp dữ liệu...');
+                  
+                  // Thực hiện hủy liên kết và làm sạch toàn bộ dữ liệu cục bộ
+                  setExplicitlyUnlinked(true);
+                  setBooks([]);
+                  try {
+                    localStorage.setItem('savings_books_v3', JSON.stringify([]));
+                    localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
+                    localStorage.setItem('savings_books_cleared', 'true');
+                    clearStaticHistoryFromStorage();
+                  } catch {}
 
-                    setSettings((prev) => ({
-                      ...prev,
-                      googleSheetUrl: '',
-                      googleSheetName: '',
-                      lastSyncTime: undefined,
-                      lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
-                    }));
-                    setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đồng bộ an toàn.');
-                    return;
-                  }
+                  setSettings((prev) => ({
+                    ...prev,
+                    googleSheetUrl: '',
+                    googleSheetName: '',
+                    members: [],
+                    lastSyncTime: undefined,
+                    lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
+                  }));
+                  setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đảm bảo an toàn.');
+                  return;
                 }
               } else {
                 // Không tìm thấy file master JSON (so_tiet_kiem_backup.json) trên Drive.
@@ -1281,7 +1272,7 @@ export function useDriveSync({
     if (!token || !isValid) {
       if (!isPassiveBackground) {
         const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-        const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
+        const explicitlyUnlinked = isExplicitlyUnlinked();
         if (!dismissedPrompt && !explicitlyUnlinked) {
           setIsDriveTokenExpired(true);
         }
@@ -1308,7 +1299,7 @@ export function useDriveSync({
           setGoogleAccessToken(null);
           if (!isPassiveBackground) {
             const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-            const explicitlyUnlinked = sessionStorage.getItem('explicitly_unlinked') === 'true';
+            const explicitlyUnlinked = isExplicitlyUnlinked();
             if (!dismissedPrompt && !explicitlyUnlinked) {
               setIsDriveTokenExpired(true);
             }
@@ -1324,6 +1315,11 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
+            if (isExplicitlyUnlinked()) {
+              // Bỏ qua nếu đã hủy liên kết
+              return;
+            }
+
             const masterState = token ? await getMasterSyncStateFromDrive(token) : null;
             if (masterState && masterState.status === 'active' && masterState.activeFileId) {
               // Luôn đồng bộ danh sách thành viên & vai trò (ADMIN, EDITOR, VIEWER)
@@ -1341,17 +1337,16 @@ export function useDriveSync({
                 await syncBooksFromDriveRef.current(false, token);
               }
             } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
+              setExplicitlyUnlinked(true);
+              setBooks([]);
               if (settingsRef.current.googleSheetUrl) {
                 setSettings((prev) => ({
                   ...prev,
                   googleSheetUrl: undefined,
                   googleSheetName: undefined,
+                  members: [],
                   lastSyncTime: undefined,
                 }));
-                try {
-                  localStorage.removeItem('master_pointer_file_id');
-                  localStorage.removeItem('last_linked_file_id_v2');
-                } catch {}
               }
             }
           } catch (hubErr) {

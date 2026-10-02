@@ -30,6 +30,7 @@ import {
   checkRedirectResult,
   autoDiscoverLatestCentralHub,
   removeMemberFromDriveMaster,
+  setExplicitlyUnlinked,
 } from './utils/googleDriveService';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
 import { sortAndReindexBooks } from './utils/dataTranslator';
@@ -688,10 +689,7 @@ export default function App() {
       }
     }
 
-    try {
-      sessionStorage.setItem('explicitly_unlinked', 'true');
-      localStorage.setItem('explicitly_unlinked', 'true');
-    } catch {}
+    setExplicitlyUnlinked(true);
 
     setSettings((prev) => ({
       ...prev,

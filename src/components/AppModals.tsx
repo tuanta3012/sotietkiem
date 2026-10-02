@@ -30,6 +30,7 @@ import {
   removeMemberFromDriveMaster,
   updateMemberRoleOnDrive,
   synchronizeDrivePermissionsWithJsonMembers,
+  setExplicitlyUnlinked,
 } from '../utils/googleDriveService';
 import { WorkspaceMember } from '../types';
 
@@ -281,9 +282,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
           googleSheetName: newFileRes.name || fileName,
           lastSyncTime: new Date().toLocaleString('vi-VN'),
         }));
-        try {
-          sessionStorage.removeItem('explicitly_unlinked');
-        } catch {}
+        setExplicitlyUnlinked(false);
         onSetSyncDriveStatus('✅ Đã tạo file mới và khôi phục đồng bộ Google Drive thành công!');
         setTimeout(() => onSetSyncDriveStatus(null), 3500);
       }

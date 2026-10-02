@@ -2094,6 +2094,31 @@ export function getLocalMasterPointerFileId(): string | null {
   }
 }
 
+export function isExplicitlyUnlinked(): boolean {
+  try {
+    return (
+      localStorage.getItem('explicitly_unlinked') === 'true' ||
+      sessionStorage.getItem('explicitly_unlinked') === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function setExplicitlyUnlinked(unlinked: boolean): void {
+  try {
+    if (unlinked) {
+      localStorage.setItem('explicitly_unlinked', 'true');
+      sessionStorage.setItem('explicitly_unlinked', 'true');
+      saveLocalMasterPointerFileId(null);
+      saveLocalMasterPointerState(null);
+    } else {
+      localStorage.removeItem('explicitly_unlinked');
+      sessionStorage.removeItem('explicitly_unlinked');
+    }
+  } catch {}
+}
+
 export function saveLocalMasterPointerFileId(fileId: string | null): void {
   try {
     if (fileId) {
@@ -2635,9 +2660,12 @@ export async function setMasterSyncUnlinked(
   userEmail?: string
 ): Promise<void> {
   try {
+    setExplicitlyUnlinked(true);
+
     const currentMaster = await getMasterSyncStateFromDrive(accessToken);
     if (!currentMaster) {
       saveLocalMasterPointerFileId(null);
+      saveLocalMasterPointerState(null);
       return;
     }
 
@@ -2691,6 +2719,11 @@ export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   _userEmail?: string
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
+  if (isExplicitlyUnlinked()) {
+    console.info('[Central Hub Sync] 🚫 Người dùng đã chủ động Hủy liên kết -> Không tự động tìm file.');
+    return null;
+  }
+
   try {
     const targetFileId = getLocalMasterPointerFileId();
     if (targetFileId) {
@@ -2698,23 +2731,22 @@ export async function autoDiscoverLatestCentralHub(
       const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
       if (meta && !meta.isDeleted) {
         const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
-        if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
+        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
           return {
             id: targetFileId,
-            name: meta.name || masterState?.activeFileName || 'Sổ tiết kiệm',
-            mimeType: meta.mimeType || masterState?.mimeType || 'application/vnd.google-apps.spreadsheet',
-            webViewLink: meta.webViewLink || masterState?.activeFileUrl || `https://docs.google.com/spreadsheets/d/${targetFileId}/edit`,
-            linkedTimestamp: masterState?.linkedTimestamp || new Date().toISOString(),
+            name: meta.name || masterState.activeFileName || 'Sổ tiết kiệm',
+            mimeType: meta.mimeType || masterState.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: meta.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${targetFileId}/edit`,
+            linkedTimestamp: masterState.linkedTimestamp || new Date().toISOString(),
           };
         }
       }
     }
 
     // 2. TỰ ĐỘNG KHÁM PHÁ TRÊN GOOGLE DRIVE (Dành cho Thiết bị 2 / Thiết bị mới):
-    // Truy vấn danh sách các file bảng tính (Google Sheets / Excel) có sẵn trên Google Drive của tài khoản
+    // Chỉ kết nối nếu tìm thấy file có tab __CONFIG__ đang ghi rõ status = 'active'
     const driveFiles = await listRealGoogleDriveFiles(accessToken).catch(() => []);
     if (driveFiles && driveFiles.length > 0) {
-      // Ưu tiên 1: Đọc tab __CONFIG__ của các file trên Drive để tìm file đang active
       for (const file of driveFiles) {
         if (!file.id || !file.isSheetOrExcel) continue;
         const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
@@ -2727,24 +2759,6 @@ export async function autoDiscoverLatestCentralHub(
             mimeType: file.mimeType || 'application/vnd.google-apps.spreadsheet',
             webViewLink: file.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
             linkedTimestamp: masterState.linkedTimestamp || file.modifiedTime || new Date().toISOString(),
-          };
-        }
-      }
-
-      // Ưu tiên 2: Nếu chưa ghi status='active' nhưng có file Google Sheet/Excel hợp lệ (ví dụ file "Tiet kiem")
-      // Lấy file gần nhất được sửa đổi mà chưa bị đánh dấu hủy liên kết
-      for (const file of driveFiles) {
-        if (!file.id || !file.isSheetOrExcel) continue;
-        const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
-        if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
-          saveLocalMasterPointerFileId(file.id);
-          if (masterState) saveLocalMasterPointerState(masterState);
-          return {
-            id: file.id,
-            name: file.name,
-            mimeType: file.mimeType || 'application/vnd.google-apps.spreadsheet',
-            webViewLink: file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
-            linkedTimestamp: masterState?.linkedTimestamp || file.modifiedTime || new Date().toISOString(),
           };
         }
       }
