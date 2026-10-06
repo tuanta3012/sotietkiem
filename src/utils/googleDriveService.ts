@@ -67,6 +67,46 @@ const ID_TOKEN_KEY = 'google_drive_id_token_v4';
 const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
 const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
 
+// App Tag identifier for Google Drive file appProperties
+export const DRIVE_APP_TAG = {
+  key: 'app_id',
+  value: 'com.tietkiemgiadinh.app',
+  typeKey: 'type',
+  typeValue: 'savings_vault',
+};
+
+/**
+ * Gắn nhãn appProperties lên Google Drive file (metadata ẩn)
+ */
+export async function tagVaultWithAppProperties(
+  accessToken: string,
+  fileId: string
+): Promise<boolean> {
+  try {
+    if (!accessToken || !fileId) return false;
+
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,appProperties`;
+    const res = await fetchWithRetry(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        appProperties: {
+          [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+          [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+        },
+      }),
+    });
+
+    return res.ok;
+  } catch (err) {
+    console.warn('[Drive Tagging] Không thể gắn nhãn appProperties lên file:', err);
+    return false;
+  }
+}
+
 let cachedAccessToken: string | null = (() => {
   try {
     return localStorage.getItem(TOKEN_KEY) || null;
@@ -1795,6 +1835,10 @@ export async function createRealGoogleDriveFile(
     const metadata = {
       name: cleanFileName,
       mimeType: 'application/vnd.google-apps.spreadsheet',
+      appProperties: {
+        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+      },
     };
 
     const form = new FormData();
@@ -1804,7 +1848,7 @@ export async function createRealGoogleDriveFile(
     );
     form.append('file', fileBlob);
 
-    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,appProperties';
     const res = await fetchWithRetry(uploadUrl, {
       method: 'POST',
       headers: {
@@ -2317,6 +2361,10 @@ export async function saveMasterSyncStateToGoogleSheet(
       linkedLocalTimeVi: state.linkedLocalTimeVi || '',
       updatedAt: nowIso,
       updatedAtVi: nowVi,
+      appProperties: {
+        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+      },
     });
 
     const values: (string | number)[][] = [
@@ -2540,6 +2588,11 @@ export async function setMasterSyncLinked(
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
 
+  // Auto-tag file with appProperties on Google Drive
+  if (accessToken && fileId) {
+    tagVaultWithAppProperties(accessToken, fileId).catch(() => {});
+  }
+
   // 1. Xác định và bảo toàn linkedTimestamp
   let resolvedLinkedTimestamp = existingLinkedTimestamp;
 
@@ -2736,6 +2789,58 @@ export async function setMasterSyncUnlinked(
   }
 }
 
+export interface DiscoveredVault {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  appProperties?: Record<string, string>;
+}
+
+/**
+ * Quét tất cả tệp Sổ Tiết Kiệm mà tài khoản có quyền truy cập dựa trên nhãn appProperties
+ */
+export async function scanUserAccessibleVaults(
+  accessToken: string
+): Promise<DiscoveredVault[]> {
+  try {
+    if (!accessToken) return [];
+
+    const query = `appProperties has { key='${DRIVE_APP_TAG.key}' and value='${DRIVE_APP_TAG.value}' } and trashed = false`;
+
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', query);
+    url.searchParams.set('pageSize', '20');
+    url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, webViewLink, appProperties)');
+    url.searchParams.set('orderBy', 'modifiedTime desc');
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
+
+    const res = await fetchWithRetry(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      console.warn(`[Vault Scan] Lỗi gọi Drive API: HTTP ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json();
+    return (data.files || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      modifiedTime: f.modifiedTime,
+      webViewLink: f.webViewLink || `https://docs.google.com/spreadsheets/d/${f.id}/edit`,
+      appProperties: f.appProperties,
+    }));
+  } catch (err) {
+    console.warn('[Vault Scan] Lỗi khi quét kho tự động:', err);
+    return [];
+  }
+}
+
 /**
  * Tự động tìm kiếm file trung tâm đang hoạt động
  */
@@ -2763,14 +2868,35 @@ export async function autoDiscoverLatestCentralHub(
       }
     }
 
-    // 2. TỰ ĐỘNG KHÁM PHÁ TRÊN GOOGLE DRIVE (Dành cho Thiết bị 2 / Thiết bị mới):
-    // Chỉ kết nối nếu tìm thấy file có tab __CONFIG__ đang ghi rõ status = 'active'
+    // 2. TỰ ĐỘNG KHÁM PHÁ THEO NHÃN appProperties (Siêu tốc cho User B)
+    const taggedVaults = await scanUserAccessibleVaults(accessToken);
+    if (taggedVaults.length > 0) {
+      for (const vault of taggedVaults) {
+        const masterState = await getMasterSyncStateFromDrive(accessToken, vault.id).catch(() => null);
+        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          saveLocalMasterPointerFileId(vault.id);
+          saveLocalMasterPointerState(masterState);
+          setExplicitlyUnlinked(false);
+          return {
+            id: vault.id,
+            name: vault.name || masterState.activeFileName || 'Sổ tiết kiệm',
+            mimeType: vault.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: vault.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${vault.id}/edit`,
+            linkedTimestamp: masterState.linkedTimestamp || vault.modifiedTime || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    // 3. Fallback: Duyệt danh sách file mở rộng nếu các tệp cũ chưa kịp gắn nhãn
     const driveFiles = await listRealGoogleDriveFiles(accessToken).catch(() => []);
     if (driveFiles && driveFiles.length > 0) {
       for (const file of driveFiles) {
         if (!file.id || !file.isSheetOrExcel) continue;
         const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          // Gắn nhãn bổ sung cho file cũ để lần sau truy vấn siêu tốc
+          tagVaultWithAppProperties(accessToken, file.id).catch(() => {});
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(masterState);
           setExplicitlyUnlinked(false);
