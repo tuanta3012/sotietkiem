@@ -48,7 +48,7 @@ const ModalLoadingSpinner = () => (
   </div>
 );
 
-interface AppModalsProps {
+export interface AppModalsProps {
   // Add/Edit Book Modal
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;

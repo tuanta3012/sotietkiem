@@ -64,7 +64,7 @@ import {
   RealDriveFile,
 } from '../utils/googleDriveService';
 
-interface DataSyncModalProps {
+export interface DataSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
   books: SavingsBook[];

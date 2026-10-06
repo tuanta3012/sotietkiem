@@ -39,7 +39,7 @@ import { getBankTagForBook } from '../utils/dataTranslator';
 import { DatePickerVN } from './DatePickerVN';
 import { CustomSelect, SelectOption } from './CustomSelect';
 
-interface BookDetailModalProps {
+export interface BookDetailModalProps {
   book: SavingsBook | null;
   books?: SavingsBook[];
   currentDateStr: string;
