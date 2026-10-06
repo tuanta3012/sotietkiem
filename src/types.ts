@@ -209,7 +209,6 @@ export interface AppSettings {
   notificationsEnabled?: boolean; // Cho phép lập lịch thông báo nhắc đáo hạn (Capacitor / Web)
   enableBiometricLogin?: boolean; // Bật mở khóa / đăng nhập bằng Vân tay / Face ID
   updateServerUrl?: string; // URL server kiểm tra và tải cập nhật APK (ví dụ: https://domain.com)
-  inviteWebhookUrl?: string; // URL Google Apps Script Webhook để gửi email mời tự động
 }
 
 export function canEditData(role?: string | null): boolean {
