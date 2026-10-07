@@ -552,6 +552,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       );
     } catch (metaErr) {
       console.warn('Failed to update master sync state on select:', metaErr);
+      onCancelFileSwitch?.();
+      setSyncErrorMessage(`Không thể gắn nhãn nhận diện cho file trên Google Drive: ${metaErr instanceof Error ? metaErr.message : String(metaErr)}`);
+      return;
     }
 
     // Auto 2-way sync: Pull real data from the selected file into the app
@@ -678,6 +681,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           );
         } catch (metaErr) {
           console.warn('Failed to update master sync state on connect URL:', metaErr);
+          onCancelFileSwitch?.();
+          setSyncErrorMessage(`Không thể gắn nhãn nhận diện cho file trên Google Drive: ${metaErr instanceof Error ? metaErr.message : String(metaErr)}`);
+          return;
         }
 
         const parseResult = await downloadRealGoogleDriveFile(token, fileId);

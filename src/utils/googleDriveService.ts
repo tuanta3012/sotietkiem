@@ -85,7 +85,7 @@ export async function tagVaultWithAppProperties(
   try {
     if (!accessToken || !fileId) return false;
 
-    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,appProperties`;
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true&fields=id,name,appProperties`;
     const res = await fetchWithRetry(url, {
       method: 'PATCH',
       headers: {
@@ -100,6 +100,9 @@ export async function tagVaultWithAppProperties(
       }),
     });
 
+    if (!res.ok) {
+      console.warn(`[Drive Tagging] Không thể gắn nhãn appProperties: HTTP ${res.status}`);
+    }
     return res.ok;
   } catch (err) {
     console.warn('[Drive Tagging] Không thể gắn nhãn appProperties lên file:', err);
@@ -2588,9 +2591,14 @@ export async function setMasterSyncLinked(
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
 
-  // Auto-tag file with appProperties on Google Drive
-  if (accessToken && fileId) {
-    tagVaultWithAppProperties(accessToken, fileId).catch(() => {});
+  if (!accessToken || !fileId) {
+    throw new Error('Thiếu phiên đăng nhập Google hoặc ID file để liên kết.');
+  }
+
+  // Ensure the file can be rediscovered on other devices before completing the link.
+  const isTagged = await tagVaultWithAppProperties(accessToken, fileId);
+  if (!isTagged) {
+    throw new Error('Không thể gắn nhãn nhận diện cho file trên Google Drive. Vui lòng kiểm tra quyền truy cập rồi thử liên kết lại.');
   }
 
   // 1. Xác định và bảo toàn linkedTimestamp
@@ -2807,12 +2815,16 @@ export async function scanUserAccessibleVaults(
   try {
     if (!accessToken) return [];
 
-    const query = `appProperties has { key='${DRIVE_APP_TAG.key}' and value='${DRIVE_APP_TAG.value}' } and trashed = false`;
+    const query = [
+      `appProperties has { key='${DRIVE_APP_TAG.key}' and value='${DRIVE_APP_TAG.value}' }`,
+      `appProperties has { key='${DRIVE_APP_TAG.typeKey}' and value='${DRIVE_APP_TAG.typeValue}' }`,
+      'trashed = false',
+    ].join(' and ');
 
     const url = new URL('https://www.googleapis.com/drive/v3/files');
     url.searchParams.set('q', query);
-    url.searchParams.set('pageSize', '20');
-    url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, webViewLink, appProperties)');
+    url.searchParams.set('pageSize', '100');
+    url.searchParams.set('fields', 'nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink, appProperties)');
     url.searchParams.set('orderBy', 'modifiedTime desc');
     url.searchParams.set('supportsAllDrives', 'true');
     url.searchParams.set('includeItemsFromAllDrives', 'true');
@@ -2827,7 +2839,26 @@ export async function scanUserAccessibleVaults(
     }
 
     const data = await res.json();
-    return (data.files || []).map((f: any) => ({
+    const files: any[] = [...(data.files || [])];
+    let nextPageToken: string | undefined = data.nextPageToken;
+
+    while (nextPageToken) {
+      url.searchParams.set('pageToken', nextPageToken);
+      const nextPageRes = await fetchWithRetry(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (!nextPageRes.ok) {
+        console.warn(`[Vault Scan] Lỗi gọi Drive API: HTTP ${nextPageRes.status}`);
+        return [];
+      }
+
+      const nextPageData = await nextPageRes.json();
+      files.push(...(nextPageData.files || []));
+      nextPageToken = nextPageData.nextPageToken;
+    }
+
+    return files.map((f: any) => ({
       id: f.id,
       name: f.name,
       mimeType: f.mimeType,
@@ -2896,7 +2927,10 @@ export async function autoDiscoverLatestCentralHub(
         const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
           // Gắn nhãn bổ sung cho file cũ để lần sau truy vấn siêu tốc
-          tagVaultWithAppProperties(accessToken, file.id).catch(() => {});
+          const isTagged = await tagVaultWithAppProperties(accessToken, file.id);
+          if (!isTagged) {
+            console.warn(`[Vault Scan] Không thể gắn nhãn nhận diện cho file cũ ${file.id}; lần sau có thể cần quét danh sách file đầy đủ.`);
+          }
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(masterState);
           setExplicitlyUnlinked(false);
@@ -3206,4 +3240,3 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
     console.warn('[Permission Sync] Error synchronizing Drive permissions with JSON:', err);
   }
 }
-
