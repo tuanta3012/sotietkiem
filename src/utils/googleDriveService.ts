@@ -2431,7 +2431,7 @@ export async function saveMasterSyncStateToGoogleSheet(
                 addSheet: {
                   properties: {
                     title: '__CONFIG__',
-                    hidden: false,
+                    hidden: true,
                     gridProperties: { rowCount: 50, columnCount: 5 }
                   }
                 }

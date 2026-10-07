@@ -90,19 +90,25 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       setErrorMsg('Vui lòng kết nối hoặc tạo file Google Drive trước khi thêm thành viên.');
       return;
     }
-    if (!newName.trim() || !newEmail.trim()) {
-      setErrorMsg('Vui lòng nhập tên và Gmail thành viên.');
+    let rawInput = newEmail.trim().toLowerCase();
+    if (!rawInput) {
+      setErrorMsg('Vui lòng nhập Username hoặc Gmail thành viên.');
       return;
     }
 
-    const cleanEmail = newEmail.trim().toLowerCase();
+    // Tự động chuẩn hóa email: Nếu chỉ nhập username (ví dụ: tuanta3012), tự động cộng thêm @gmail.com
+    let cleanEmail = rawInput;
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@gmail.com`;
+    }
+
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      setErrorMsg('Địa chỉ Gmail không hợp lệ.');
+      setErrorMsg('Địa chỉ Gmail hoặc Username không hợp lệ.');
       return;
     }
 
     if (members.some((m) => m.email.toLowerCase() === cleanEmail)) {
-      setErrorMsg('Email đã tồn tại trong danh sách.');
+      setErrorMsg(`Email ${cleanEmail} đã tồn tại trong danh sách.`);
       return;
     }
 
@@ -281,8 +287,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 <div className="relative">
                   <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                   <input
-                    type="email"
-                    placeholder="Gmail Google"
+                    type="text"
+                    placeholder="Username hoặc Gmail (ví dụ: wife hoặc wife@gmail.com)"
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
                     className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
