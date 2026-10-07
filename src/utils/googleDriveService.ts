@@ -1899,23 +1899,22 @@ export async function createRealGoogleDriveFile(
       : [];
 
     // Save Master Sync State on Drive for this new file (Single Source of Truth)
-    try {
-      await saveMasterSyncStateOnDrive(accessToken, {
-        status: 'active',
-        lastAction: 'create_and_link',
-        activeFileId: data.id,
-        activeFileName: data.name,
-        activeFileUrl: webViewLink,
-        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        linkedTimestamp,
-        linkedAccountEmail: effectiveOwnerEmail || 'Google User',
-        adminEmail: effectiveOwnerEmail || 'admin',
-        members: initialMembers,
-        settlements,
-        updatedAt: linkedTimestamp,
-      });
-    } catch (saveErr) {
-      console.warn('Failed to update master sync state on newly created drive file:', saveErr);
+    const saveResult = await saveMasterSyncStateOnDrive(accessToken, {
+      status: 'active',
+      lastAction: 'create_and_link',
+      activeFileId: data.id,
+      activeFileName: data.name,
+      activeFileUrl: webViewLink,
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      linkedTimestamp,
+      linkedAccountEmail: effectiveOwnerEmail || 'Google User',
+      adminEmail: effectiveOwnerEmail || 'admin',
+      members: initialMembers,
+      settlements,
+      updatedAt: linkedTimestamp,
+    });
+    if (saveResult !== 'sheet_config_tab') {
+      throw new Error(`Đã tạo file trên Drive (ID: ${data.id}) nhưng không thể ghi/ẩn tab __CONFIG__. Vui lòng mở file, kiểm tra quyền Sheets API rồi thử lại.`);
     }
 
     return {
@@ -2391,6 +2390,58 @@ export async function saveMasterSyncStateToGoogleSheet(
       return true;
     }
 
+    const spreadsheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}`;
+    const spreadsheetRes = await fetchWithRetry(
+      `${spreadsheetUrl}?fields=sheets(properties(sheetId,title,hidden))`,
+      { headers: { Authorization: 'Bearer ' + accessToken } }
+    );
+    if (!spreadsheetRes.ok) {
+      console.warn(`[Sheet Config] Không thể kiểm tra tab cấu hình: HTTP ${spreadsheetRes.status}`);
+      return false;
+    }
+
+    const spreadsheetData = await spreadsheetRes.json();
+    const configSheet = (spreadsheetData.sheets || []).find(
+      (sheet: any) => sheet.properties?.title === '__CONFIG__'
+    );
+    const sheetRequests = configSheet
+      ? configSheet.properties.hidden
+        ? []
+        : [{
+            updateSheetProperties: {
+              properties: {
+                sheetId: configSheet.properties.sheetId,
+                hidden: true,
+              },
+              fields: 'hidden',
+            },
+          }]
+      : [{
+          addSheet: {
+            properties: {
+              title: '__CONFIG__',
+              hidden: true,
+              gridProperties: { rowCount: 50, columnCount: 5 },
+            },
+          },
+        }];
+
+    if (sheetRequests.length > 0) {
+      const sheetRes = await fetchWithRetry(`${spreadsheetUrl}:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + accessToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests: sheetRequests }),
+      });
+      if (!sheetRes.ok) {
+        const err = await sheetRes.json().catch(() => ({}));
+        console.warn('[Sheet Config] Không thể tạo hoặc ẩn tab __CONFIG__:', err?.error?.message || `HTTP ${sheetRes.status}`);
+        return false;
+      }
+    }
+
     const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`;
     const writeData = () => fetchWithRetry(batchUrl, {
       method: 'POST',
@@ -2454,8 +2505,8 @@ export async function saveMasterSyncStateToGoogleSheet(
 
     if (!updateRes.ok) {
       const finalErr = errJson || await updateRes.json().catch(() => ({}));
-      console.warn('[Sheet Config] Bỏ qua ghi tab __CONFIG__:', finalErr?.error?.message || 'Ghi tab không khả thi');
-      // Không bao giờ hiện popup alert gây phiền người dùng
+      console.warn('[Sheet Config] Không thể ghi tab __CONFIG__:', finalErr?.error?.message || `HTTP ${updateRes.status}`);
+      return false;
     }
 
     return true;
@@ -2556,9 +2607,15 @@ export async function saveMasterSyncStateOnDrive(
     // 1. Lưu vào bộ nhớ cục bộ trên máy
     saveLocalMasterPointerState(preparedState);
 
+    let sheetConfigSaved = true;
+
     // 2. Ghi trực tiếp vào tab ẩn __CONFIG__ của Google Sheet
     if (preparedState.activeFileId && accessToken) {
-      await saveMasterSyncStateToGoogleSheet(accessToken, preparedState.activeFileId, preparedState).catch(() => {});
+      sheetConfigSaved = await saveMasterSyncStateToGoogleSheet(
+        accessToken,
+        preparedState.activeFileId,
+        preparedState
+      );
 
       // 3. Đồng bộ quyền truy cập Google Drive cho danh sách thành viên
       await synchronizeDrivePermissionsWithJsonMembers(
@@ -2569,7 +2626,7 @@ export async function saveMasterSyncStateOnDrive(
       ).catch(() => {});
     }
 
-    return 'sheet_config_tab';
+    return sheetConfigSaved ? 'sheet_config_tab' : null;
   } catch (err) {
     console.warn('Error saving master sync pointer to Sheet Config:', err);
     return null;
