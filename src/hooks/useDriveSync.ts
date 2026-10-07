@@ -935,16 +935,14 @@ export function useDriveSync({
 
     performAutoConnect();
 
-    // Lắng nghe khi người dùng quay lại app hoặc khi kết nối mạng được phục hồi (Online)
-    const handleFocusOrOnline = () => {
+    // Lắng nghe khi người dùng quay lại app (sau khi hoàn tất đăng nhập Google trên popup)
+    const handleFocus = () => {
       performAutoConnect();
     };
 
-    window.addEventListener('focus', handleFocusOrOnline);
-    window.addEventListener('online', handleFocusOrOnline);
+    window.addEventListener('focus', handleFocus);
     return () => {
-      window.removeEventListener('focus', handleFocusOrOnline);
-      window.removeEventListener('online', handleFocusOrOnline);
+      window.removeEventListener('focus', handleFocus);
     };
   }, [currentUser, setSettings, setBooks]);
 

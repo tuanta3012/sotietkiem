@@ -67,49 +67,6 @@ const ID_TOKEN_KEY = 'google_drive_id_token_v4';
 const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
 const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
 
-// App Tag identifier for Google Drive file appProperties
-export const DRIVE_APP_TAG = {
-  key: 'app_id',
-  value: 'com.tietkiemgiadinh.app',
-  typeKey: 'type',
-  typeValue: 'savings_vault',
-};
-
-/**
- * Gắn nhãn appProperties lên Google Drive file (metadata ẩn)
- */
-export async function tagVaultWithAppProperties(
-  accessToken: string,
-  fileId: string
-): Promise<boolean> {
-  try {
-    if (!accessToken || !fileId) return false;
-
-    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?supportsAllDrives=true&fields=id,name,appProperties`;
-    const res = await fetchWithRetry(url, {
-      method: 'PATCH',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        appProperties: {
-          [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
-          [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
-        },
-      }),
-    });
-
-    if (!res.ok) {
-      console.warn(`[Drive Tagging] Không thể gắn nhãn appProperties: HTTP ${res.status}`);
-    }
-    return res.ok;
-  } catch (err) {
-    console.warn('[Drive Tagging] Không thể gắn nhãn appProperties lên file:', err);
-    return false;
-  }
-}
-
 let cachedAccessToken: string | null = (() => {
   try {
     return localStorage.getItem(TOKEN_KEY) || null;
@@ -1838,10 +1795,6 @@ export async function createRealGoogleDriveFile(
     const metadata = {
       name: cleanFileName,
       mimeType: 'application/vnd.google-apps.spreadsheet',
-      appProperties: {
-        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
-        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
-      },
     };
 
     const form = new FormData();
@@ -1851,7 +1804,7 @@ export async function createRealGoogleDriveFile(
     );
     form.append('file', fileBlob);
 
-    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,appProperties';
+    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
     const res = await fetchWithRetry(uploadUrl, {
       method: 'POST',
       headers: {
@@ -1899,22 +1852,23 @@ export async function createRealGoogleDriveFile(
       : [];
 
     // Save Master Sync State on Drive for this new file (Single Source of Truth)
-    const saveResult = await saveMasterSyncStateOnDrive(accessToken, {
-      status: 'active',
-      lastAction: 'create_and_link',
-      activeFileId: data.id,
-      activeFileName: data.name,
-      activeFileUrl: webViewLink,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      linkedTimestamp,
-      linkedAccountEmail: effectiveOwnerEmail || 'Google User',
-      adminEmail: effectiveOwnerEmail || 'admin',
-      members: initialMembers,
-      settlements,
-      updatedAt: linkedTimestamp,
-    });
-    if (saveResult !== 'sheet_config_tab') {
-      throw new Error(`Đã tạo file trên Drive (ID: ${data.id}) nhưng không thể ghi/ẩn tab __CONFIG__. Vui lòng mở file, kiểm tra quyền Sheets API rồi thử lại.`);
+    try {
+      await saveMasterSyncStateOnDrive(accessToken, {
+        status: 'active',
+        lastAction: 'create_and_link',
+        activeFileId: data.id,
+        activeFileName: data.name,
+        activeFileUrl: webViewLink,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        linkedTimestamp,
+        linkedAccountEmail: effectiveOwnerEmail || 'Google User',
+        adminEmail: effectiveOwnerEmail || 'admin',
+        members: initialMembers,
+        settlements,
+        updatedAt: linkedTimestamp,
+      });
+    } catch (saveErr) {
+      console.warn('Failed to update master sync state on newly created drive file:', saveErr);
     }
 
     return {
@@ -2363,10 +2317,6 @@ export async function saveMasterSyncStateToGoogleSheet(
       linkedLocalTimeVi: state.linkedLocalTimeVi || '',
       updatedAt: nowIso,
       updatedAtVi: nowVi,
-      appProperties: {
-        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
-        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
-      },
     });
 
     const values: (string | number)[][] = [
@@ -2388,58 +2338,6 @@ export async function saveMasterSyncStateToGoogleSheet(
     if (metaCheck?.mimeType && metaCheck.mimeType !== 'application/vnd.google-apps.spreadsheet') {
       console.info('[Sheet Config] File liên kết là file Office Excel (.xlsx), tự động bỏ qua ghi tab __CONFIG__ qua Sheets API.');
       return true;
-    }
-
-    const spreadsheetUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}`;
-    const spreadsheetRes = await fetchWithRetry(
-      `${spreadsheetUrl}?fields=sheets(properties(sheetId,title,hidden))`,
-      { headers: { Authorization: 'Bearer ' + accessToken } }
-    );
-    if (!spreadsheetRes.ok) {
-      console.warn(`[Sheet Config] Không thể kiểm tra tab cấu hình: HTTP ${spreadsheetRes.status}`);
-      return false;
-    }
-
-    const spreadsheetData = await spreadsheetRes.json();
-    const configSheet = (spreadsheetData.sheets || []).find(
-      (sheet: any) => sheet.properties?.title === '__CONFIG__'
-    );
-    const sheetRequests = configSheet
-      ? configSheet.properties.hidden
-        ? []
-        : [{
-            updateSheetProperties: {
-              properties: {
-                sheetId: configSheet.properties.sheetId,
-                hidden: true,
-              },
-              fields: 'hidden',
-            },
-          }]
-      : [{
-          addSheet: {
-            properties: {
-              title: '__CONFIG__',
-              hidden: true,
-              gridProperties: { rowCount: 50, columnCount: 5 },
-            },
-          },
-        }];
-
-    if (sheetRequests.length > 0) {
-      const sheetRes = await fetchWithRetry(`${spreadsheetUrl}:batchUpdate`, {
-        method: 'POST',
-        headers: {
-          Authorization: 'Bearer ' + accessToken,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ requests: sheetRequests }),
-      });
-      if (!sheetRes.ok) {
-        const err = await sheetRes.json().catch(() => ({}));
-        console.warn('[Sheet Config] Không thể tạo hoặc ẩn tab __CONFIG__:', err?.error?.message || `HTTP ${sheetRes.status}`);
-        return false;
-      }
     }
 
     const batchUrl = `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values:batchUpdate`;
@@ -2485,7 +2383,7 @@ export async function saveMasterSyncStateToGoogleSheet(
                 addSheet: {
                   properties: {
                     title: '__CONFIG__',
-                    hidden: true,
+                    hidden: false,
                     gridProperties: { rowCount: 50, columnCount: 5 }
                   }
                 }
@@ -2505,8 +2403,8 @@ export async function saveMasterSyncStateToGoogleSheet(
 
     if (!updateRes.ok) {
       const finalErr = errJson || await updateRes.json().catch(() => ({}));
-      console.warn('[Sheet Config] Không thể ghi tab __CONFIG__:', finalErr?.error?.message || `HTTP ${updateRes.status}`);
-      return false;
+      console.warn('[Sheet Config] Bỏ qua ghi tab __CONFIG__:', finalErr?.error?.message || 'Ghi tab không khả thi');
+      // Không bao giờ hiện popup alert gây phiền người dùng
     }
 
     return true;
@@ -2607,15 +2505,9 @@ export async function saveMasterSyncStateOnDrive(
     // 1. Lưu vào bộ nhớ cục bộ trên máy
     saveLocalMasterPointerState(preparedState);
 
-    let sheetConfigSaved = true;
-
     // 2. Ghi trực tiếp vào tab ẩn __CONFIG__ của Google Sheet
     if (preparedState.activeFileId && accessToken) {
-      sheetConfigSaved = await saveMasterSyncStateToGoogleSheet(
-        accessToken,
-        preparedState.activeFileId,
-        preparedState
-      );
+      await saveMasterSyncStateToGoogleSheet(accessToken, preparedState.activeFileId, preparedState).catch(() => {});
 
       // 3. Đồng bộ quyền truy cập Google Drive cho danh sách thành viên
       await synchronizeDrivePermissionsWithJsonMembers(
@@ -2626,7 +2518,7 @@ export async function saveMasterSyncStateOnDrive(
       ).catch(() => {});
     }
 
-    return sheetConfigSaved ? 'sheet_config_tab' : null;
+    return 'sheet_config_tab';
   } catch (err) {
     console.warn('Error saving master sync pointer to Sheet Config:', err);
     return null;
@@ -2647,16 +2539,6 @@ export async function setMasterSyncLinked(
 ): Promise<string> {
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
-
-  if (!accessToken || !fileId) {
-    throw new Error('Thiếu phiên đăng nhập Google hoặc ID file để liên kết.');
-  }
-
-  // Ensure the file can be rediscovered on other devices before completing the link.
-  const isTagged = await tagVaultWithAppProperties(accessToken, fileId);
-  if (!isTagged) {
-    throw new Error('Không thể gắn nhãn nhận diện cho file trên Google Drive. Vui lòng kiểm tra quyền truy cập rồi thử liên kết lại.');
-  }
 
   // 1. Xác định và bảo toàn linkedTimestamp
   let resolvedLinkedTimestamp = existingLinkedTimestamp;
@@ -2854,81 +2736,6 @@ export async function setMasterSyncUnlinked(
   }
 }
 
-export interface DiscoveredVault {
-  id: string;
-  name: string;
-  mimeType: string;
-  modifiedTime?: string;
-  webViewLink?: string;
-  appProperties?: Record<string, string>;
-}
-
-/**
- * Quét tất cả tệp Sổ Tiết Kiệm mà tài khoản có quyền truy cập dựa trên nhãn appProperties
- */
-export async function scanUserAccessibleVaults(
-  accessToken: string
-): Promise<DiscoveredVault[]> {
-  try {
-    if (!accessToken) return [];
-
-    const query = [
-      `appProperties has { key='${DRIVE_APP_TAG.key}' and value='${DRIVE_APP_TAG.value}' }`,
-      `appProperties has { key='${DRIVE_APP_TAG.typeKey}' and value='${DRIVE_APP_TAG.typeValue}' }`,
-      'trashed = false',
-    ].join(' and ');
-
-    const url = new URL('https://www.googleapis.com/drive/v3/files');
-    url.searchParams.set('q', query);
-    url.searchParams.set('pageSize', '100');
-    url.searchParams.set('fields', 'nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink, appProperties)');
-    url.searchParams.set('orderBy', 'modifiedTime desc');
-    url.searchParams.set('supportsAllDrives', 'true');
-    url.searchParams.set('includeItemsFromAllDrives', 'true');
-
-    const res = await fetchWithRetry(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (!res.ok) {
-      console.warn(`[Vault Scan] Lỗi gọi Drive API: HTTP ${res.status}`);
-      return [];
-    }
-
-    const data = await res.json();
-    const files: any[] = [...(data.files || [])];
-    let nextPageToken: string | undefined = data.nextPageToken;
-
-    while (nextPageToken) {
-      url.searchParams.set('pageToken', nextPageToken);
-      const nextPageRes = await fetchWithRetry(url, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (!nextPageRes.ok) {
-        console.warn(`[Vault Scan] Lỗi gọi Drive API: HTTP ${nextPageRes.status}`);
-        return [];
-      }
-
-      const nextPageData = await nextPageRes.json();
-      files.push(...(nextPageData.files || []));
-      nextPageToken = nextPageData.nextPageToken;
-    }
-
-    return files.map((f: any) => ({
-      id: f.id,
-      name: f.name,
-      mimeType: f.mimeType,
-      modifiedTime: f.modifiedTime,
-      webViewLink: f.webViewLink || `https://docs.google.com/spreadsheets/d/${f.id}/edit`,
-      appProperties: f.appProperties,
-    }));
-  } catch (err) {
-    console.warn('[Vault Scan] Lỗi khi quét kho tự động:', err);
-    return [];
-  }
-}
-
 /**
  * Tự động tìm kiếm file trung tâm đang hoạt động
  */
@@ -2956,38 +2763,14 @@ export async function autoDiscoverLatestCentralHub(
       }
     }
 
-    // 2. TỰ ĐỘNG KHÁM PHÁ THEO NHÃN appProperties (Siêu tốc cho User B)
-    const taggedVaults = await scanUserAccessibleVaults(accessToken);
-    if (taggedVaults.length > 0) {
-      for (const vault of taggedVaults) {
-        const masterState = await getMasterSyncStateFromDrive(accessToken, vault.id).catch(() => null);
-        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
-          saveLocalMasterPointerFileId(vault.id);
-          saveLocalMasterPointerState(masterState);
-          setExplicitlyUnlinked(false);
-          return {
-            id: vault.id,
-            name: vault.name || masterState.activeFileName || 'Sổ tiết kiệm',
-            mimeType: vault.mimeType || 'application/vnd.google-apps.spreadsheet',
-            webViewLink: vault.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${vault.id}/edit`,
-            linkedTimestamp: masterState.linkedTimestamp || vault.modifiedTime || new Date().toISOString(),
-          };
-        }
-      }
-    }
-
-    // 3. Fallback: Duyệt danh sách file mở rộng nếu các tệp cũ chưa kịp gắn nhãn
+    // 2. TỰ ĐỘNG KHÁM PHÁ TRÊN GOOGLE DRIVE (Dành cho Thiết bị 2 / Thiết bị mới):
+    // Chỉ kết nối nếu tìm thấy file có tab __CONFIG__ đang ghi rõ status = 'active'
     const driveFiles = await listRealGoogleDriveFiles(accessToken).catch(() => []);
     if (driveFiles && driveFiles.length > 0) {
       for (const file of driveFiles) {
         if (!file.id || !file.isSheetOrExcel) continue;
         const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
-          // Gắn nhãn bổ sung cho file cũ để lần sau truy vấn siêu tốc
-          const isTagged = await tagVaultWithAppProperties(accessToken, file.id);
-          if (!isTagged) {
-            console.warn(`[Vault Scan] Không thể gắn nhãn nhận diện cho file cũ ${file.id}; lần sau có thể cần quét danh sách file đầy đủ.`);
-          }
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(masterState);
           setExplicitlyUnlinked(false);
@@ -3297,3 +3080,4 @@ export async function synchronizeDrivePermissionsWithJsonMembers(
     console.warn('[Permission Sync] Error synchronizing Drive permissions with JSON:', err);
   }
 }
+

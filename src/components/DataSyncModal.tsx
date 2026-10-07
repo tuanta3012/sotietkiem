@@ -64,7 +64,7 @@ import {
   RealDriveFile,
 } from '../utils/googleDriveService';
 
-export interface DataSyncModalProps {
+interface DataSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
   books: SavingsBook[];
@@ -523,7 +523,13 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     // Kích hoạt khóa chuyển đổi file triệt để để chặn vòng lặp
     onStartFileSwitch?.();
 
+    setSelectedFileId(file.id);
+    setSelectedFileName(file.name);
+    setFileIsDeleted(false);
+    setExplicitlyUnlinked(false);
     const link = file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`;
+    setSheetUrl(link);
+    setShowDrivePickerModal(false);
 
     const token = await validateTokenOrPrompt();
     if (!token) {
@@ -546,17 +552,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       );
     } catch (metaErr) {
       console.warn('Failed to update master sync state on select:', metaErr);
-      onCancelFileSwitch?.();
-      setSyncErrorMessage(`Không thể gắn nhãn nhận diện cho file trên Google Drive: ${metaErr instanceof Error ? metaErr.message : String(metaErr)}`);
-      return;
     }
-
-    setSelectedFileId(file.id);
-    setSelectedFileName(file.name);
-    setFileIsDeleted(false);
-    setExplicitlyUnlinked(false);
-    setSheetUrl(link);
-    setShowDrivePickerModal(false);
 
     // Auto 2-way sync: Pull real data from the selected file into the app
     setSyncStatusStep(`Đang tự động đồng bộ dữ liệu 2 chiều từ file "${file.name}" trên Google Drive...`);
@@ -639,6 +635,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
     const cleanUrl = urlToConnect.trim();
     setSheetUrl(cleanUrl);
+    setShowDrivePickerModal(false);
+    setExplicitlyUnlinked(false);
 
     // Support docs.google.com/spreadsheets/d/<ID>, drive.google.com/file/d/<ID>, or raw ID
     const match = cleanUrl.match(/\/d\/([a-zA-Z0-9-_]+)/) || cleanUrl.match(/id=([a-zA-Z0-9-_]+)/);
@@ -649,6 +647,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
     if (fileId && token) {
       onStartFileSwitch?.();
+      setSelectedFileId(fileId);
       setSyncStatusStep('Đang đồng bộ dữ liệu từ Google Drive...');
       try {
         // Cố gắng lấy tên file thật từ Google Drive
@@ -658,6 +657,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           const meta = await getRealGoogleDriveFileMetadata(token, fileId);
           if (meta?.name) {
             realName = meta.name;
+            setSelectedFileName(meta.name);
           }
           fileModTime = meta?.modifiedTime;
         } catch {
@@ -678,16 +678,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           );
         } catch (metaErr) {
           console.warn('Failed to update master sync state on connect URL:', metaErr);
-          onCancelFileSwitch?.();
-          setSyncErrorMessage(`Không thể gắn nhãn nhận diện cho file trên Google Drive: ${metaErr instanceof Error ? metaErr.message : String(metaErr)}`);
-          return;
         }
-
-        setSelectedFileId(fileId);
-        setSelectedFileName(realName || '');
-        setFileIsDeleted(false);
-        setExplicitlyUnlinked(false);
-        setShowDrivePickerModal(false);
 
         const parseResult = await downloadRealGoogleDriveFile(token, fileId);
         const nowStr = new Date().toLocaleString('vi-VN');

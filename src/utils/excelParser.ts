@@ -890,13 +890,6 @@ export async function buildSavingsWorkbook(
 
   const wsConfig = XLSX.utils.aoa_to_sheet(configMatrix);
   XLSX.utils.book_append_sheet(workbook, wsConfig, '__CONFIG__');
-  workbook.Workbook = workbook.Workbook || {};
-  workbook.Workbook.Sheets = workbook.Workbook.Sheets || [];
-  const configSheetIndex = workbook.SheetNames.indexOf('__CONFIG__');
-  workbook.Workbook.Sheets[configSheetIndex] = {
-    ...workbook.Workbook.Sheets[configSheetIndex],
-    Hidden: 1,
-  };
 
   return workbook;
 }

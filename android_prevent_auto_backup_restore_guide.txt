@@ -1,0 +1,224 @@
+================================================================================
+HƯỚNG DẪN KỸ THUẬT: CHỐNG LỖI TỰ ĐỘNG KHÔI PHỤC DỮ LIỆU RÁC (ANDROID AUTO BACKUP)
+(Giải pháp ngăn Google One & Android Backup tự đẩy lại dữ liệu cũ khi cài mới App)
+================================================================================
+
+Tài liệu này tổng hợp toàn diện nguyên nhân, cơ chế và mã nguồn (Native Android + Capacitor / React Web) giúp xử lý triệt để hiện tượng:
+"Người dùng gỡ app rồi cài lại, hoặc chuyển sang điện thoại mới nhưng bị hệ điều hành Android tự động khôi phục lại dữ liệu cũ, token hết hạn, session rác từ bản sao lưu đám mây Google One gây sai lệch dữ liệu và lỗi Crash".
+
+---
+
+MỤC LỤC:
+1. Nguyên nhân gốc rễ gây khôi phục dữ liệu rác
+2. Giải pháp Tầng 1: Cấu hình `AndroidManifest.xml`
+3. Giải pháp Tầng 2: Bộ quy tắc XML loại trừ triệt để (`data_extraction_rules.xml` & `backup_rules.xml`)
+4. Giải pháp Tầng 3: Cơ chế First-Launch & Xóa sạch bộ nhớ ở tầng Web/Capacitor (TypeScript)
+5. Hướng dẫn kiểm thử và nghiệm thu (Testing Checklist)
+
+================================================================================
+PHẦN 1: NGUYÊN NHÂN GỐC RỄ GÂY KHÔI PHỤC DỮ LIỆU RÁC
+================================================================================
+
+Mặc định trên Android (từ Android 6.0 Marshmallow đến Android 14+):
+- Thuộc tính `android:allowBackup="true"` được bật tự động.
+- Dịch vụ **Google Backup / Google One** sẽ âm thầm sao lưu toàn bộ dữ liệu nội bộ của ứng dụng lên tài khoản Google Drive của người dùng, bao gồm:
+  1. Thư mục `shared_prefs/` (Toàn bộ SharedPreferences / Capacitor Preferences).
+  2. Thư mục `app_webview/` (Toàn bộ `localStorage`, `sessionStorage`, `IndexedDB` của WebView).
+  3. Thư mục `databases/` (SQLite, Room DB).
+  4. Thư mục `files/` và `cache/`.
+
+Khi người dùng gỡ bỏ ứng dụng và cài đặt lại (hoặc mua máy mới và chọn khôi phục dữ liệu qua dây cáp/Cloud):
+-> Hệ điều hành Android sẽ tự động tải bản backup cũ về và ghi đè vào thư mục của app mới.
+-> Hậu quả: App mới cài nhưng tự động có dữ liệu nửa vời, token OAuth đã chết, trạng thái đồng bộ bị lệch (Desync), gây trải nghiệm vô cùng khó chịu và tiềm ẩn rủi ro bảo mật nghiêm trọng.
+
+================================================================================
+PHẦN 2: CẤU HÌNH TẦNG NATIVE (`AndroidManifest.xml`)
+================================================================================
+
+Để chặn hoàn toàn Android sao lưu và khôi phục, bạn phải cấu hình thẻ `<application>` trong file `android/app/src/main/AndroidManifest.xml` như sau:
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.your_app_package">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- CẤU HÌNH CHẶN TRIỆT ĐỂ ANDROID AUTO BACKUP & RESTORE -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupOnly="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode"
+            android:label="@string/app_name"
+            android:theme="@style/AppTheme.NoActionBar"
+            android:launchMode="singleTask"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+</manifest>
+```
+
+* **Giải thích các tham số**:
+  - `android:allowBackup="false"`: Chỉ thị chính cho hệ thống Android không đưa ứng dụng vào danh sách sao lưu định kỳ.
+  - `android:fullBackupOnly="false"`: Ngăn chế độ full backup kế thừa.
+  - `android:dataExtractionRules="@xml/data_extraction_rules"`: Áp dụng quy tắc kiểm soát dữ liệu nghiêm ngặt cho Android 12 trở lên (API 31+).
+  - `android:fullBackupContent="@xml/backup_rules"`: Áp dụng quy tắc kiểm soát dữ liệu cho Android 6.0 đến Android 11 (API 23 - API 30).
+
+================================================================================
+PHẦN 3: BỘ QUY TẮC XML LOẠI TRỪ DỮ LIỆU
+================================================================================
+
+Bạn cần tạo 2 file XML cấu hình nằm trong thư mục `android/app/src/main/res/xml/`:
+
+--------------------------------------------------------------------------------
+1. File: `android/app/src/main/res/xml/data_extraction_rules.xml` (Dành cho Android 12+)
+--------------------------------------------------------------------------------
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <!-- Chặn triệt để sao lưu đám mây Google One / Google Drive Backup -->
+    <cloud-backup>
+        <exclude path="." />
+    </cloud-backup>
+    <!-- Chặn truyền dữ liệu khi chuyển sang thiết bị mới (Device-to-Device transfer) -->
+    <device-transfer>
+        <exclude path="." />
+    </device-transfer>
+</data-extraction-rules>
+```
+
+--------------------------------------------------------------------------------
+2. File: `android/app/src/main/res/xml/backup_rules.xml` (Dành cho Android 6.0 đến Android 11)
+--------------------------------------------------------------------------------
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Loại trừ toàn bộ các miền lưu trữ dữ liệu của ứng dụng -->
+    <exclude domain="root" path="." />
+    <exclude domain="file" path="." />
+    <exclude domain="database" path="." />
+    <exclude domain="sharedpref" path="." />
+    <exclude domain="external" path="." />
+</full-backup-content>
+```
+
+================================================================================
+PHẦN 4: CƠ CHẾ DỌN DẸP & FIRST-LAUNCH Ở TẦNG TYPESCRIPT / CAPACITOR
+================================================================================
+
+Ngoài cấu hình Native, một ứng dụng chuẩn mực cần có lớp phòng vệ thứ 2 ở tầng JavaScript/TypeScript:
+- Khi người dùng chủ động chọn "Xóa sạch dữ liệu" hoặc "Đăng xuất an toàn", app phải dọn sạch đồng thời ở cả 3 kho lưu trữ: `localStorage`, `Capacitor Preferences` và `SecureStorage` (Keystore phần cứng).
+- Cung cấp cơ chế tự động dọn dẹp cache rác lúc khởi động app.
+
+Dưới đây là module mã nguồn mẫu bằng TypeScript:
+
+```typescript
+import { Preferences } from '@capacitor/preferences';
+
+/**
+ * 1. HÀM DỌN SẠCH TOÀN DIỆN MỌI DỮ LIỆU CỤC BỘ (DEEP CLEAN SLATE)
+ * Gọi hàm này khi: Đăng xuất, Hủy liên kết, hoặc người dùng muốn Reset dữ liệu ban đầu
+ */
+export async function deepClearAllApplicationData(): Promise<void> {
+  try {
+    console.info('[Storage Cleanup] Đang tiến hành xóa sạch dữ liệu đa tầng...');
+
+    // TẦNG 1: Dọn sạch Web Storage (localStorage, sessionStorage)
+    if (typeof window !== 'undefined') {
+      localStorage.clear();
+      sessionStorage.clear();
+      // Đánh dấu rõ ràng cờ đã dọn sạch dữ liệu
+      localStorage.setItem('app_data_clean_slate', 'true');
+    }
+
+    // TẦNG 2: Dọn sạch Capacitor Preferences (Tương đương SharedPreferences trên Android)
+    await Preferences.clear();
+
+    // TẦNG 3: Nếu dự án có dùng IndexedDB của WebView, dọn dẹp IndexedDB
+    if (typeof indexedDB !== 'undefined' && indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      for (const dbInfo of dbs) {
+        if (dbInfo.name) {
+          indexedDB.deleteDatabase(dbInfo.name);
+        }
+      }
+    }
+
+    console.info('[Storage Cleanup] Đã dọn dẹp sạch sẽ 100% dữ liệu!');
+  } catch (err) {
+    console.warn('[Storage Cleanup] Lỗi trong quá trình dọn dẹp bộ nhớ:', err);
+  }
+}
+
+/**
+ * 2. CƠ CHẾ KIỂM SOÁT PHIÊN BẢN & PHÁT HIỆN CÀI ĐẶT MỚI (FIRST INSTALL CHECK)
+ * Đặt hàm này chạy ngay khi ứng dụng vừa mount (ở App.tsx hoặc main.tsx)
+ */
+export async function checkAndHandleFirstLaunch(currentAppVersion: string): Promise<boolean> {
+  try {
+    const LAST_VERSION_KEY = 'app_installed_version_tracker';
+    const { value: lastVersion } = await Preferences.get({ key: LAST_VERSION_KEY });
+
+    // Trường hợp 1: Lần đầu tiên cài đặt app trên thiết bị mới
+    if (!lastVersion) {
+      console.info(`[App Init] Phát hiện lần đầu mở app (Bản ${currentAppVersion}). Đảm bảo bộ nhớ sạch...`);
+      // Đảm bảo không có dữ liệu rác nào từ bản cài trước đó sót lại
+      await deepClearAllApplicationData();
+      await Preferences.set({ key: LAST_VERSION_KEY, value: currentAppVersion });
+      return true; // Is First Launch
+    }
+
+    // Trường hợp 2: Nâng cấp phiên bản (Update Version)
+    if (lastVersion !== currentAppVersion) {
+      console.info(`[App Init] Phát hiện cập nhật từ bản ${lastVersion} lên ${currentAppVersion}`);
+      // Thực hiện migration số liệu nếu cần, sau đó cập nhật lại version tracker
+      await Preferences.set({ key: LAST_VERSION_KEY, value: currentAppVersion });
+    }
+
+    return false;
+  } catch (err) {
+    console.warn('[App Init] Lỗi khi kiểm tra phiên bản khởi động:', err);
+    return false;
+  }
+}
+```
+
+================================================================================
+PHẦN 5: HƯỚNG DẪN KIỂM THỬ (TESTING CHECKLIST)
+================================================================================
+
+Sau khi triển khai các cấu hình trên, bạn có thể kiểm tra hiệu quả bằng lệnh ADB:
+
+1. **Kiểm tra sao lưu bằng lệnh ADB**:
+   Chạy lệnh terminal để thử ép sao lưu ứng dụng:
+   ```bash
+   adb backup -f test_backup.ab -noapk com.example.your_app_package
+   ```
+   *Kết quả mong muốn*: Android sẽ từ chối tạo bản backup hoặc file backup có kích thước 0 byte.
+
+2. **Kiểm tra luồng Gỡ app & Cài lại (Uninstall & Re-install Flow)**:
+   - Bước 1: Mở app, tạo một số dữ liệu thử nghiệm.
+   - Bước 2: Bấm Gỡ cài đặt (Uninstall) ứng dụng khỏi điện thoại.
+   - Bước 3: Cài đặt lại file APK mới.
+   - Bước 4: Mở app lên.
+   *Kết quả mong muốn*: Ứng dụng phải mở lên ở trạng thái **trắng hoàn toàn (Clean Slate)**, giao diện chào mừng/đăng nhập ban đầu, không còn sót bất kỳ token, file link hay dữ liệu cũ nào.
+
+================================================================================
+Tài liệu biên soạn độc quyền bởi AI Studio Build Engine. Chúc dự án của bạn áp dụng
+thành công giải pháp bảo vệ dữ liệu sạch và chuyên nghiệp nhất!
+================================================================================
