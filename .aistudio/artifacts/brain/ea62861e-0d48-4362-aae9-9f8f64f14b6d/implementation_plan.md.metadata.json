@@ -1,0 +1,6 @@
+{
+  "summary":  "Kế hoạch tối ưu hóa dung lượng APK siêu an toàn (Zero-Risk): chỉ nén hình ảnh Splash Screen và Asset mà hoàn toàn không đụng vào ProGuard hay cấu hình Gradle.",
+  "updatedAt":  "2026-10-02T13:07:36.537474731Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
