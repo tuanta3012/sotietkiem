@@ -1,6 +1,0 @@
-{
-  "name": "So Tiet Kiem Gia Dinh",
-  "description": "Quản lý danh mục sổ tiết kiệm vợ chồng, theo dõi lịch đáo hạn gối đầu và công cụ tính toán tối ưu huy động vốn: Vay thế chấp/cầm cố sổ vs Tất toán trước hạn.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
