@@ -209,27 +209,37 @@ export interface AppSettings {
   notificationsEnabled?: boolean; // Cho phép lập lịch thông báo nhắc đáo hạn (Capacitor / Web)
   enableBiometricLogin?: boolean; // Bật mở khóa / đăng nhập bằng Vân tay / Face ID
   updateServerUrl?: string; // URL server kiểm tra và tải cập nhật APK (ví dụ: https://domain.com)
+  inviteWebhookUrl?: string; // URL Google Apps Script Webhook để gửi email mời tự động
 }
 
-export function canEditData(role?: string | null): boolean {
+export function canEditData(role?: string | null, userRole?: string | null): boolean {
+  if (userRole && (String(userRole).toLowerCase() === 'admin' || String(userRole).toUpperCase() === 'ADMIN')) return true;
   if (!role) return true; // Mặc định khi chưa phân quyền là Admin/chủ máy
   const normalized = String(role).toUpperCase();
   return normalized === 'ADMIN' || normalized === 'EDITOR';
 }
 
-export function canManageMembers(role?: string | null): boolean {
+export function canManageMembers(role?: string | null, userRole?: string | null): boolean {
+  if (userRole && (String(userRole).toLowerCase() === 'admin' || String(userRole).toUpperCase() === 'ADMIN')) return true;
   if (!role) return true;
   const normalized = String(role).toUpperCase();
   return normalized === 'ADMIN';
 }
 
-export function canPushToDrive(role?: string | null): boolean {
+export function canPushToDrive(role?: string | null, userRole?: string | null): boolean {
+  if (userRole && (String(userRole).toLowerCase() === 'admin' || String(userRole).toUpperCase() === 'ADMIN')) return true;
   if (!role) return true;
   const normalized = String(role).toUpperCase();
   return normalized === 'ADMIN' || normalized === 'EDITOR';
 }
 
-export function canChangeDriveFile(role?: string | null): boolean {
+export function canChangeDriveFile(
+  role?: string | null,
+  userRole?: string | null,
+  isUnlinked?: boolean
+): boolean {
+  if (isUnlinked) return true;
+  if (userRole && (String(userRole).toLowerCase() === 'admin' || String(userRole).toUpperCase() === 'ADMIN')) return true;
   if (!role) return true;
   const normalized = String(role).toUpperCase();
   return normalized === 'ADMIN';

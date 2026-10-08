@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { AppSettings, AuthUser, WorkspaceMember, UserRole, canManageMembers } from '../types';
 
-interface UserManagementModalProps {
+export interface UserManagementModalProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser: AuthUser | null;
@@ -41,10 +41,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const userEmail = currentUser?.email?.trim().toLowerCase();
   const ownerEmail = settings.workspaceOwnerEmail?.trim().toLowerCase();
   const isOwner = Boolean(userEmail && ownerEmail && userEmail === ownerEmail);
+  const myMemberRecord = settings.members?.find((m) => m && m.email && m.email.trim().toLowerCase() === userEmail);
+  
   const currentRole: UserRole = isOwner
     ? 'ADMIN'
-    : (settings.currentRole || (currentUser?.role === 'admin' ? 'ADMIN' : 'ADMIN'));
-  const isAdmin = canManageMembers(currentRole);
+    : (myMemberRecord?.role || settings.currentRole || (currentUser?.role === 'admin' || currentUser?.userRole === 'ADMIN' ? 'ADMIN' : 'VIEWER'));
+  const isAdmin = canManageMembers(currentRole, currentUser?.role);
 
   const [members, setMembers] = useState<WorkspaceMember[]>(() => {
     if (settings.members && settings.members.length > 0) {
@@ -90,19 +92,25 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       setErrorMsg('Vui lòng kết nối hoặc tạo file Google Drive trước khi thêm thành viên.');
       return;
     }
-    if (!newName.trim() || !newEmail.trim()) {
-      setErrorMsg('Vui lòng nhập tên và Gmail thành viên.');
+    let rawInput = newEmail.trim().toLowerCase();
+    if (!rawInput) {
+      setErrorMsg('Vui lòng nhập Username hoặc Gmail thành viên.');
       return;
     }
 
-    const cleanEmail = newEmail.trim().toLowerCase();
+    // Tự động chuẩn hóa email: Nếu chỉ nhập username (ví dụ: tuanta3012), tự động cộng thêm @gmail.com
+    let cleanEmail = rawInput;
+    if (!cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@gmail.com`;
+    }
+
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
-      setErrorMsg('Địa chỉ Gmail không hợp lệ.');
+      setErrorMsg('Địa chỉ Gmail hoặc Username không hợp lệ.');
       return;
     }
 
     if (members.some((m) => m.email.toLowerCase() === cleanEmail)) {
-      setErrorMsg('Email đã tồn tại trong danh sách.');
+      setErrorMsg(`Email ${cleanEmail} đã tồn tại trong danh sách.`);
       return;
     }
 
@@ -120,17 +128,40 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     };
 
     const updated = [...members, newMember];
+    setMembers(updated);
+    setNewName('');
+    setNewEmail('');
+    setSuccessMsg(`Đã thêm thành viên ${cleanEmail}`);
+    setTimeout(() => setSuccessMsg(null), 3000);
+
     try {
       await onSaveMembers(updated);
-      setMembers(updated);
-      setNewName('');
-      setNewEmail('');
-      setSuccessMsg(`Đã thêm thành viên ${cleanEmail}`);
-      setTimeout(() => setSuccessMsg(null), 3000);
     } catch (err) {
-      setErrorMsg('Lỗi khi lưu thành viên.');
+      setErrorMsg('Lỗi khi lưu thành viên lên Google Drive.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const [memberToDelete, setMemberToDelete] = useState<WorkspaceMember | null>(null);
+
+  const handleConfirmRemoveMember = async () => {
+    if (!memberToDelete) return;
+    const memberId = memberToDelete.id;
+    const memberEmail = memberToDelete.email;
+    setMemberToDelete(null);
+
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const updated = members.filter((m) => m.id !== memberId);
+    try {
+      setMembers(updated);
+      await onSaveMembers(updated);
+      setSuccessMsg(`Đã xóa ${memberEmail}`);
+      setTimeout(() => setSuccessMsg(null), 2500);
+    } catch (err) {
+      setErrorMsg('Lỗi khi xóa thành viên.');
     }
   };
 
@@ -150,21 +181,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
-  const handleRemoveMember = async (memberId: string, memberEmail: string) => {
-    if (!window.confirm(`Thu hồi quyền truy cập của ${memberEmail}?`)) return;
-
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    const updated = members.filter((m) => m.id !== memberId);
-    try {
-      setMembers(updated);
-      await onSaveMembers(updated);
-      setSuccessMsg(`Đã xóa ${memberEmail}`);
-      setTimeout(() => setSuccessMsg(null), 2500);
-    } catch (err) {
-      setErrorMsg('Lỗi khi xóa thành viên.');
-    }
+  const handleRemoveMember = (member: WorkspaceMember) => {
+    setMemberToDelete(member);
   };
 
   return (
@@ -281,8 +299,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 <div className="relative">
                   <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                   <input
-                    type="email"
-                    placeholder="Gmail Google"
+                    type="text"
+                    placeholder="Username hoặc Gmail (ví dụ: wife hoặc wife@gmail.com)"
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
                     className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
@@ -387,40 +405,45 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {isAdmin && !isOwner ? (
-                          <div className="flex items-center gap-1">
-                            <select
-                              value={member.role}
-                              onChange={(e) => handleRoleChange(member.id, e.target.value as UserRole)}
-                              className="text-[11px] py-1 px-1.5 bg-slate-100 border border-slate-200 rounded-md font-semibold text-slate-700 outline-none"
-                            >
-                              <option value="VIEWER">👁️ Xem</option>
-                              <option value="EDITOR">✏️ Sửa</option>
-                              <option value="ADMIN">👑 Admin</option>
-                            </select>
+                        {(() => {
+                          const isMemberOwner = Boolean(ownerEmail && member.email.trim().toLowerCase() === ownerEmail);
+                          const canManageThisMember = isAdmin && !isMemberOwner;
 
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveMember(member.id, member.email)}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
-                              title="Thu hồi quyền"
+                          return canManageThisMember ? (
+                            <div className="flex items-center gap-1">
+                              <select
+                                value={member.role}
+                                onChange={(e) => handleRoleChange(member.id, e.target.value as UserRole)}
+                                className="text-[11px] py-1 px-1.5 bg-slate-100 border border-slate-200 rounded-md font-semibold text-slate-700 outline-none cursor-pointer"
+                              >
+                                <option value="VIEWER">👁️ Xem</option>
+                                <option value="EDITOR">✏️ Sửa</option>
+                                <option value="ADMIN">👑 Admin</option>
+                              </select>
+
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveMember(member)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                                title="Thu hồi quyền thành viên"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                member.role === 'ADMIN'
+                                  ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                  : member.role === 'EDITOR'
+                                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                  : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              }`}
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              member.role === 'ADMIN'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : member.role === 'EDITOR'
-                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            }`}
-                          >
-                            {member.role === 'ADMIN' ? '👑 Admin' : member.role === 'EDITOR' ? '✏️ Sửa' : '👁️ Xem'}
-                          </span>
-                        )}
+                              {member.role === 'ADMIN' ? '👑 Admin' : member.role === 'EDITOR' ? '✏️ Sửa' : '👁️ Xem'}
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
@@ -482,11 +505,42 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-semibold hover:bg-slate-900 transition-colors"
+            className="px-4 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-semibold hover:bg-slate-900 transition-colors cursor-pointer"
           >
             Đóng
           </button>
         </div>
+
+        {/* Delete Member Confirmation Modal */}
+        {memberToDelete && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-3 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+            <div className="bg-white rounded-2xl p-4 max-w-xs w-full shadow-2xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2 text-rose-600 font-bold text-sm">
+                <ShieldAlert className="w-5 h-5 shrink-0" />
+                <span>Thu hồi quyền thành viên?</span>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Bạn có chắc chắn muốn xóa quyền truy cập của <strong className="text-slate-900">{memberToDelete.email}</strong> ({memberToDelete.name}) khỏi không gian chia sẻ này?
+              </p>
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setMemberToDelete(null)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmRemoveMember}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+                >
+                  Xác nhận xóa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

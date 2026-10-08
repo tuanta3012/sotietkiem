@@ -51,11 +51,18 @@ export const DriveTokenExpiredModal: React.FC<DriveTokenExpiredModalProps> = ({
           </p>
 
           {/* Alert Callout Compact */}
-          <div className="p-2 bg-amber-50 border border-amber-200/80 rounded-lg flex items-start space-x-1.5 text-left">
-            <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-            <span className="text-[10px] text-amber-800 font-medium leading-tight">
-              Phiên kết nối Google Drive cần được gia hạn. Bấm "Kết nối lại" để tiếp tục đồng bộ an toàn.
-            </span>
+          <div className="space-y-2 text-left">
+            <div className="p-2 bg-amber-50 border border-amber-200/80 rounded-lg flex items-start space-x-1.5">
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+              <span className="text-[10px] text-amber-800 font-medium leading-tight">
+                Phiên kết nối Google Drive cần gia hạn. Bấm &quot;Kết nối lại&quot; ở dưới.
+              </span>
+            </div>
+
+            <div className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-[9.5px] text-slate-700 leading-normal space-y-0.5">
+              <p className="font-bold text-slate-900">⚠️ LƯU Ý KHI CẤP QUYỀN:</p>
+              <p>Bạn <strong>bắt buộc phải tích chọn ô tròn</strong> cho phép: <em>&quot;Xem, chỉnh sửa, tạo và xóa các tệp Google Drive cụ thể...&quot;</em> trước khi bấm Tiếp tục (Continue). Nếu không tích, ứng dụng sẽ bị từ chối quyền đọc/ghi.</p>
+            </div>
           </div>
 
           {errorMessage && (

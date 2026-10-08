@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch tối ưu hóa dung lượng APK siêu an toàn (Zero-Risk): chỉ nén hình ảnh Splash Screen và Asset mà hoàn toàn không đụng vào ProGuard hay cấu hình Gradle.",
-  "updatedAt":  "2026-10-02T13:07:36.537474731Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Cập nhật Kế hoạch Triển khai Chi tiết: Tích hợp Google Picker API cho luồng Thành viên ở mục 'Bảng tính trên Drive' khi bấm 'Đồng bộ Google Drive', đảm bảo GIỮ NGUYÊN 100% giao diện và câu chữ hiện tại của ứng dụng.",
+  "updatedAt": "2026-10-07T07:25:35.002233242Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

@@ -37,6 +37,15 @@ export const SettlementHistoryModal: React.FC<SettlementHistoryModalProps> = ({
     return owner || 'Chung';
   };
 
+  const [pendingDeleteId, setPendingDeleteId] = React.useState<string | null>(null);
+
+  const handleConfirmDelete = () => {
+    if (pendingDeleteId) {
+      onDeleteSettlement?.(pendingDeleteId);
+      setPendingDeleteId(null);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -101,11 +110,8 @@ export const SettlementHistoryModal: React.FC<SettlementHistoryModalProps> = ({
                       </span>
                       {onDeleteSettlement && (
                         <button
-                          onClick={() => {
-                            if (confirm(`Xác nhận xóa bản ghi nhật ký này (${adj.bookCode || 'Sổ'} - ${formatDateVN(adj.settlementDate)})?`)) {
-                              onDeleteSettlement(adj.id);
-                            }
-                          }}
+                          type="button"
+                          onClick={() => setPendingDeleteId(adj.id)}
                           className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                           title="Xóa bản ghi này"
                         >
@@ -203,6 +209,37 @@ export const SettlementHistoryModal: React.FC<SettlementHistoryModalProps> = ({
             </div>
           )}
         </div>
+
+        {/* Delete Settlement Confirmation Dialog */}
+        {pendingDeleteId && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-3 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+            <div className="bg-white rounded-2xl p-4 max-w-xs w-full shadow-2xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2 text-rose-600 font-bold text-sm">
+                <Trash2 className="w-5 h-5 shrink-0" />
+                <span>Xác nhận xóa nhật ký?</span>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Bạn có chắc chắn muốn xóa bản ghi nhật ký biến động tất toán này không?
+              </p>
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteId(null)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDelete}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+                >
+                  Xác nhận xóa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

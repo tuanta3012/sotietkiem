@@ -42,11 +42,13 @@ import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory, clearS
 import { formatVND, formatShortVND } from '../utils/formatters';
 
 import {
+  auth,
   initGoogleAuth,
   signInWithGoogle,
   signInWithGoogleRedirect,
   signOutGoogle,
   getGoogleAccessToken,
+  setGoogleAccessToken,
   ensureGoogleAccessToken,
   validateAndEnsureToken,
   listRealGoogleDriveFiles,
@@ -61,10 +63,16 @@ import {
   autoDiscoverLatestCentralHub,
   isExplicitlyUnlinked,
   setExplicitlyUnlinked,
+  addUnlinkedFileId,
+  tagVaultWithAppProperties,
+  getCachedRealDriveFiles,
+  isGoogleTokenValid,
+  applyMasterStateToSettings,
   RealDriveFile,
 } from '../utils/googleDriveService';
+import { showGoogleDrivePicker } from '../utils/googlePickerService';
 
-interface DataSyncModalProps {
+export interface DataSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
   books: SavingsBook[];
@@ -117,16 +125,29 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const { showToast } = useToast();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(getGoogleAccessToken());
-  const hasGoogleToken = Boolean(accessToken || getGoogleAccessToken());
+  const hasGoogleToken = Boolean((accessToken || getGoogleAccessToken()) && isGoogleTokenValid());
   const [isAuthenticating, setIsAuthenticating] = useState<boolean>(false);
+
+  // Đồng bộ trạng thái token mỗi khi mở modal
+  useEffect(() => {
+    if (isOpen) {
+      const currentToken = getGoogleAccessToken();
+      const isValid = isGoogleTokenValid();
+      if (currentToken && isValid) {
+        setAccessToken(currentToken);
+      } else if (!currentToken || !isValid) {
+        setAccessToken(null);
+      }
+    }
+  }, [isOpen]);
 
   // Offline file overwrite confirmation state
   const [pendingOfflineFile, setPendingOfflineFile] = useState<File | null>(null);
   const [showOverwriteWarning, setShowOverwriteWarning] = useState<boolean>(false);
 
-  // Drive state
-  const [realFiles, setRealFiles] = useState<RealDriveFile[]>([]);
-  const [isLoadingFiles, setIsLoadingFiles] = useState<boolean>(false);
+  // Drive state (Instant load from memory/session cache)
+  const [realFiles, setRealFiles] = useState<RealDriveFile[]>(() => getCachedRealDriveFiles() || []);
+  const [isLoadingFiles, setIsLoadingFiles] = useState<boolean>(() => !getCachedRealDriveFiles());
   const [selectedFileId, setSelectedFileId] = useState<string>('');
   const [selectedFileName, setSelectedFileName] = useState<string>(
     settings.googleSheetName || (settings.googleSheetUrl?.includes('1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms') ? 'Example Spreadsheet' : '')
@@ -141,6 +162,26 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const [googleSyncMessage, setGoogleSyncMessage] = useState<string | null>(null);
   const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
   const [lastSyncTime, setLastSyncTime] = useState<string | null>(settings.lastSyncTime || null);
+
+  // Xác định chuẩn xác vai trò Admin cho mọi thao tác liên kết & quản lý file Drive
+  const isEffectiveAdmin = (): boolean => {
+    // 1. Nếu chưa có liên kết file hoặc ở chế độ ngoại tuyến -> Toàn quyền Admin
+    if (!sheetUrl || isExplicitlyUnlinked()) return true;
+    // 2. Tài khoản người dùng mang vai trò admin
+    if (appUser?.role === 'admin' || appUser?.userRole === 'ADMIN') return true;
+    // 3. Email người dùng trùng với chủ sở hữu không gian
+    const userEmail = (currentUser?.email || appUser?.email || '').trim().toLowerCase();
+    const ownerEmail = (settings.workspaceOwnerEmail || '').trim().toLowerCase();
+    if (userEmail && ownerEmail && userEmail === ownerEmail) return true;
+    // 4. Kiểm tra trong danh sách thành viên
+    if (userEmail && settings.members && settings.members.length > 0) {
+      const matched = settings.members.find((m) => m.email && m.email.trim().toLowerCase() === userEmail);
+      if (matched && matched.role === 'ADMIN') return true;
+      if (matched && matched.role !== 'ADMIN') return false;
+    }
+    // 5. Fallback canChangeDriveFile
+    return canChangeDriveFile(settings.currentRole, appUser?.role, !sheetUrl);
+  };
 
   // Sync messages toast effect (only when modal is open and user performs actions)
   useEffect(() => {
@@ -159,6 +200,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const [showCreateFileDialog, setShowCreateFileDialog] = useState<boolean>(false);
   const [newFileNameInput, setNewFileNameInput] = useState<string>('So_tiet_kiem');
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
+  const [filePendingDelete, setFilePendingDelete] = useState<RealDriveFile | null>(null);
 
   // Clear confirmation
   const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
@@ -226,7 +268,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     const token = accessToken || getGoogleAccessToken();
-    if (isOpen && token) {
+    const isValid = isGoogleTokenValid();
+    if (isOpen && token && isValid) {
       (async () => {
         try {
           const master = await getMasterSyncStateFromDrive(token);
@@ -274,7 +317,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     const token = accessToken || getGoogleAccessToken();
-    if (selectedFileId && token && isOpen) {
+    const isValid = isGoogleTokenValid();
+    if (selectedFileId && token && isValid && isOpen) {
       setIsFetchingFileName(true);
       getRealGoogleDriveFileMetadata(token, selectedFileId)
         .then((meta) => {
@@ -308,15 +352,25 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   // Fetch real Google Drive files when token is available and modal is open
   useEffect(() => {
-    if (accessToken && isOpen) {
-      loadGoogleDriveFiles(accessToken);
+    const token = accessToken || getGoogleAccessToken();
+    const isValid = isGoogleTokenValid();
+    if (token && isValid && isOpen) {
+      loadGoogleDriveFiles(token);
     }
   }, [accessToken, isOpen, showDrivePickerModal]);
 
   const loadGoogleDriveFiles = async (token: string) => {
     if (isLoadingFilesRef.current) return;
+
+    const cached = getCachedRealDriveFiles();
+    if (cached && cached.length > 0) {
+      setRealFiles(cached);
+      setIsLoadingFiles(false);
+    } else {
+      setIsLoadingFiles(true);
+    }
+
     isLoadingFilesRef.current = true;
-    setIsLoadingFiles(true);
     setSyncErrorMessage(null);
     try {
       const files = await listRealGoogleDriveFiles(token);
@@ -348,12 +402,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setSyncErrorMessage(null);
     try {
       const validToken = await validateAndEnsureToken();
+      if (!validToken) {
+        throw new Error('Không nhận được mã xác thực Google Drive.');
+      }
       setAccessToken(validToken);
-      // Synchronize online user profile if we have one
-      if (currentUser) {
+      setGoogleAccessToken(validToken);
+      // Synchronize online user profile immediately
+      const activeUser = auth.currentUser;
+      const email = activeUser?.email || appUser?.email || currentUser?.email || '';
+      const name = activeUser?.displayName || appUser?.name || currentUser?.displayName || 'Chủ Tài Khoản';
+      if (email) {
         const onlineUser: AuthUser = {
-          email: currentUser.email || '',
-          name: currentUser.displayName || 'Chủ Tài Khoản',
+          email,
+          name,
           role: 'admin',
           title: 'Quản trị viên (Admin)',
           isOffline: false,
@@ -483,9 +544,38 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
 
 
+  // Trigger Google Picker API for Admin (All/My Drive) and Members (Shared with me)
+  const handleTriggerGooglePicker = async () => {
+    setSyncErrorMessage(null);
+    const token = await validateTokenOrPrompt();
+    if (!token) return;
+
+    const isMember = !isEffectiveAdmin();
+
+    await showGoogleDrivePicker({
+      accessToken: token,
+      viewMode: isMember ? 'shared_with_me' : 'all',
+      onFilePicked: async (pickedFile) => {
+        await tagVaultWithAppProperties(token, pickedFile.id).catch(() => {});
+        handleSelectRealFile({
+          id: pickedFile.id,
+          name: pickedFile.name,
+          mimeType: pickedFile.mimeType,
+          webViewLink: pickedFile.url,
+          isSheetOrExcel: true,
+        });
+      },
+      onError: (err) => {
+        console.warn('Google Picker fallback to direct file list:', err);
+        setGoogleSyncMessage('💡 Google Picker không khả dụng trên miền này. Đã tự động hiển thị danh sách file Google Drive trực tiếp bên dưới để bạn chọn.');
+        loadGoogleDriveFiles(token);
+      },
+    });
+  };
+
   // Open Drive picker and trigger sign-in if needed
   const handleOpenDrivePicker = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền đổi file liên kết Google Drive.');
       return;
     }
@@ -497,23 +587,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  // Mở cửa sổ Google Picker hoặc mở hộp thoại nhập Link trên thiết bị di động
-
-
   // Select a file from real Google Drive
   const handleSelectRealFile = async (file: RealDriveFile) => {
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
-      return;
-    }
-    // Nếu app đang có dữ liệu và chưa có sheetUrl, xác nhận trước khi nạp thay thế
-    if (books.length > 0 && !sheetUrl) {
-      const confirmReplace = window.confirm(
-        `Ứng dụng hiện đang có ${books.length} sổ tiết kiệm trên máy.\n\nKhi chọn liên kết file "${file.name}", hệ thống sẽ nạp dữ liệu từ file này về thay thế dữ liệu máy.\n\nBạn có muốn tiếp tục liên kết file này không?`
-      );
-      if (!confirmReplace) return;
-    }
-
     const previousFileId =
       selectedFileId ||
       (settings.googleSheetUrl
@@ -540,18 +615,24 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     // Update Master Sync Pointer on Google Drive
     let stampTime = '';
     try {
-
-      stampTime = await setMasterSyncLinked(
-        token,
-        file.id,
-        currentUser?.email || appUser?.email,
-        previousFileId && previousFileId !== file.id ? previousFileId : undefined,
-        file.name,
-        link,
-        previousFileId === file.id ? settings.lastLocalLinkTimestamp : undefined
-      );
+      if (isEffectiveAdmin()) {
+        stampTime = await setMasterSyncLinked(
+          token,
+          file.id,
+          currentUser?.email || appUser?.email,
+          previousFileId && previousFileId !== file.id ? previousFileId : undefined,
+          file.name,
+          link,
+          previousFileId === file.id ? settings.lastLocalLinkTimestamp : undefined
+        );
+      } else {
+        const master = await getMasterSyncStateFromDrive(token, file.id);
+        if (master) {
+          applyMasterStateToSettings(master, currentUser?.email || appUser?.email, onUpdateSettings as any, settings, token);
+        }
+      }
     } catch (metaErr) {
-      console.warn('Failed to update master sync state on select:', metaErr);
+      console.warn('Notice updating master sync state on select:', metaErr);
     }
 
     // Auto 2-way sync: Pull real data from the selected file into the app
@@ -563,7 +644,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       const parseResult = await downloadRealGoogleDriveFile(token, file.id, file.mimeType);
       const nowStr = new Date().toLocaleString('vi-VN');
 
-      if (parseResult.success && parseResult.books.length > 0) {
+      if (parseResult.success) {
         let fileModTime: string | undefined;
         try {
           const meta = await getRealGoogleDriveFileMetadata(token, file.id);
@@ -572,16 +653,16 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
         if (onFinishFileSwitch) {
           onFinishFileSwitch(
-            parseResult.books,
-            parseResult.settlements,
+            parseResult.books || [],
+            parseResult.settlements || [],
             link,
             file.name,
             stampTime || new Date().toISOString(),
             fileModTime
           );
         } else {
-          onMarkAsRemoteUpdate?.(parseResult.books, parseResult.settlements, link, fileModTime);
-          onImportBooks(parseResult.books, 'replace');
+          onMarkAsRemoteUpdate?.(parseResult.books || [], parseResult.settlements || [], link, fileModTime);
+          onImportBooks(parseResult.books || [], 'replace');
           onUpdateSettings({
             googleSheetUrl: link,
             googleSheetName: file.name,
@@ -592,12 +673,12 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         }
         setLastSyncTime(nowStr);
         setGoogleSyncMessage(
-          `⚡ Đã liên kết và đồng bộ thành công ${parseResult.books.length} sổ tiết kiệm từ file "${file.name}" trên Google Drive (${nowStr})`
+          `⚡ Đã liên kết và đồng bộ thành công ${parseResult.books?.length || 0} sổ tiết kiệm từ file "${file.name}" trên Google Drive (${nowStr})`
         );
       } else {
         onCancelFileSwitch?.();
         setSyncErrorMessage(
-          `File "${file.name}" không chứa dữ liệu sổ tiết kiệm hợp lệ hoặc rỗng. File trên Drive vẫn được giữ nguyên vẹn 100%.`
+          parseResult.errors?.[0] || `File "${file.name}" không chứa dữ liệu sổ tiết kiệm hợp lệ.`
         );
       }
     } catch (err: any) {
@@ -610,21 +691,13 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   // Connect via URL input or Share link
   const handleConnectByUrl = async (urlToConnect: string) => {
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Chỉ Admin mới có quyền dán đường dẫn liên kết file.');
       return;
     }
     if (!urlToConnect.trim()) {
       setSyncErrorMessage('Vui lòng nhập đường dẫn liên kết Google Drive hoặc Google Sheet.');
       return;
-    }
-
-    // Nếu app đang có dữ liệu và chưa có sheetUrl, xác nhận trước khi nạp thay thế
-    if (books.length > 0 && !sheetUrl) {
-      const confirmReplace = window.confirm(
-        `Ứng dụng hiện đang có ${books.length} sổ tiết kiệm trên máy.\n\nKhi chọn liên kết URL này, hệ thống sẽ nạp dữ liệu từ file trên Drive về thay thế dữ liệu máy.\n\nBạn có muốn tiếp tục không?`
-      );
-      if (!confirmReplace) return;
     }
 
     const previousFileId =
@@ -720,79 +793,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  // Auto-discover latest central hub file (A1) on login or mount if no sheetUrl is linked yet
+  // Discovered hub state clean
   useEffect(() => {
-    let isMounted = true;
-    const token = accessToken || getGoogleAccessToken();
-    if (token && !sheetUrl && isOpen) {
-      setIsDiscoveringHub(true);
-      autoDiscoverLatestCentralHub(token, currentUser?.email || appUser?.email)
-        .then(async (latestHub) => {
-          if (!isMounted) return;
-          setIsDiscoveringHub(false);
-          if (latestHub) {
-            // Tự động kết nối và đồng bộ ngay lập tức không cần hỏi lại
-            setExplicitlyUnlinked(false);
-
-            setSelectedFileId(latestHub.id);
-            setSelectedFileName(latestHub.name);
-            const link = latestHub.webViewLink || `https://docs.google.com/spreadsheets/d/${latestHub.id}/edit`;
-            setSheetUrl(link);
-            setSyncStatusStep(`Đang tự động đồng bộ dữ liệu từ file trung tâm "${latestHub.name}"...`);
-            
-            try {
-              const parseResult = await downloadRealGoogleDriveFile(token, latestHub.id, latestHub.mimeType);
-              const nowStr = new Date().toLocaleString('vi-VN');
-              if (parseResult.success) {
-                if (parseResult.books && parseResult.books.length > 0) {
-                  if (onFinishFileSwitch) {
-                    onFinishFileSwitch(
-                      parseResult.books,
-                      parseResult.settlements,
-                      link,
-                      latestHub.name,
-                      latestHub.linkedTimestamp
-                    );
-                  } else {
-                    onImportBooks(parseResult.books, 'replace');
-                    onUpdateSettings({
-                      googleSheetUrl: link,
-                      googleSheetName: latestHub.name,
-                      lastSyncTime: nowStr,
-                      autoSync: true,
-                      lastLocalLinkTimestamp: latestHub.linkedTimestamp,
-                    });
-                  }
-                }
-                setLastSyncTime(nowStr);
-                setGoogleSyncMessage(`⚡ Đã tự động kết nối và đồng bộ file trung tâm "${latestHub.name}" (${nowStr})`);
-              }
-            } catch (err: any) {
-              console.warn('Auto-sync discovered hub download failed:', err);
-            } finally {
-              if (isMounted) setSyncStatusStep(null);
-            }
-          }
-          setDiscoveredHub(null);
-        })
-        .catch((err) => {
-          if (isMounted) {
-            setIsDiscoveringHub(false);
-            setDiscoveredHub(null);
-          }
-          console.warn('Auto-discover central hub failed:', err);
-        });
-    } else {
-      setDiscoveredHub(null);
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [accessToken, sheetUrl, isOpen]);
+    setDiscoveredHub(null);
+  }, []);
 
   // Create a brand new Excel file on the user's real Google Drive
   const handleCreateNewDriveFile = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Chỉ Admin mới có quyền tạo file liên kết mới.');
       return;
     }
@@ -860,18 +868,20 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  // Delete a specific file from Google Drive
-  const handleDeleteDriveFile = async (e: React.MouseEvent, file: RealDriveFile) => {
+  // Trigger file delete confirmation modal
+  const handleDeleteDriveFile = (e: React.MouseEvent, file: RealDriveFile) => {
     e.stopPropagation();
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Chỉ Admin mới có quyền xóa file trên Google Drive.');
       return;
     }
+    setFilePendingDelete(file);
+  };
 
-    const confirmDelete = window.confirm(
-      `Bạn có chắc chắn muốn xóa file "${file.name}" khỏi Google Drive không?\n\nHành động này sẽ xóa vĩnh viễn file trên Drive và không thể hoàn tác.`
-    );
-    if (!confirmDelete) return;
+  // Perform confirmed file deletion from Google Drive and UI list
+  const handleConfirmDeleteFile = async () => {
+    if (!filePendingDelete) return;
+    const file = filePendingDelete;
 
     const token = await validateTokenOrPrompt();
     if (!token) return;
@@ -879,25 +889,45 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setDeletingFileId(file.id);
     setSyncErrorMessage(null);
     try {
-      await deleteRealGoogleDriveFile(token, file.id);
+      try {
+        await deleteRealGoogleDriveFile(token, file.id);
+      } catch (delErr: any) {
+        console.warn('Google Drive delete API notice:', delErr);
+      }
+
+      // Add to unlinked file blacklist so it is never re-discovered or re-linked
+      addUnlinkedFileId(file.id);
+
+      // Remove from real files list immediately
+      setRealFiles((prev) => prev.filter((f) => f.id !== file.id));
 
       // If deleted file was currently linked, clear link
-      if (selectedFileId === file.id) {
+      if (selectedFileId === file.id || (settings.googleSheetUrl && settings.googleSheetUrl.includes(file.id))) {
+        onClearBooks();
+        onUpdateSettings({
+          googleSheetUrl: undefined,
+          googleSheetName: undefined,
+          lastSyncTime: undefined,
+          lastLocalLinkTimestamp: undefined,
+        });
         setSelectedFileId('');
         setSelectedFileName('');
         setSheetUrl('');
-        onUpdateSettings({
-          googleSheetUrl: '',
-          googleSheetName: '',
-        });
+        setLastSyncTime(null);
+        setExplicitlyUnlinked(true);
+        if (onFinishFileSwitch) {
+          onFinishFileSwitch([], [], '', '', '', '');
+        }
       }
 
-      setGoogleSyncMessage(`Đã xóa file "${file.name}" khỏi Google Drive.`);
+      setGoogleSyncMessage(`Đã xóa file "${file.name}" thành công.`);
+      setFilePendingDelete(null);
       await loadGoogleDriveFiles(token);
     } catch (err: any) {
-      setSyncErrorMessage(`Lỗi khi xóa file: ${err.message}`);
+      setSyncErrorMessage(`Lỗi khi xóa file: ${err.message || 'Không thể xóa file.'}`);
     } finally {
       setDeletingFileId(null);
+      setFilePendingDelete(null);
     }
   };
 
@@ -935,17 +965,17 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  // Safeguarded disconnect and clear
+  // Safeguarded disconnect and clear (Instant 0ms UI reset)
   const handleSafeguardedDisconnectAndClear = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Chỉ Admin mới có quyền hủy liên kết file.');
       return;
     }
-    onStartFileSwitch?.();
-    setIsUnlinking(true);
-    setSyncStatusStep('Đang hủy liên kết và làm sạch dữ liệu trên ứng dụng...');
+    
+    // Close confirm dialog immediately
+    setShowClearConfirm(false);
 
-    // Lấy File ID từ selectedFileId hoặc fallback qua settings.googleSheetUrl để đảm bảo tính chính xác tuyệt đối
+    // Save target file ID and token before clearing
     const currentUrl = settings.googleSheetUrl;
     let fileIdToUnlink = selectedFileId;
     if (!fileIdToUnlink && currentUrl) {
@@ -955,18 +985,15 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       }
     }
 
-    const token = accessToken || getGoogleAccessToken();
-    if (token) {
-      try {
-        await setMasterSyncUnlinked(token, currentUser?.email || appUser?.email, fileIdToUnlink);
-      } catch (err) {
-        console.warn('Lỗi khi ghi nhận unlink lên Google Drive:', err);
-      }
+    if (fileIdToUnlink) {
+      addUnlinkedFileId(fileIdToUnlink);
     }
 
-    await new Promise((res) => setTimeout(res, 400));
+    const token = accessToken || getGoogleAccessToken();
     const nowStr = new Date().toLocaleString('vi-VN');
 
+    // 1. INSTANT local state & storage reset (0ms delay)
+    onStartFileSwitch?.();
     onClearBooks();
     try {
       localStorage.setItem('savings_books_v3', JSON.stringify([]));
@@ -988,13 +1015,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setLastSyncTime(null);
     setIsUnlinking(false);
     setSyncStatusStep(null);
-    setShowClearConfirm(false);
     setGoogleSyncMessage(`✅ Đã hủy liên kết thành công. Dữ liệu trên Google Drive của bạn được giữ nguyên vẹn 100% (${nowStr}).`);
+
+    // 2. Perform Drive network unlink asynchronously in background (non-blocking)
+    if (token) {
+      setMasterSyncUnlinked(token, currentUser?.email || appUser?.email, fileIdToUnlink).catch((err) => {
+        console.warn('Lỗi khi ghi nhận unlink ngầm lên Google Drive:', err);
+      });
+    }
   };
 
   // PHƯƠNG ÁN A: 1-Click tự động tạo file Google Sheet mới trên Drive và kích hoạt đồng bộ
   const handleQuickCreateDriveFile = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
+    if (!isEffectiveAdmin()) {
       setSyncErrorMessage('🔒 Chỉ Admin mới có quyền tạo file liên kết mới.');
       return;
     }
@@ -1117,8 +1150,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const totalPrincipal = books.reduce((sum, b) => sum + (b.principal || 0), 0);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/70 backdrop-blur-xs overflow-y-auto">
-      <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/70 backdrop-blur-xs overflow-hidden">
+      <div className="bg-white w-full max-w-2xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh] my-auto animate-in fade-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center space-x-2.5 min-w-0">
@@ -1161,13 +1194,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           {isOnlineUser ? (
             !sheetUrl ? (
               <div className="space-y-2">
-                {isDiscoveringHub && (
-                  <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-center gap-2 text-indigo-800 text-xs font-semibold animate-pulse">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-indigo-600" />
-                    <span>Đang tìm file trên Drive...</span>
-                  </div>
-                )}
-                {!canChangeDriveFile(settings.currentRole) ? (
+                {!isEffectiveAdmin() ? (
                   <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl space-y-1 text-xs">
                     <div className="flex items-center gap-1.5 font-bold">
                       <Lock className="w-3.5 h-3.5 text-amber-600 shrink-0" />
@@ -1199,15 +1226,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
                           <span>Bảng tính trên Drive ({realFiles.length})</span>
                         </span>
-                        <button
-                          type="button"
-                          disabled={isLoadingFiles}
-                          onClick={() => accessToken && loadGoogleDriveFiles(accessToken)}
-                          className="text-slate-500 hover:text-emerald-700 p-1 rounded cursor-pointer transition-colors"
-                          title="Tải lại danh sách"
-                        >
-                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? 'animate-spin text-emerald-600' : ''}`} />
-                        </button>
+                        <div className="flex items-center space-x-1.5">
+                          {realFiles.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleTriggerGooglePicker}
+                              className="inline-flex items-center space-x-1 text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded text-[10px] font-semibold border border-emerald-200 cursor-pointer transition-colors"
+                              title="Mở Google Picker"
+                            >
+                              <FolderOpen className="w-3 h-3 text-emerald-600" />
+                              <span>Tìm thêm file</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* File Items */}
@@ -1233,8 +1264,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                                     <FileSpreadsheet className="w-3.5 h-3.5" />
                                   </span>
                                   <div className="min-w-0">
-                                    <div className="font-semibold text-slate-900 text-xs truncate" title={file.name}>
-                                      {file.name}
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-semibold text-slate-900 text-xs truncate max-w-[160px]" title={file.name}>
+                                        {file.name}
+                                      </span>
+                                      {file.isCentralHub ? (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 shrink-0">
+                                          File Trung Tâm
+                                        </span>
+                                      ) : file.isAppTagged ? (
+                                        <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 shrink-0">
+                                          Sổ Tiết Kiệm
+                                        </span>
+                                      ) : null}
                                     </div>
                                     <div className="text-[10px] text-slate-500">
                                       {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('vi-VN') : ''}
@@ -1264,9 +1306,18 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           })}
                         </div>
                       ) : (
-                        <div className="py-4 px-2 text-center bg-white rounded-lg border border-dashed border-slate-200 space-y-1">
+                        <div className="py-5 px-3 text-center bg-white rounded-xl border border-dashed border-slate-200 space-y-3">
                           <p className="text-[11px] font-medium text-slate-600">Chưa có file bảng tính nào trên Drive</p>
-                          <p className="text-[10px] text-slate-400">Bấm nút ở trên để tạo file mới</p>
+                          <div className="flex items-center justify-center">
+                            <button
+                              type="button"
+                              onClick={handleTriggerGooglePicker}
+                              className="px-4 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 active:scale-[0.98] text-emerald-700 border border-emerald-200 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all"
+                            >
+                              <FolderOpen className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Tìm thêm file</span>
+                            </button>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -1344,10 +1395,10 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           <button
                             type="button"
                             onClick={handleManualSyncClick}
-                            disabled={isManualSyncing || isFetchingFileName}
+                            disabled={isManualSyncing}
                             className="inline-flex items-center space-x-1 px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-white rounded border border-slate-200 cursor-pointer"
                           >
-                            <RefreshCw className={`w-3 h-3 ${isManualSyncing || isFetchingFileName ? 'animate-spin text-emerald-600' : ''}`} />
+                            <RefreshCw className={`w-3 h-3 ${isManualSyncing ? 'animate-spin text-emerald-600' : ''}`} />
                             <span>{!hasGoogleToken ? 'Cấp quyền' : 'Đồng bộ'}</span>
                           </button>
                           <a
@@ -1363,27 +1414,45 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                       </div>
 
                       {!hasGoogleToken && (
-                        <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-900 text-[11px] flex items-center gap-1.5">
-                          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                          <span>Phiên hết hạn. Bấm <strong>&quot;Cấp quyền&quot;</strong> để đồng bộ.</span>
+                        <div className="space-y-2">
+                          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-[11px] space-y-1.5">
+                            <div className="flex items-center gap-1.5 font-bold">
+                              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                              <span>Phiên kết nối Google Drive hết hạn</span>
+                            </div>
+                            <p className="text-[11px] text-amber-800 leading-normal">
+                              Vui lòng bấm nút <strong>&quot;Cấp quyền&quot;</strong> ở trên để tiếp tục đồng bộ an toàn.
+                            </p>
+                            <div className="p-2 bg-white/70 border border-amber-200/50 rounded-lg text-[10.5px] text-amber-900 leading-relaxed space-y-1 font-medium">
+                              <p className="text-amber-950 font-bold">⚠️ QUAN TRỌNG KHI CẤP QUYỀN:</p>
+                              <p>Khi màn hình Google hiện ra, bạn <strong>bắt buộc phải tích chọn ô tròn</strong> cho phép: <em>&quot;Xem, chỉnh sửa, tạo và xóa các tệp Google Drive cụ thể...&quot;</em> trước khi bấm Tiếp tục (Continue). Nếu không tích chọn, ứng dụng sẽ bị từ chối quyền ghi tệp.</p>
+                            </div>
+                          </div>
                         </div>
                       )}
 
                       <div className="flex items-center justify-between text-[10px] text-slate-500 pt-0.5">
-                        <span className="text-emerald-700 font-medium flex items-center gap-1">
-                          <CheckCircle className="w-3 h-3 text-emerald-600" />
-                          <span>Đồng bộ 2 chiều</span>
-                        </span>
+                        {isFetchingFileName ? (
+                          <span className="text-amber-600 font-medium flex items-center gap-1.5 animate-pulse">
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin text-amber-500" />
+                            <span>Đang kiểm tra kết nối file...</span>
+                          </span>
+                        ) : (
+                          <span className="text-emerald-700 font-medium flex items-center gap-1">
+                            <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>Đồng bộ 2 chiều</span>
+                          </span>
+                        )}
                         {lastSyncTime && <span>Cập nhật: <strong className="text-slate-700">{lastSyncTime}</strong></span>}
                       </div>
 
                       <div className="grid grid-cols-2 gap-2 pt-1">
                         <button
                           id="btn-link-google-drive"
-                          disabled={!canChangeDriveFile(settings.currentRole)}
+                          disabled={!isEffectiveAdmin()}
                           onClick={handleOpenDrivePicker}
                           className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
-                            !canChangeDriveFile(settings.currentRole)
+                            !isEffectiveAdmin()
                               ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
                               : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 cursor-pointer'
                           }`}
@@ -1394,10 +1463,10 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
                         <button
                           id="btn-unlink-and-clear-data"
-                          disabled={!canChangeDriveFile(settings.currentRole)}
+                          disabled={!isEffectiveAdmin()}
                           onClick={() => setShowClearConfirm(true)}
                           className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
-                            !canChangeDriveFile(settings.currentRole)
+                            !isEffectiveAdmin()
                               ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
                               : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer'
                           }`}
@@ -1603,7 +1672,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 </div>
               )}
 
-              {/* Nút hành động chính: Tạo file mới trên Drive */}
               <button
                 type="button"
                 onClick={() => {
@@ -1614,7 +1682,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 className="w-full flex items-center justify-center space-x-1.5 py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-bold rounded-xl text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-emerald-200 shrink-0" />
-                <span className="truncate">➕ Tạo bảng tính mới trên Drive</span>
+                <span className="truncate">Tạo bảng tính mới trên Drive</span>
               </button>
 
               {/* Danh sách file khả dụng */}
@@ -1775,6 +1843,61 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   <>
                     <CheckCircle className="w-4 h-4" />
                     <span>Tạo &amp; Liên kết</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* File Delete Confirmation Modal */}
+      {filePendingDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl border border-slate-200 p-5 space-y-4 animate-in zoom-in-95 duration-150 text-slate-800">
+            <div className="flex items-center space-x-3">
+              <span className="p-2.5 bg-rose-100 text-rose-600 rounded-xl shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <h3 className="font-bold text-slate-900 text-sm">Xóa File Trên Google Drive</h3>
+                <p className="text-[11px] text-slate-500 truncate" title={filePendingDelete.name}>
+                  {filePendingDelete.name}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 leading-relaxed space-y-1">
+              <p className="font-semibold text-rose-950">⚠️ Bạn có chắc chắn muốn xóa file này?</p>
+              <p className="text-[11px] text-rose-800">
+                File &quot;<strong>{filePendingDelete.name}</strong>&quot; sẽ được xóa khỏi Google Drive và gỡ hoàn toàn khỏi danh sách của ứng dụng.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-1 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={Boolean(deletingFileId)}
+                onClick={() => setFilePendingDelete(null)}
+                className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs cursor-pointer disabled:opacity-50"
+              >
+                Hủy bỏ
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingFileId)}
+                onClick={handleConfirmDeleteFile}
+                className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white font-bold text-xs shadow-sm transition-all cursor-pointer disabled:opacity-50"
+              >
+                {deletingFileId ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Đang xóa...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Xác nhận xóa</span>
                   </>
                 )}
               </button>

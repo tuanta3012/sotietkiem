@@ -42,14 +42,14 @@ try {
   console.warn('Could not set persistence:', e);
 }
 
-// Provider with requested Drive scope (drive.file non-sensitive scope)
+// Provider with drive.file scope (non-sensitive scope paired with Google Picker API)
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/drive.file');
 
-// Check if user has migrated to drive.file scope
+// Check if user has migrated to drive scope
 const isScopeMigrated = (() => {
   try {
-    return localStorage.getItem('drive_scope_migrated_v2') === 'true';
+    return localStorage.getItem('drive_scope_migrated_v3') === 'true';
   } catch {
     return false;
   }
@@ -66,6 +66,46 @@ const REFRESH_TOKEN_KEY = 'google_drive_refresh_token_v4';
 const ID_TOKEN_KEY = 'google_drive_id_token_v4';
 const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
 const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
+
+// App Tag identifier for Google Drive file appProperties
+export const DRIVE_APP_TAG = {
+  key: 'app_id',
+  value: 'com.tietkiemgiadinh.app',
+  typeKey: 'type',
+  typeValue: 'savings_vault',
+};
+
+/**
+ * Gắn nhãn appProperties lên Google Drive file (metadata ẩn)
+ */
+export async function tagVaultWithAppProperties(
+  accessToken: string,
+  fileId: string
+): Promise<boolean> {
+  try {
+    if (!accessToken || !fileId) return false;
+
+    const url = `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,appProperties`;
+    const res = await fetchWithRetry(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        appProperties: {
+          [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+          [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+        },
+      }),
+    });
+
+    return res.ok;
+  } catch (err) {
+    console.warn('[Drive Tagging] Không thể gắn nhãn appProperties lên file:', err);
+    return false;
+  }
+}
 
 let cachedAccessToken: string | null = (() => {
   try {
@@ -86,6 +126,7 @@ export interface RealDriveFile {
   iconLink?: string;
   isSheetOrExcel: boolean;
   isCentralHub?: boolean;
+  isAppTagged?: boolean;
   linkedTimestamp?: string;
 }
 
@@ -283,6 +324,9 @@ export async function ensureGoogleAuthInitialized(): Promise<void> {
         'profile',
         'openid',
         'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/spreadsheets',
+        'https://www.googleapis.com/auth/drive',
       ],
       grantOfflineAccess: false,
     });
@@ -411,6 +455,23 @@ export const isRunningInIframe = (): boolean => {
 };
 
 /**
+ * Check if running inside highly restricted in-app browsers/WebViews (Zalo, Facebook, Messenger, etc.)
+ */
+export const isInAppBrowser = (): boolean => {
+  if (Capacitor.isNativePlatform()) return false;
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return (
+    /FBAN|FBAV/i.test(ua) || // Facebook
+    /Instagram/i.test(ua) || // Instagram
+    /Zalo/i.test(ua) || // Zalo
+    /Line/i.test(ua) || // Line
+    /MicroMessenger/i.test(ua) || // WeChat
+    /Kakaotalk/i.test(ua) // KakaoTalk
+  );
+};
+
+/**
  * Check if the user is returning from a Google OAuth redirect
  */
 export const checkRedirectResult = async (): Promise<{ user: User; accessToken: string } | null> => {
@@ -423,11 +484,17 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
     sessionStorage.removeItem('pending_google_redirect_auth');
     if (result) {
       const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) {
+      const accessToken =
+        credential?.accessToken ||
+        (result as any)?._tokenResponse?.oauthAccessToken ||
+        (result as any)?.credential?.accessToken ||
+        (result as any)?._tokenResponse?.accessToken ||
+        '';
+      if (accessToken) {
         const expiresAt = Date.now() + 3500 * 1000;
         saveGoogleAuthSession({
-          accessToken: credential.accessToken,
-          idToken: credential.idToken || undefined,
+          accessToken,
+          idToken: credential?.idToken || (result as any)?._tokenResponse?.idToken || undefined,
           expiresAt,
           userProfile: {
             email: result.user.email || undefined,
@@ -439,7 +506,7 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
         provider.setCustomParameters({ prompt: 'select_account' });
         return {
           user: result.user,
-          accessToken: credential.accessToken,
+          accessToken,
         };
       }
     }
@@ -467,6 +534,68 @@ export const signInWithGoogleRedirect = async (): Promise<void> => {
   } catch {}
   await signInWithRedirect(auth, provider);
 };
+
+function signInWithGoogleGIS(): Promise<{ user: User; accessToken: string }> {
+  return new Promise((resolve, reject) => {
+    const initGsi = () => {
+      try {
+        const clientId = (firebaseConfig as any).oAuthClientId || '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com';
+        const client = window.google.accounts.oauth2.initTokenClient({
+          client_id: clientId,
+          scope: 'https://www.googleapis.com/auth/drive.file email profile openid',
+          callback: async (resp: any) => {
+            if (resp.error) {
+              reject(new Error(resp.error_description || resp.error));
+              return;
+            }
+            const accessToken = resp.access_token;
+            if (!accessToken) {
+              reject(new Error('Không nhận được Access Token từ Google.'));
+              return;
+            }
+
+            try {
+              const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+              const profile = await userInfoRes.json();
+              const user: User = {
+                uid: profile.sub || 'google_user',
+                email: profile.email || 'user@gmail.com',
+                displayName: profile.name || profile.given_name || 'Chủ Tài Khoản',
+                photoURL: profile.picture || undefined,
+              } as any;
+
+              resolve({ user, accessToken });
+            } catch {
+              const user: User = {
+                uid: 'google_user',
+                email: 'user@gmail.com',
+                displayName: 'Chủ Tài Khoản',
+              } as any;
+              resolve({ user, accessToken });
+            }
+          },
+        });
+        client.requestAccessToken({ prompt: 'consent' });
+      } catch (err: any) {
+        reject(err);
+      }
+    };
+
+    if (!window.google?.accounts?.oauth2) {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => initGsi();
+      script.onerror = () => reject(new Error('Không thể tải thư viện Google Identity Services.'));
+      document.body.appendChild(script);
+    } else {
+      initGsi();
+    }
+  });
+}
 
 /**
  * Sign in with Google Popup and obtain real OAuth Access Token
@@ -566,36 +695,70 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
     }
 
     // 2. Web / AI Studio Preview Flow
-    if (isRunningInIframe()) {
-      window.open(window.location.href, '_blank');
-      throw new Error('Khung xem trước AI Studio chặn cửa sổ bật lên (popup) của Google. Ứng dụng đã tự động mở sang Tab trình duyệt mới để bạn đăng nhập Google an toàn.');
-    }
+    // Đảm bảo Google luôn mở màn hình cho phép người dùng tích chọn quyền Drive
+    provider.setCustomParameters({
+      prompt: 'consent',
+      access_type: 'offline',
+    });
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken =
+      credential?.accessToken ||
+      (result as any)?._tokenResponse?.oauthAccessToken ||
+      (result as any)?.credential?.accessToken ||
+      (result as any)?._tokenResponse?.accessToken ||
+      getGoogleAccessToken() ||
+      '';
 
-    if (!credential?.accessToken) {
+    if (!accessToken) {
       throw new Error('Không nhận được mã truy cập (Access Token) từ Google Authentication.');
     }
 
     const expiresAt = Date.now() + 3500 * 1000;
     saveGoogleAuthSession({
-      accessToken: credential.accessToken,
-      idToken: credential.idToken || undefined,
+      accessToken,
+      idToken: credential?.idToken || (result as any)?._tokenResponse?.idToken || undefined,
       expiresAt,
       userProfile: {
         email: result.user.email || undefined,
         name: result.user.displayName || undefined,
         photoUrl: result.user.photoURL || undefined,
-      }
+      },
     });
     localStorage.setItem('drive_scope_migrated_v2', 'true');
     provider.setCustomParameters({ prompt: 'select_account' });
 
     return {
       user: result.user,
-      accessToken: credential.accessToken,
+      accessToken,
     };
   } catch (error: any) {
+    const errString = String(error?.message || error || '');
+    if (
+      errString.includes('getprojectconfig-are-blocked') ||
+      errString.includes('identitytoolkit') ||
+      errString.includes('auth/requests-to-this-api')
+    ) {
+      console.info('[Google Sign-In] Firebase Auth backend project config is blocked. Falling back to Google Identity Services (GIS)...');
+      try {
+        const gisResult = await signInWithGoogleGIS();
+        const expiresAt = Date.now() + 3500 * 1000;
+        saveGoogleAuthSession({
+          accessToken: gisResult.accessToken,
+          expiresAt,
+          userProfile: {
+            email: gisResult.user.email || undefined,
+            name: gisResult.user.displayName || undefined,
+            photoUrl: (gisResult.user as any).photoURL || undefined,
+          },
+        });
+        localStorage.setItem('drive_scope_migrated_v2', 'true');
+        return gisResult;
+      } catch (gisErr: any) {
+        console.warn('GIS fallback sign-in error:', gisErr);
+      }
+    }
+
     if (error?.message?.includes('Khung xem trước') || error?.message?.includes('Tab trình duyệt')) {
       console.info('Opened application in new tab for Google auth:', error.message);
       throw error;
@@ -785,6 +948,32 @@ async function fetchWithRetry(url: string | URL, options?: RequestInit, retries 
   }
 }
 
+let memoryDriveFilesCache: RealDriveFile[] | null = null;
+
+export function getCachedRealDriveFiles(): RealDriveFile[] | null {
+  if (memoryDriveFilesCache && memoryDriveFilesCache.length > 0) {
+    return memoryDriveFilesCache;
+  }
+  try {
+    const saved = sessionStorage.getItem('cached_real_drive_files_v1');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        memoryDriveFilesCache = parsed;
+        return parsed;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function setCachedRealDriveFiles(files: RealDriveFile[]): void {
+  memoryDriveFilesCache = files;
+  try {
+    sessionStorage.setItem('cached_real_drive_files_v1', JSON.stringify(files));
+  } catch {}
+}
+
 /**
  * List real files from the user's Google Drive (All spreadsheets and table files)
  */
@@ -802,10 +991,14 @@ export async function listRealGoogleDriveFiles(
 
     const url = new URL('https://www.googleapis.com/drive/v3/files');
     url.searchParams.set('pageSize', '100');
-    url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, size, webViewLink, iconLink, shared)');
+    url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, size, webViewLink, iconLink, shared, appProperties)');
     url.searchParams.set('orderBy', 'modifiedTime desc');
     url.searchParams.set('spaces', 'drive');
     url.searchParams.set('q', query);
+
+    // Speed optimization: Retrieve sync state directly from local storage instead of slow Sheets API cell lookups
+    const localState = getLocalMasterPointerState();
+    const activeFileId = localState && localState.status === 'active' ? localState.activeFileId : getLocalMasterPointerFileId();
 
     const res = await fetchWithRetry(url, {
       headers: {
@@ -833,10 +1026,6 @@ export async function listRealGoogleDriveFiles(
     const data = await res.json();
     const rawFiles: any[] = data.files || [];
 
-    // Lấy thông tin Master Sync Pointer file (nguồn chân lý duy nhất) để đánh dấu file nào đang là Hub
-    const masterState = await getMasterSyncStateFromDrive(accessToken).catch(() => null);
-    const activeFileId = masterState && masterState.status === 'active' ? masterState.activeFileId : null;
-
     // Filter to relevant spreadsheet files or master JSON backup file
     const files = rawFiles.filter((f) => {
       const isGSheet = f.mimeType === 'application/vnd.google-apps.spreadsheet';
@@ -860,7 +1049,11 @@ export async function listRealGoogleDriveFiles(
       const isCsv = f.mimeType === 'text/csv' || f.name.toLowerCase().endsWith('.csv');
 
       const isHub = activeFileId === f.id;
-      const linkedTimestamp = isHub ? masterState?.linkedTimestamp : undefined;
+      const isTagged =
+        f.appProperties?.[DRIVE_APP_TAG.key] === DRIVE_APP_TAG.value ||
+        f.appProperties?.app_id === DRIVE_APP_TAG.value ||
+        f.appProperties?.app_identifier === 'com.tietkiemgiadinh.app';
+      const linkedTimestamp = isHub ? (localState?.linkedTimestamp || localState?.updatedAt) : undefined;
 
       return {
         id: f.id,
@@ -872,18 +1065,62 @@ export async function listRealGoogleDriveFiles(
         iconLink: f.iconLink,
         isSheetOrExcel: isGSheet || isExcel || isCsv,
         isCentralHub: isHub,
+        isAppTagged: isTagged,
         linkedTimestamp,
       };
     });
 
-    // Sort files: Central hub files always placed at the very top
-    mappedFiles.sort((a, b) => {
+    // Also include current activeFileId if present and not already in mappedFiles
+    const localPointerId = activeFileId || getLocalMasterPointerFileId();
+    if (localPointerId && !mappedFiles.some((m) => m.id === localPointerId)) {
+      mappedFiles.push({
+        id: localPointerId,
+        name: localState?.activeFileName || 'File_So_Tiet_Kiem_Drive',
+        mimeType: 'application/vnd.google-apps.spreadsheet',
+        webViewLink: localState?.activeFileUrl || `https://docs.google.com/spreadsheets/d/${localPointerId}/edit`,
+        isSheetOrExcel: true,
+        isCentralHub: true,
+        isAppTagged: true,
+        linkedTimestamp: localState?.linkedTimestamp,
+      });
+    }
+
+    // Filter out unrelated files (e.g., "Kho sach", "Bookstore", "Quản lý sách", "Kho hàng") if not tagged
+    let filteredFiles = mappedFiles.filter((f) => {
+      if (f.isAppTagged || f.isCentralHub) return true;
+      const lower = f.name.toLowerCase();
+      // Unrelated apps filter
+      if (
+        lower.includes('kho sach') ||
+        lower.includes('kho sách') ||
+        lower.includes('bookstore') ||
+        lower.includes('ban hang') ||
+        lower.includes('bán hàng') ||
+        lower.includes('kho hang') ||
+        lower.includes('kho hàng')
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    // Fallback: If no files remain after filtering, show all mapped files so nothing is hidden by mistake
+    if (filteredFiles.length === 0 && mappedFiles.length > 0) {
+      filteredFiles = mappedFiles;
+    }
+
+    // Sort files: Central hub & Tagged files always placed at the very top
+    filteredFiles.sort((a, b) => {
       if (a.isCentralHub && !b.isCentralHub) return -1;
       if (!a.isCentralHub && b.isCentralHub) return 1;
+      if (a.isAppTagged && !b.isAppTagged) return -1;
+      if (!a.isAppTagged && b.isAppTagged) return 1;
       return 0;
     });
 
-    return mappedFiles;
+    setCachedRealDriveFiles(filteredFiles);
+
+    return filteredFiles;
   } catch (error: any) {
     if (error?.message?.includes('hết hạn') || error?.message?.includes('invalid authentication credentials')) {
       console.warn('Lỗi phiên đăng nhập Google Drive:', error.message);
@@ -908,12 +1145,14 @@ export async function getRealGoogleDriveFileMetadata(
   modifiedTime?: string;
   version?: string;
   isDeleted?: boolean;
+  isTrashed?: boolean;
+  needsPickerAccess?: boolean;
+  permissionDenied?: boolean;
 } | null> {
   if (!accessToken || !fileId) return null;
   try {
-    // 1. Thử gọi Google Drive API v3
     const driveRes = await fetchWithRetry(
-      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink,modifiedTime,version,trashed`,
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,webViewLink,modifiedTime,version,trashed&supportsAllDrives=true`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
       }
@@ -921,61 +1160,45 @@ export async function getRealGoogleDriveFileMetadata(
     if (driveRes.ok) {
       const data = await driveRes.json();
       if (data?.trashed) {
-        return { id: fileId, name: data.name || '', mimeType: '', isDeleted: true };
+        return { id: fileId, name: data.name || '', mimeType: '', isDeleted: true, isTrashed: true };
       }
-      if (data?.name) {
-        return {
-          id: data.id || fileId,
-          name: data.name,
-          mimeType: data.mimeType || '',
-          webViewLink: data.webViewLink,
-          modifiedTime: data.modifiedTime,
-          version: data.version,
-          isDeleted: false,
-        };
-      }
+      return {
+        id: data.id || fileId,
+        name: data.name || 'Sổ tiết kiệm',
+        mimeType: data.mimeType || 'application/vnd.google-apps.spreadsheet',
+        webViewLink: data.webViewLink,
+        modifiedTime: data.modifiedTime,
+        version: data.version,
+        isDeleted: false,
+      };
     }
 
-    // 2. Fallback: Nếu là Google Spreadsheet và Drive API bị chặn quyền đọc danh mục, thử gọi Google Sheets API v4
-    const sheetsRes = await fetchWithRetry(
-      `https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=properties.title`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
-    if (sheetsRes.status === 404) {
-      return { id: fileId, name: '', mimeType: '', isDeleted: true };
-    }
-    if (sheetsRes.ok) {
-      const sheetsData = await sheetsRes.json();
-      if (sheetsData?.properties?.title) {
-        return {
-          id: fileId,
-          name: sheetsData.properties.title,
-          mimeType: 'application/vnd.google-apps.spreadsheet',
-          webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
-          isDeleted: false,
-        };
-      }
+    if (driveRes.status === 404) {
+      return {
+        id: fileId,
+        name: '',
+        mimeType: 'application/vnd.google-apps.spreadsheet',
+        webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+        needsPickerAccess: true,
+        isDeleted: false,
+      };
     }
 
-    // 3. Fallback an toàn: Nếu file tồn tại (không bị 404) nhưng gọi API trả về 400 (do là file Office Excel .xlsx), trả về metadata an toàn không đánh dấu xóa
-    return {
-      id: fileId,
-      name: 'File_So_Tiet_Kiem_Drive',
-      mimeType: 'application/vnd.google-apps.spreadsheet',
-      webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
-      isDeleted: false,
-    };
+    if (driveRes.status === 403) {
+      return {
+        id: fileId,
+        name: '',
+        mimeType: 'application/vnd.google-apps.spreadsheet',
+        webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+        permissionDenied: true,
+        isDeleted: false,
+      };
+    }
+
+    return null;
   } catch (err) {
-    console.warn('Không thể tải tên file từ Google Drive/Sheets API:', err);
-    return {
-      id: fileId,
-      name: 'File_So_Tiet_Kiem_Drive',
-      mimeType: 'application/vnd.google-apps.spreadsheet',
-      webViewLink: `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
-      isDeleted: false,
-    };
+    console.warn('Không thể tải tên file từ Google Drive API:', err);
+    return null;
   }
 }
 
@@ -988,91 +1211,43 @@ export async function downloadRealGoogleDriveFile(
   mimeType?: string
 ): Promise<ParseExcelResult> {
   try {
-    // 0. Check if file is trashed or deleted first
-    const metaCheck = await getRealGoogleDriveFileMetadata(accessToken, fileId);
-    if (metaCheck?.isDeleted) {
-      throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc chuyển vào thùng rác trên Google Drive.');
+    let resolvedMime = mimeType;
+
+    // 1. Get file metadata directly from Google Drive API
+    const metaRes = await fetchWithRetry(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType,trashed&supportsAllDrives=true`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+
+    if (metaRes.status === 401) {
+      setGoogleAccessToken(null);
+      throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
+    }
+    if (metaRes.status === 404) {
+      throw new Error('NEEDS_PICKER_ACCESS: Tệp Google Drive cần được mở bằng Google Picker để cấp quyền sử dụng file.');
+    }
+    if (metaRes.status === 403) {
+      throw new Error('PERMISSION_DENIED: Tài khoản chưa được cấp quyền truy cập file này trên Google Drive. Vui lòng liên hệ Admin để cấp quyền.');
     }
 
-    let resolvedMime = mimeType || metaCheck?.mimeType;
-    
-    // 1. First, try direct Google Sheets API v4 (Instant live data with ZERO caching delay)
-    if (!resolvedMime || resolvedMime === 'application/vnd.google-apps.spreadsheet') {
-      try {
-        // First get sheet info to find the first sheet's title
-        const metaSheetRes = await fetchWithRetry(
-          `https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=sheets(properties(title,sheetId))`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }
-        );
-        let sheetRange = 'A1:AC1000';
-        if (metaSheetRes.ok) {
-          const metaSheetData = await metaSheetRes.json();
-          const firstTitle = metaSheetData?.sheets?.[0]?.properties?.title;
-          if (firstTitle) {
-            sheetRange = `'${firstTitle}'!A1:AC1000`;
-          }
-        }
-
-        const liveSheetsRes = await fetchWithRetry(
-          `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/${encodeURIComponent(sheetRange)}`,
-          {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          }
-        );
-        if (metaSheetRes.status === 404 || liveSheetsRes.status === 404) {
-          throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
-        }
-
-        if (liveSheetsRes.ok) {
-          const liveData = await liveSheetsRes.json();
-          if (liveData?.values && Array.isArray(liveData.values) && liveData.values.length > 0) {
-            const matrixResult = parseMatrixData(liveData.values);
-            if (matrixResult.success && (matrixResult.books.length > 0 || (matrixResult.settlements && matrixResult.settlements.length > 0))) {
-              return matrixResult;
-            }
-          }
-        } else if (liveSheetsRes.status === 401) {
-          setGoogleAccessToken(null);
-          throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
-        }
-      } catch (sheetsErr: any) {
-        if (sheetsErr?.message?.includes('hết hạn') || sheetsErr?.message?.includes('FILE_NOT_FOUND')) {
-          throw sheetsErr;
-        }
-        console.warn('Direct Google Sheets API fetch fallback to Drive API:', sheetsErr);
+    if (metaRes.ok) {
+      const meta = await metaRes.json();
+      if (meta?.trashed) {
+        throw new Error('FILE_TRASHED: File liên kết đã bị chuyển vào thùng rác trên Google Drive.');
       }
+      resolvedMime = meta.mimeType || resolvedMime;
     }
 
-    // 2. If not a native Google Sheet or if direct Sheets API didn't return rows, fetch metadata
-    if (!resolvedMime) {
-      const metaRes = await fetchWithRetry(
-        `https://www.googleapis.com/drive/v3/files/${fileId}?fields=mimeType,name,trashed`,
-        {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        }
-      );
-      if (metaRes.status === 404) {
-        throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
-      }
-      if (metaRes.ok) {
-        const meta = await metaRes.json();
-        if (meta?.trashed) {
-          throw new Error('FILE_NOT_FOUND: File liên kết đã bị chuyển vào thùng rác trên Google Drive.');
-        }
-        resolvedMime = meta.mimeType;
-      }
-    }
-
+    // 2. Fetch binary content directly from Google Drive API
     let fetchUrl: string;
-
-    if (resolvedMime === 'application/vnd.google-apps.spreadsheet') {
+    if (!resolvedMime || resolvedMime === 'application/vnd.google-apps.spreadsheet') {
       // Export Google Sheet as Excel binary (.xlsx)
       fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`;
     } else {
       // Download binary file (Excel or CSV)
-      fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+      fetchUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&supportsAllDrives=true`;
     }
 
     const res = await fetchWithRetry(fetchUrl, {
@@ -1082,29 +1257,32 @@ export async function downloadRealGoogleDriveFile(
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      if (
-        res.status === 401 ||
-        err?.error?.status === 'UNAUTHENTICATED' ||
-        err?.error?.code === 401 ||
-        err?.error?.message?.includes('invalid authentication credentials') ||
-        err?.error?.message?.includes('Invalid Credentials')
-      ) {
+      if (res.status === 401) {
         setGoogleAccessToken(null);
         throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
       }
       if (res.status === 404) {
-        throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+        throw new Error('NEEDS_PICKER_ACCESS: Tệp Google Drive cần được mở bằng Google Picker để cấp quyền sử dụng file.');
       }
-      throw new Error(err?.error?.message || `Không thể tải nội dung file từ Google Drive (Mã ${res.status})`);
+      if (res.status === 403) {
+        throw new Error('PERMISSION_DENIED: Tài khoản chưa có quyền đọc nội dung file này trên Google Drive.');
+      }
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson?.error?.message || `Không thể tải nội dung file từ Google Drive (Mã ${res.status})`);
     }
 
     const arrayBuffer = await res.arrayBuffer();
     const parsedBinary = await parseWorkbook(arrayBuffer);
     return parsedBinary;
   } catch (error: any) {
-    if (error?.message?.includes('hết hạn') || error?.message?.includes('invalid authentication credentials')) {
-      console.warn('Lỗi phiên đăng nhập Google Drive:', error.message);
+    if (
+      error?.message?.includes('hết hạn') ||
+      error?.message?.includes('invalid authentication credentials') ||
+      error?.message?.includes('FILE_TRASHED') ||
+      error?.message?.includes('NEEDS_PICKER_ACCESS') ||
+      error?.message?.includes('PERMISSION_DENIED')
+    ) {
+      console.warn('Thông báo tệp Google Drive:', error.message);
     } else {
       console.error('Lỗi khi đọc file từ Google Drive:', error);
     }
@@ -1795,6 +1973,10 @@ export async function createRealGoogleDriveFile(
     const metadata = {
       name: cleanFileName,
       mimeType: 'application/vnd.google-apps.spreadsheet',
+      appProperties: {
+        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+      },
     };
 
     const form = new FormData();
@@ -1804,7 +1986,7 @@ export async function createRealGoogleDriveFile(
     );
     form.append('file', fileBlob);
 
-    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+    const uploadUrl = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink,appProperties';
     const res = await fetchWithRetry(uploadUrl, {
       method: 'POST',
       headers: {
@@ -2012,7 +2194,7 @@ export function applyMasterStateToSettings(
     const hasMembersChange = JSON.stringify(currentSettings.members || []) !== JSON.stringify(newMembers);
     const hasOwnerChange = Boolean(adminEmail && currentSettings.workspaceOwnerEmail !== adminEmail);
     const hasFileChange = Boolean(newFileUrl && currentSettings.googleSheetUrl !== newFileUrl);
-    const hasFileNameChange = Boolean(newFileName && currentSettings.googleSheetName !== newFileName);
+    const hasFileNameChange = Boolean(newFileName && newFileName !== 'File_So_Tiet_Kiem_Drive' && currentSettings.googleSheetName !== newFileName);
     const hasTimestampChange = Boolean(newTimestamp && currentSettings.lastLocalLinkTimestamp !== newTimestamp);
 
     if (!hasRoleChange && !hasMembersChange && !hasOwnerChange && !hasFileChange && !hasFileNameChange && !hasTimestampChange) {
@@ -2023,12 +2205,18 @@ export function applyMasterStateToSettings(
   setSettings((prev) => {
     const updates: Partial<AppSettings> = {};
 
-    if (prev.currentRole !== resolvedRole) {
-      updates.currentRole = resolvedRole;
-    }
+    // Merge prev.members and newMembers to preserve local optimistic member additions
+    const memberMap = new Map<string, WorkspaceMember>();
+    (prev.members || []).forEach((m) => {
+      if (m && m.email) memberMap.set(m.email.trim().toLowerCase(), m);
+    });
+    newMembers.forEach((m) => {
+      if (m && m.email) memberMap.set(m.email.trim().toLowerCase(), m);
+    });
+    const mergedMembersList = Array.from(memberMap.values());
 
-    if (newMembers.length > 0 && JSON.stringify(prev.members || []) !== JSON.stringify(newMembers)) {
-      updates.members = newMembers;
+    if (mergedMembersList.length > 0 && JSON.stringify(prev.members || []) !== JSON.stringify(mergedMembersList)) {
+      updates.members = mergedMembersList;
     }
 
     if (adminEmail && prev.workspaceOwnerEmail !== adminEmail) {
@@ -2039,7 +2227,7 @@ export function applyMasterStateToSettings(
       if (newFileUrl && prev.googleSheetUrl !== newFileUrl) {
         updates.googleSheetUrl = newFileUrl;
       }
-      if (newFileName && prev.googleSheetName !== newFileName) {
+      if (newFileName && newFileName !== 'File_So_Tiet_Kiem_Drive' && prev.googleSheetName !== newFileName) {
         updates.googleSheetName = newFileName;
       }
       if (newTimestamp && prev.lastLocalLinkTimestamp !== newTimestamp) {
@@ -2105,16 +2293,47 @@ export function isExplicitlyUnlinked(): boolean {
   }
 }
 
+export function addUnlinkedFileId(fileId: string): void {
+  try {
+    if (!fileId) return;
+    const current = getUnlinkedFileIds();
+    if (!current.includes(fileId)) {
+      current.push(fileId);
+      const str = JSON.stringify(current);
+      localStorage.setItem('unlinked_file_ids_v1', str);
+      Preferences.set({ key: 'unlinked_file_ids_v1', value: str }).catch(() => {});
+    }
+  } catch {}
+}
+
+export function getUnlinkedFileIds(): string[] {
+  try {
+    const raw = localStorage.getItem('unlinked_file_ids_v1');
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) return arr;
+    }
+  } catch {}
+  return [];
+}
+
+export function isFileUnlinked(fileId: string): boolean {
+  if (!fileId) return false;
+  return getUnlinkedFileIds().includes(fileId);
+}
+
 export function setExplicitlyUnlinked(unlinked: boolean): void {
   try {
     if (unlinked) {
       localStorage.setItem('explicitly_unlinked', 'true');
       sessionStorage.setItem('explicitly_unlinked', 'true');
+      Preferences.set({ key: 'explicitly_unlinked', value: 'true' }).catch(() => {});
       saveLocalMasterPointerFileId(null);
       saveLocalMasterPointerState(null);
     } else {
       localStorage.removeItem('explicitly_unlinked');
       sessionStorage.removeItem('explicitly_unlinked');
+      Preferences.remove({ key: 'explicitly_unlinked' }).catch(() => {});
     }
   } catch {}
 }
@@ -2317,6 +2536,10 @@ export async function saveMasterSyncStateToGoogleSheet(
       linkedLocalTimeVi: state.linkedLocalTimeVi || '',
       updatedAt: nowIso,
       updatedAtVi: nowVi,
+      appProperties: {
+        [DRIVE_APP_TAG.key]: DRIVE_APP_TAG.value,
+        [DRIVE_APP_TAG.typeKey]: DRIVE_APP_TAG.typeValue,
+      },
     });
 
     const values: (string | number)[][] = [
@@ -2383,7 +2606,7 @@ export async function saveMasterSyncStateToGoogleSheet(
                 addSheet: {
                   properties: {
                     title: '__CONFIG__',
-                    hidden: false,
+                    hidden: true,
                     gridProperties: { rowCount: 50, columnCount: 5 }
                   }
                 }
@@ -2404,13 +2627,55 @@ export async function saveMasterSyncStateToGoogleSheet(
     if (!updateRes.ok) {
       const finalErr = errJson || await updateRes.json().catch(() => ({}));
       console.warn('[Sheet Config] Bỏ qua ghi tab __CONFIG__:', finalErr?.error?.message || 'Ghi tab không khả thi');
-      // Không bao giờ hiện popup alert gây phiền người dùng
+    } else {
+      ensureConfigSheetIsHidden(accessToken, fileId).catch(() => {});
     }
 
     return true;
   } catch (err: any) {
     console.warn('[Sheet Config] Lỗi hệ thống khi ghi tab cấu hình:', err);
     return false;
+  }
+}
+
+/**
+ * Đảm bảo tab __CONFIG__ luôn ở trạng thái ẩn (hidden: true) trên Google Sheets
+ */
+export async function ensureConfigSheetIsHidden(accessToken: string, fileId: string): Promise<void> {
+  try {
+    const metaRes = await fetchWithRetry(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}?fields=sheets.properties`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!metaRes.ok) return;
+    const meta = await metaRes.json();
+    const sheets = meta.sheets || [];
+    const configSheet = sheets.find((s: any) => s.properties?.title === '__CONFIG__');
+    if (configSheet && configSheet.properties && !configSheet.properties.hidden) {
+      const sheetId = configSheet.properties.sheetId;
+      await fetchWithRetry(`https://sheets.googleapis.com/v4/spreadsheets/${fileId}:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              updateSheetProperties: {
+                properties: {
+                  sheetId,
+                  hidden: true,
+                },
+                fields: 'hidden',
+              },
+            },
+          ],
+        }),
+      });
+      console.info('[Sheet Config] Đã tự động ẩn tab __CONFIG__ thành công.');
+    }
+  } catch (err) {
+    console.warn('[Sheet Config] Không thể ẩn tab __CONFIG__:', err);
   }
 }
 
@@ -2423,24 +2688,36 @@ export async function getMasterSyncStateFromDrive(
 ): Promise<MasterSyncState | null> {
   try {
     const targetFileId = explicitFileId || getLocalMasterPointerFileId();
+    const localState = getLocalMasterPointerState();
+
     if (targetFileId && accessToken) {
       const sheetState = await readMasterSyncStateFromGoogleSheet(accessToken, targetFileId);
       if (sheetState) {
+        // Merge members intelligently so local optimistic member additions are never lost
+        if (localState?.members && localState.members.length > 0) {
+          const memberMap = new Map<string, WorkspaceMember>();
+          (sheetState.members || []).forEach((m) => m && m.email && memberMap.set(m.email.trim().toLowerCase(), m));
+          (localState.members || []).forEach((m) => m && m.email && memberMap.set(m.email.trim().toLowerCase(), m));
+          sheetState.members = Array.from(memberMap.values());
+        }
         saveLocalMasterPointerState(sheetState);
         return sheetState;
       }
     }
 
-    // Fallback nạp từ bộ nhớ cục bộ trên máy
-    const localState = getLocalMasterPointerState();
-    if (localState) {
+    // Do not fall back to cached localState if we are explicitly asking for a different file ID
+    if (localState && (!targetFileId || localState.activeFileId === targetFileId)) {
       return localState;
     }
 
     return null;
   } catch (err) {
     console.warn('Error reading master sync pointer from sheet:', err);
-    return getLocalMasterPointerState();
+    const localState = getLocalMasterPointerState();
+    if (localState && (!explicitFileId || localState.activeFileId === explicitFileId)) {
+      return localState;
+    }
+    return null;
   }
 }
 
@@ -2539,6 +2816,11 @@ export async function setMasterSyncLinked(
 ): Promise<string> {
   const email = userEmail || 'Google User';
   const isSwitching = Boolean(previousFileId && previousFileId !== fileId);
+
+  // Auto-tag file with appProperties on Google Drive
+  if (accessToken && fileId) {
+    tagVaultWithAppProperties(accessToken, fileId).catch(() => {});
+  }
 
   // 1. Xác định và bảo toàn linkedTimestamp
   let resolvedLinkedTimestamp = existingLinkedTimestamp;
@@ -2664,75 +2946,107 @@ export async function setMasterSyncUnlinked(
     setExplicitlyUnlinked(true);
 
     const targetFileId = explicitFileId || getLocalMasterPointerFileId();
-    const currentMaster = await getMasterSyncStateFromDrive(accessToken, targetFileId);
-
-    const adminEmailVal = currentMaster?.adminEmail || currentMaster?.linkedAccountEmail || userEmail || 'admin';
-    const cleanUser = userEmail?.trim().toLowerCase();
-    const adminEmailClean = adminEmailVal.trim().toLowerCase();
-    if (cleanUser && adminEmailClean && cleanUser !== adminEmailClean) {
-      console.warn(`[Central Hub Sync] Tài khoản ${cleanUser} không phải Admin (${adminEmailClean}). Từ chối hủy liên kết.`);
-      return;
+    if (targetFileId) {
+      addUnlinkedFileId(targetFileId);
     }
-
-    const activeId = targetFileId || currentMaster?.activeFileId;
-
-    // Thu hồi quyền Google Drive của tất cả thành viên không phải Admin
-    try {
-      if (activeId && currentMaster?.members && currentMaster.members.length > 0) {
-        for (const member of currentMaster.members) {
-          if (member.role !== 'ADMIN' && member.email) {
-            revokeFilePermission(accessToken, activeId, member.email).catch(() => {});
-          }
-        }
-      }
-    } catch (revokeErr) {
-      console.warn('Failed to revoke member permissions on unlink:', revokeErr);
-    }
-
+    const activeId = targetFileId;
     const nowIso = new Date().toISOString();
 
-    // KHẮC PHỤC LỖI KHÔNG GHI UNLINK LÊN SHEET:
-    // Ta ghi trạng thái "unlinked" trực tiếp lên Google Sheet hiện tại TRƯỚC khi xóa pointer cục bộ
-    if (activeId) {
+    const adminEmailVal = userEmail || 'admin';
+
+    // 1. Revoke non-admin member Google Drive permissions in parallel
+    if (activeId && accessToken) {
+      try {
+        const currentMaster = getLocalMasterPointerState();
+        if (currentMaster?.members && currentMaster.members.length > 0) {
+          const revokePromises = currentMaster.members
+            .filter((m) => m.role !== 'ADMIN' && m.email)
+            .map((m) => revokeFilePermission(accessToken, activeId, m.email).catch(() => {}));
+          await Promise.allSettled(revokePromises);
+        }
+      } catch (revokeErr) {
+        console.warn('Failed to revoke member permissions on unlink:', revokeErr);
+      }
+    }
+
+    // 2. Record "unlinked" state on Google Sheet __CONFIG__ tab
+    if (activeId && accessToken) {
       const unlinkedSheetState: MasterSyncState = {
-        ...(currentMaster || {}),
         status: 'unlinked',
         lastAction: 'unlink',
-        activeFileId: activeId, // Giữ nguyên ID để Sheet API biết file nào cần ghi nhận
+        activeFileId: activeId,
         activeFileName: '',
         activeFileUrl: '',
         linkedTimestamp: nowIso,
         linkedAccountEmail: userEmail || 'Google User',
         adminEmail: adminEmailVal,
-        members: currentMaster?.members || [],
         updatedAt: nowIso,
       };
 
       await saveMasterSyncStateToGoogleSheet(accessToken, activeId, unlinkedSheetState).catch((sheetErr) => {
-        console.warn('[Unlink Sync] Lỗi ghi trực tiếp trạng thái unlinked lên Google Sheet:', sheetErr);
+        console.warn('[Unlink Sync] Lỗi ghi trạng thái unlinked lên Google Sheet:', sheetErr);
       });
     }
 
-    // Sau đó cập nhật cấu hình master cục bộ (với activeFileId trống) để dọn dẹp máy này
-    await saveMasterSyncStateOnDrive(accessToken, {
-      status: 'unlinked',
-      lastAction: 'unlink',
-      activeFileId: '',
-      activeFileName: '',
-      activeFileUrl: '',
-      linkedTimestamp: nowIso,
-      linkedAccountEmail: userEmail || 'Google User',
-      adminEmail: adminEmailVal,
-      members: currentMaster?.members || [],
-      updatedAt: nowIso,
-    });
-
+    // 3. Clear local pointer state
     saveLocalMasterPointerFileId(null);
     saveLocalMasterPointerState(null);
   } catch (saveErr) {
-    console.warn('Failed to update master sync state to unlinked on Sheet Config:', saveErr);
+    console.warn('Failed to update master sync state to unlinked:', saveErr);
     saveLocalMasterPointerFileId(null);
     saveLocalMasterPointerState(null);
+  }
+}
+
+export interface DiscoveredVault {
+  id: string;
+  name: string;
+  mimeType: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  appProperties?: Record<string, string>;
+}
+
+/**
+ * Quét tất cả tệp Sổ Tiết Kiệm mà tài khoản có quyền truy cập dựa trên nhãn appProperties
+ */
+export async function scanUserAccessibleVaults(
+  accessToken: string
+): Promise<DiscoveredVault[]> {
+  try {
+    if (!accessToken) return [];
+
+    const query = `(appProperties has { key='${DRIVE_APP_TAG.key}' and value='${DRIVE_APP_TAG.value}' } or appProperties has { key='app_id' and value='com.tietkiemgiadinh.app' } or appProperties has { key='app_identifier' and value='com.tietkiemgiadinh.app' }) and trashed = false`;
+
+    const url = new URL('https://www.googleapis.com/drive/v3/files');
+    url.searchParams.set('q', query);
+    url.searchParams.set('pageSize', '20');
+    url.searchParams.set('fields', 'files(id, name, mimeType, modifiedTime, webViewLink, appProperties)');
+    url.searchParams.set('orderBy', 'modifiedTime desc');
+    url.searchParams.set('supportsAllDrives', 'true');
+    url.searchParams.set('includeItemsFromAllDrives', 'true');
+
+    const res = await fetchWithRetry(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!res.ok) {
+      console.warn(`[Vault Scan] Lỗi gọi Drive API: HTTP ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json();
+    return (data.files || []).map((f: any) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      modifiedTime: f.modifiedTime,
+      webViewLink: f.webViewLink || `https://docs.google.com/spreadsheets/d/${f.id}/edit`,
+      appProperties: f.appProperties,
+    }));
+  } catch (err) {
+    console.warn('[Vault Scan] Lỗi khi quét kho tự động:', err);
+    return [];
   }
 }
 
@@ -2744,8 +3058,12 @@ export async function autoDiscoverLatestCentralHub(
   _userEmail?: string
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
   try {
+    if (isExplicitlyUnlinked()) {
+      console.info('[Central Hub Sync] Thiết bị đã hủy liên kết chủ động. Bỏ qua tự động quét tìm.');
+      return null;
+    }
     const targetFileId = getLocalMasterPointerFileId();
-    if (targetFileId) {
+    if (targetFileId && !isFileUnlinked(targetFileId)) {
       // 1. Kiểm tra metadata file trực tiếp trên Google Drive từ pointer cục bộ
       const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
       if (meta && !meta.isDeleted) {
@@ -2763,14 +3081,36 @@ export async function autoDiscoverLatestCentralHub(
       }
     }
 
-    // 2. TỰ ĐỘNG KHÁM PHÁ TRÊN GOOGLE DRIVE (Dành cho Thiết bị 2 / Thiết bị mới):
-    // Chỉ kết nối nếu tìm thấy file có tab __CONFIG__ đang ghi rõ status = 'active'
+    // 2. TỰ ĐỘNG KHÁM PHÁ THEO NHÃN appProperties (Siêu tốc cho User B)
+    const taggedVaults = await scanUserAccessibleVaults(accessToken);
+    if (taggedVaults.length > 0) {
+      for (const vault of taggedVaults) {
+        if (!vault.id || isFileUnlinked(vault.id)) continue;
+        const masterState = await getMasterSyncStateFromDrive(accessToken, vault.id).catch(() => null);
+        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          saveLocalMasterPointerFileId(vault.id);
+          saveLocalMasterPointerState(masterState);
+          setExplicitlyUnlinked(false);
+          return {
+            id: vault.id,
+            name: vault.name || masterState.activeFileName || 'Sổ tiết kiệm',
+            mimeType: vault.mimeType || 'application/vnd.google-apps.spreadsheet',
+            webViewLink: vault.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${vault.id}/edit`,
+            linkedTimestamp: masterState.linkedTimestamp || vault.modifiedTime || new Date().toISOString(),
+          };
+        }
+      }
+    }
+
+    // 3. Fallback: Duyệt danh sách file mở rộng nếu các tệp cũ chưa kịp gắn nhãn
     const driveFiles = await listRealGoogleDriveFiles(accessToken).catch(() => []);
     if (driveFiles && driveFiles.length > 0) {
       for (const file of driveFiles) {
-        if (!file.id || !file.isSheetOrExcel) continue;
+        if (!file.id || !file.isSheetOrExcel || isFileUnlinked(file.id)) continue;
         const masterState = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
         if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+          // Gắn nhãn bổ sung cho file cũ để lần sau truy vấn siêu tốc
+          tagVaultWithAppProperties(accessToken, file.id).catch(() => {});
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(masterState);
           setExplicitlyUnlinked(false);

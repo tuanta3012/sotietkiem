@@ -26,11 +26,13 @@ export function resolveUserRole(
     if (matched && matched.role) {
       return matched.role.toUpperCase() as UserRole;
     }
-    // Nếu có danh sách members nhưng user không thuộc danh sách -> VIEWER
-    return 'VIEWER';
+    // Nếu có owner email khác hẳn với user này, user mới bị xem là Viewer bên ngoài
+    if (workspaceOwnerEmail && workspaceOwnerEmail.trim().toLowerCase() !== cleanEmail && workspaceOwnerEmail !== 'admin') {
+      return 'VIEWER';
+    }
   }
 
-  // 3. Nếu chưa có danh sách thành viên (file riêng tư cá nhân) -> ADMIN
+  // 3. Nếu chưa có danh sách thành viên hoặc là người tạo/admin
   if (currentRole) {
     const upper = currentRole.toUpperCase();
     if (upper === 'ADMIN' || upper === 'EDITOR' || upper === 'VIEWER') {

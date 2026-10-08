@@ -9,7 +9,7 @@ import { Capacitor } from '@capacitor/core';
 import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Preferences } from '@capacitor/preferences';
-import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment } from './types';
+import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, UserRole } from './types';
 import { isUsingSampleData } from './data/historicalGrowth';
 import { Navbar, NavTabType } from './components/Navbar';
 import { LoginModal } from './components/LoginModal';
@@ -31,9 +31,11 @@ import {
   autoDiscoverLatestCentralHub,
   removeMemberFromDriveMaster,
   setExplicitlyUnlinked,
+  isExplicitlyUnlinked,
 } from './utils/googleDriveService';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
 import { sortAndReindexBooks } from './utils/dataTranslator';
+import { resolveUserRole } from './utils/roleHelper';
 import {
   getDynamicAnnualInterestHistory,
   getDynamicBalanceGrowthHistory,
@@ -301,6 +303,13 @@ export default function App() {
             enableBiometricLogin: hasBiometric || prev.enableBiometricLogin,
             notificationsEnabled: hasNotifications || prev.notificationsEnabled,
           };
+          // Nếu người dùng đã hủy liên kết chủ động, không phục hồi googleSheetUrl cũ từ Preferences
+          if (isExplicitlyUnlinked()) {
+            updated.googleSheetUrl = undefined;
+            updated.googleSheetName = undefined;
+            updated.lastSyncTime = undefined;
+            updated.lastLocalLinkTimestamp = undefined;
+          }
           try {
             const json = JSON.stringify(updated);
             localStorage.setItem('savings_settings_v3', json);
@@ -441,6 +450,18 @@ export default function App() {
   const pushBooksToDriveRef = useRef<((b: SavingsBook[], a?: SettlementAdjustment[]) => void) | undefined>(undefined);
   const showSyncStatusRef = useRef<((msg: string) => void) | undefined>(undefined);
 
+  const isOwner = Boolean(
+    currentUser?.email &&
+      settings.workspaceOwnerEmail &&
+      currentUser.email.trim().toLowerCase() === settings.workspaceOwnerEmail.trim().toLowerCase()
+  );
+  const effectiveRole: UserRole = resolveUserRole(
+    currentUser?.email,
+    settings.currentRole,
+    settings.members,
+    settings.workspaceOwnerEmail
+  );
+
   // Savings books core management hook
   const {
     books,
@@ -471,7 +492,7 @@ export default function App() {
     handleDeleteSettlementAdjustment,
     handleDeleteAllAppData,
   } = useSavingsBooks({
-    currentRole: settings.currentRole,
+    currentRole: effectiveRole,
     onPushToDrive: (b, a) => pushBooksToDriveRef.current?.(b, a),
     onShowSyncStatus: (msg) => showSyncStatusRef.current?.(msg),
   });
@@ -686,20 +707,13 @@ export default function App() {
       localStorage.removeItem('google_drive_access_token_v4');
       sessionStorage.removeItem('google_drive_access_token_v4');
       
-      // Xóa sạch dấu vết liên kết file để tránh liên kết tự động sau này
+      // Xóa sạch hoàn toàn cấu hình, role, members, workspace owner và link file để không bị dính cache giữa các tài khoản
+      localStorage.removeItem('savings_settings_v3');
       localStorage.removeItem('last_linked_file_id_v2');
       localStorage.removeItem('master_pointer_file_id');
       localStorage.removeItem('master_sync_state_local_v2');
-      
-      const savedSettings = localStorage.getItem('savings_settings_v3');
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        delete parsed.googleSheetUrl;
-        delete parsed.googleSheetName;
-        delete parsed.lastSyncTime;
-        delete parsed.lastLocalLinkTimestamp;
-        localStorage.setItem('savings_settings_v3', JSON.stringify(parsed));
-      }
+      localStorage.removeItem('unlinked_file_ids_v1');
+      localStorage.removeItem('explicitly_unlinked');
     } catch (err) {
       console.warn('Lỗi khi xóa sạch dữ liệu cục bộ khi đăng xuất:', err);
     }
@@ -709,11 +723,12 @@ export default function App() {
       Preferences.remove({ key: 'savings_auth_user_v3' }).catch(() => {});
       Preferences.remove({ key: 'savings_books_v3' }).catch(() => {});
       Preferences.remove({ key: 'savings_settlements_v3' }).catch(() => {});
+      Preferences.remove({ key: 'savings_settings_v3' }).catch(() => {});
     } catch (err) {
       console.warn('Lỗi khi dọn dẹp Capacitor Preferences:', err);
     }
 
-    // 3. Xóa cứng React State (Bỏ qua hoàn toàn canEditData check của hook) để dọn sạch dữ liệu hiển thị tức thì
+    // 3. Xóa cứng React State để dọn sạch dữ liệu hiển thị tức thì
     setBooks([]);
     setSettlementAdjustments([]);
     clearStaticHistoryFromStorage();
@@ -724,6 +739,9 @@ export default function App() {
       googleSheetName: undefined,
       lastSyncTime: undefined,
       lastLocalLinkTimestamp: undefined,
+      currentRole: 'ADMIN',
+      workspaceOwnerEmail: undefined,
+      members: [],
     }));
   };
 
