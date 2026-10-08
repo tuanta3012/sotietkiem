@@ -13,6 +13,7 @@ import {
   CalendarCheck,
   CalendarX,
   ArrowLeft,
+  ShieldAlert,
 } from 'lucide-react';
 import { BankInfo, SavingsBook } from '../types';
 import {
@@ -159,44 +160,48 @@ export const ManageBanksModal: React.FC<ManageBanksModalProps> = ({
     if (onBanksChanged) onBanksChanged();
   };
 
+  const [bankPendingDelete, setBankPendingDelete] = useState<{ bank: BankInfo; usageCount: number; totalAmount: number } | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
   const handleDelete = (bank: BankInfo) => {
     const bankUsage = books.filter(
       (b) => b.bankId.toLowerCase() === bank.id.toLowerCase() && b.status === 'active'
     );
 
-    let confirmMsg = `Bạn có chắc muốn xóa ngân hàng "${bank.shortName}" khỏi danh sách không?`;
-    if (bankUsage.length > 0) {
-      const totalAmount = bankUsage.reduce((s, b) => s + b.principal, 0);
-      confirmMsg = `⚠️ CẢNH BÁO: Ngân hàng "${bank.shortName}" hiện đang có ${bankUsage.length} sổ (${formatShortVND(
-        totalAmount
-      )}) trong danh mục!\n\nDữ liệu các sổ cũ vẫn được giữ nguyên. Bạn có muốn tiếp tục xóa ngân hàng này không?`;
-    }
+    const totalAmount = bankUsage.reduce((s, b) => s + b.principal, 0);
+    setBankPendingDelete({
+      bank,
+      usageCount: bankUsage.length,
+      totalAmount,
+    });
+  };
 
-    if (window.confirm(confirmMsg)) {
-      deleteBank(bank.id);
-      setVersion((v) => v + 1);
-      if (editingBankId === bank.id) {
-        setIsFormOpen(false);
-        setEditingBankId(null);
-      }
-      showToast(`Đã xóa ngân hàng ${bank.shortName}`);
-      if (onBanksChanged) onBanksChanged();
+  const handleConfirmDeleteBank = () => {
+    if (!bankPendingDelete) return;
+    const { bank } = bankPendingDelete;
+    deleteBank(bank.id);
+    setVersion((v) => v + 1);
+    if (editingBankId === bank.id) {
+      setIsFormOpen(false);
+      setEditingBankId(null);
     }
+    showToast(`Đã xóa ngân hàng ${bank.shortName}`);
+    if (onBanksChanged) onBanksChanged();
+    setBankPendingDelete(null);
+  };
+
+  const handleConfirmResetDefaults = () => {
+    resetBanksToDefault();
+    setVersion((v) => v + 1);
+    setIsFormOpen(false);
+    setEditingBankId(null);
+    showToast('Đã khôi phục danh sách ngân hàng mặc định');
+    if (onBanksChanged) onBanksChanged();
+    setShowResetConfirm(false);
   };
 
   const handleResetDefaults = () => {
-    if (
-      window.confirm(
-        'Khôi phục danh sách ngân hàng về chuẩn mặc định ban đầu?'
-      )
-    ) {
-      resetBanksToDefault();
-      setVersion((v) => v + 1);
-      setIsFormOpen(false);
-      setEditingBankId(null);
-      showToast('Đã khôi phục danh sách ngân hàng mặc định');
-      if (onBanksChanged) onBanksChanged();
-    }
+    setShowResetConfirm(true);
   };
 
   return (
@@ -534,11 +539,78 @@ export const ManageBanksModal: React.FC<ManageBanksModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold"
+            className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
           >
             Đóng
           </button>
         </div>
+
+        {/* Delete Bank Confirmation Dialog */}
+        {bankPendingDelete && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-3 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+            <div className="bg-white rounded-2xl p-4 max-w-sm w-full shadow-2xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2 text-rose-600 font-bold text-sm">
+                <ShieldAlert className="w-5 h-5 shrink-0" />
+                <span>Xác nhận xóa ngân hàng?</span>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Bạn có chắc muốn xóa ngân hàng <strong>{bankPendingDelete.bank.shortName}</strong> ({bankPendingDelete.bank.name}) khỏi danh mục?
+              </p>
+              {bankPendingDelete.usageCount > 0 && (
+                <div className="p-2 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 space-y-1">
+                  <strong>⚠️ Lưu ý:</strong> Ngân hàng này đang có <strong>{bankPendingDelete.usageCount} sổ</strong> ({formatShortVND(bankPendingDelete.totalAmount)}) trong danh mục. Dữ liệu các sổ cũ vẫn được giữ nguyên.
+                </div>
+              )}
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setBankPendingDelete(null)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteBank}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+                >
+                  Xác nhận xóa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reset Banks Confirmation Dialog */}
+        {showResetConfirm && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-3 bg-slate-950/70 backdrop-blur-xs animate-in fade-in">
+            <div className="bg-white rounded-2xl p-4 max-w-sm w-full shadow-2xl border border-slate-200 space-y-3">
+              <div className="flex items-center gap-2 text-amber-600 font-bold text-sm">
+                <ShieldAlert className="w-5 h-5 shrink-0" />
+                <span>Khôi phục danh sách ngân hàng mặc định?</span>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Hệ thống sẽ đặt lại toàn bộ danh mục ngân hàng về cấu hình tiêu chuẩn ban đầu của hệ thống.
+              </p>
+              <div className="flex gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirm(false)}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmResetDefaults}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-bold hover:bg-amber-700 cursor-pointer"
+                >
+                  Khôi phục mặc định
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

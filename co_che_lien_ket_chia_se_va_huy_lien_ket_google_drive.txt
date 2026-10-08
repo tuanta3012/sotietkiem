@@ -1,0 +1,534 @@
+================================================================================
+TÀI LIỆU KỸ THUẬT TOÀN DIỆN: CƠ CHẾ LIÊN KẾT, PHÂN QUYỀN CHIA SẺ VÀ HỦY LIÊN KẾT
+TRÊN NỀN TẢNG GOOGLE DRIVE & GOOGLE SHEETS (SERVERLESS MULTI-USER SYNC)
+================================================================================
+Dự án: Hệ thống Quản trị & Đồng bộ Đa người dùng (Hybrid Mobile / Web App)
+Tác giả / Nguồn tham chiếu: Sổ Tiết Kiệm Gia Đình (Google Workspace Ecosystem)
+Phiên bản tài liệu: v3.0 (Cập nhật kiến trúc Tab ẩn __CONFIG__ & Reactive Polling)
+
+--------------------------------------------------------------------------------
+MỤC LỤC TÀI LIỆU
+--------------------------------------------------------------------------------
+Phần 1: Tổng quan Kiến trúc "Serverless Multi-User State"
+Phần 2: Luồng 1 - Admin Tạo file mới hoặc Liên kết file Google Sheet có sẵn
+Phần 3: Luồng 2 - Admin Thêm thành viên, Phân quyền và Mời tham gia
+Phần 4: Luồng 3 - Admin Hủy liên kết (Unlink) & Tác động lên Toàn bộ Thành viên
+Phần 5: Ma trận Trạng thái và Ứng xử giữa Admin & Thành viên
+Phần 6: Mã nguồn & Giải thích chi tiết các Hàm kỹ thuật cốt lõi
+Phần 7: Các tình huống Edge Cases & Giải pháp khắc phục triệt để
+
+================================================================================
+PHẦN 1: TỔNG QUAN KIẾN TRÚC "SERVERLESS MULTI-USER STATE"
+================================================================================
+
+1. Vấn đề của mô hình truyền thống:
+   - Thông thường, để làm ứng dụng đa người dùng có chia sẻ dữ liệu và phân quyền
+     (Admin / Editor / Viewer), bắt buộc phải có máy chủ Backend (NodeJS/Python/Go),
+     Cơ sở dữ liệu trung tâm (PostgreSQL/MongoDB) và hệ thống xác thực riêng.
+   - Nhược điểm: Chi phí duy trì server đắt đỏ, rủi ro rò rỉ dữ liệu cá nhân của
+     người dùng, và bảo trì hạ tầng phức tạp.
+
+2. Giải pháp Serverless dựa trên Google Workspace:
+   - Sử dụng Google Drive làm kho lưu trữ tệp và Google Sheets làm Database.
+   - Single Source of Truth (Nguồn sự thật duy nhất):
+     * Dữ liệu nghiệp vụ: Lưu ở Tab chính (ví dụ: "Danh sách sổ", "Nhật ký").
+     * Dữ liệu cấu hình hệ thống & phân quyền: Lưu ở Tab ẩn đặc biệt mang tên "__CONFIG__"
+       trong chính file Google Sheet đó.
+   - Nhờ đó, bất kỳ thiết bị nào (Admin, Tablet, Mobile của Viewer/Editor) khi
+     kết nối vào Sheet đều đọc được chính xác: Ai là Admin? Ai là thành viên?
+     Trạng thái file đang là Active hay Unlinked? Timestamp phiên bản mới nhất là bao nhiêu?
+
+3. Cơ chế Phân quyền 2 lớp (Two-tier Security):
+   - Lớp 1 (Google Drive API Level): Cấp quyền `writer` (cho Admin, Editor) hoặc
+     `reader` (cho Viewer). Khiến Google tự động chặn các request ghi trái phép ở tầng API.
+   - Lớp 2 (Application Role Level): Tab `__CONFIG__` lưu `role: 'ADMIN' | 'EDITOR' | 'VIEWER'`.
+     Giao diện phía Client sẽ vô hiệu hóa các nút Thêm/Sửa/Xóa và chặn hàm Auto-Push
+     nếu vai trò là 'VIEWER'.
+
+================================================================================
+PHẦN 2: LUỒNG 1 - ADMIN TẠO FILE MỚI HOẶC LIÊN KẾT FILE GOOGLE SHEET CÓ SẴN
+================================================================================
+
+1. Luồng Admin Tạo file mới (Create New Sheet):
+   - BƯỚC 1: Admin chọn "Tạo file mới trên Google Drive".
+   - BƯỚC 2: App gọi Google Sheets API `POST /v4/spreadsheets` tạo bảng tính mới
+     với các Tab chuẩn:
+     * Sheet 1 ("Danh sách sổ"): Chứa header bảng tính và định dạng chuẩn.
+     * Sheet 2 ("__CONFIG__"): Tab ẩn lưu JSON cấu hình hệ thống (`MasterSyncState`).
+   - BƯỚC 3: Ghi nhận trạng thái Master State:
+     {
+       "status": "active",
+       "lastAction": "create_and_link",
+       "activeFileId": "1AbC...XyZ",
+       "activeFileName": "Sổ Tiết Kiệm Gia Đình",
+       "activeFileUrl": "https://docs.google.com/spreadsheets/d/1AbC...XyZ/edit",
+       "adminEmail": "admin@gmail.com",
+       "linkedTimestamp": "2026-10-06T08:00:00.000Z",
+       "members": [
+         { "email": "admin@gmail.com", "name": "Admin", "role": "ADMIN", "addedAt": "..." }
+       ]
+     }
+   - BƯỚC 4: App lưu `activeFileId` vào bộ nhớ cục bộ (Local Pointer / Storage)
+     và bật cờ `autoSync: true`.
+
+2. Luồng Admin Liên kết file có sẵn (Link Existing Sheet):
+   - BƯỚC 1: Admin dán URL/File ID hoặc chọn file từ Google Drive Picker.
+   - BƯỚC 2: App gọi Drive API lấy metadata (`getRealGoogleDriveFileMetadata`).
+   - BƯỚC 3: Đọc Tab `__CONFIG__` (`getMasterSyncStateFromDrive`).
+     * Nếu file đã có `__CONFIG__`: Nạp lại toàn bộ danh sách thành viên và phân quyền cũ.
+     * Nếu file chưa có `__CONFIG__`: Tự động tạo mới Tab `__CONFIG__` và gán Admin
+       là email hiện tại.
+   - BƯỚC 4: Gọi hàm `setMasterSyncLinked` để cập nhật `status: 'active'`, nạp dữ liệu
+     từ Sheet về máy Admin, cập nhật Snapshot và lưu timestamp liên kết.
+
+================================================================================
+PHẦN 3: LUỒNG 2 - ADMIN THÊM THÀNH VIÊN, PHÂN QUYỀN VÀ MỜI THAM GIA
+================================================================================
+
+1. Sơ đồ xử lý khi Admin thêm 1 thành viên mới:
+
+   Admin Nhập Email (user@gmail.com) & Chọn Role (EDITOR hoặc VIEWER)
+                           │
+                           ▼
+   [1] Cấp quyền Google Drive qua Permissions API
+       URL: POST https://www.googleapis.com/drive/v3/files/{fileId}/permissions
+       Body: { role: 'writer' (nếu Editor) hoặc 'reader' (nếu Viewer), type: 'user', emailAddress: 'user@gmail.com' }
+                           │
+                           ▼
+   [2] Cập nhật danh sách Members vào Tab __CONFIG__ trên Google Sheet
+       Thêm object: { email: 'user@gmail.com', role: 'VIEWER', addedAt: ISO_TIME }
+       Ghi đè ô A1 của Sheet __CONFIG__
+                           │
+                           ▼
+   [3] Kiểm toán đồng bộ toàn diện (synchronizeDrivePermissionsWithJsonMembers)
+       - Quét toàn bộ quyền trên Drive.
+       - Nếu có email lạ trên Drive không có trong JSON -> Xóa quyền ngay.
+       - Cập nhật đúng role Drive tương ứng với Role trong JSON.
+                           │
+                           ▼
+   [4] Gửi Email Lời Mời Tự Động (Google Apps Script Webhook / Deep Link)
+       Admin App -> Webhook -> GmailApp.sendEmail()
+       Nội dung: Chứa Deep Link thông minh:
+       https://<username>.github.io/<repo>/connect.html?fileId=<FILE_ID>&workspaceName=<NAME>
+
+2. Khi Thành viên (Member) Nhận Email & Mở App:
+   - Thành viên nhấp vào link trong email trên điện thoại.
+   - Web Router `connect.html` kích hoạt Custom Scheme `sotietkiem://connect?fileId=...`.
+   - App trên máy thành viên mở lên, trích xuất `fileId` và thực thi `handleWorkspaceLink(fileId)`:
+     * Kiểm tra phiên đăng nhập Google của Member.
+     * Gọi Drive API đọc metadata và Tab `__CONFIG__`.
+     * Tự động xác định vai trò của Member (dựa trên email của Member đối chiếu trong mảng `members`).
+     * Tải dữ liệu các sổ từ Google Sheet về máy Member và kích hoạt đồng bộ 2 chiều (nếu là Editor)
+       hoặc 1 chiều (nếu là Viewer).
+
+================================================================================
+PHẦN 4: LUỒNG 3 - ADMIN HỦY LIÊN KẾT (UNLINK) & TÁC ĐỘNG LÊN TOÀN BỘ THÀNH VIÊN
+================================================================================
+
+Đây là phần phức tạp và quan trọng nhất của kiến trúc. Khi Admin quyết định
+"Hủy liên kết file" trên thiết bị của mình, hệ thống xử lý như sau:
+
+A. XỬ LÝ PHÍA ADMIN (NGAY TẠI THỜI ĐIỂM BẤM HỦY LIÊN KẾT):
+--------------------------------------------------------------------------------
+1. Kiểm tra quyền sở hữu (Role Check):
+   - Hàm `setMasterSyncUnlinked` kiểm tra xem email của người bấm có đúng là `adminEmail`
+     được ghi trong `__CONFIG__` hay không.
+   - Nếu là Viewer/Editor cố ý can thiệp: Bị từ chối (Abort).
+
+2. Thu hồi toàn bộ quyền Google Drive của các Thành viên:
+   - Duyệt qua toàn bộ danh sách `members` trong Tab `__CONFIG__`.
+   - Với mọi thành viên có role != 'ADMIN', hệ thống gọi Drive Permissions API DELETE:
+     `DELETE https://www.googleapis.com/drive/v3/files/{fileId}/permissions/{permissionId}`
+   - Kết quả: Các thành viên lập tức mất quyền truy cập tệp trên Google Drive.
+
+3. Ghi nhận trạng thái 'unlinked' trực tiếp lên Google Sheet TRƯỚC KHI xóa Pointer:
+   - Ghi vào ô A1 của Tab `__CONFIG__` với payload:
+     {
+       "status": "unlinked",
+       "lastAction": "unlink",
+       "activeFileId": "1AbC...XyZ",
+       "activeFileName": "",
+       "activeFileUrl": "",
+       "updatedAt": "2026-10-06T08:30:00.000Z",
+       "adminEmail": "admin@gmail.com",
+       "members": [...]
+     }
+   - Ý nghĩa: Đánh dấu cho tất cả các thiết bị khác biết rằng phiên làm việc chung đã kết thúc.
+
+4. Dọn dẹp cục bộ trên thiết bị của Admin:
+   - Xóa `master_pointer_file_id` trong LocalStorage.
+   - Đặt cờ `setExplicitlyUnlinked(true)` và `sessionStorage.setItem('explicitly_unlinked', 'true')`
+     để ngăn app tự động tìm và kết nối lại.
+   - Xóa trắng danh sách sổ cục bộ (`setBooks([])`, `localStorage.setItem('savings_books_cleared', 'true')`).
+   - Đặt `settings.googleSheetUrl = ''` và `settings.googleSheetName = ''`.
+
+B. XỬ LÝ PHÍA CÁC THÀNH VIÊN (MEMBERS / VIEWERS / EDITORS):
+--------------------------------------------------------------------------------
+Khi Admin đã hủy liên kết, các thiết bị của thành viên sẽ phản ứng theo các kịch bản sau:
+
+1. Kịch bản 1: Thiết bị thành viên ĐANG MỞ APP (Realtime Polling / Reactive Sync):
+   - App thành viên có tiến trình ngầm `checkRemoteSheetChanges` chạy định kỳ (polling)
+     hoặc khi người dùng chuyển tab (Window Focus).
+   - Tiến trình này gọi `getMasterSyncStateFromDrive(token, fileId)`.
+   - Khi phát hiện `masterState.status === 'unlinked'` hoặc `masterState.lastAction === 'unlink'`:
+     * App thành viên hiểu rằng Admin đã ngắt kết nối không gian làm việc.
+     * Tự động kích hoạt quy trình dọn dẹp khẩn cấp:
+       - `setBooks([])` (Xóa toàn bộ sổ hiển thị trên giao diện).
+       - `localStorage.setItem('savings_books_cleared', 'true')`.
+       - Xóa lịch sử tất toán và bộ đếm tăng trưởng.
+       - Ngắt liên kết: `setSettings(prev => ({ ...prev, googleSheetUrl: '', members: [] }))`.
+       - Đặt cờ `setExplicitlyUnlinked(true)`.
+       - Hiển thị Toast thông báo:
+         "⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đồng bộ an toàn."
+     * Dừng toàn bộ tiến trình push/pull đối với file đó.
+
+2. Kịch bản 2: Thành viên CỐ TÌNH SỬA DỮ LIỆU ĐỂ ĐẨY LÊN (Push Attempt):
+   - Nếu một Editor cố gắng sửa sổ trên máy mình sau khi Admin đã Unlink:
+   - Hàm `pushBooksToDrive` được kích hoạt.
+   - Bước ĐẦU TIÊN trong `pushBooksToDrive` là kiểm tra `getMasterSyncStateFromDrive`:
+     * Nhận thấy `status === 'unlinked'`.
+     * Lập tức HỦY BỎ thao tác ghi đè (Abort Push).
+     * Dọn sạch dữ liệu cục bộ và đưa máy về trạng thái Unlinked.
+     * Bảo vệ tuyệt đối tính toàn vẹn dữ liệu, không ghi đè dữ liệu rác lên Drive.
+
+3. Kịch bản 3: Trường hợp Quyền Drive đã bị Admin Thu hồi (Drive API 403 / 404):
+   - Do Admin đã gọi `revokeFilePermission`, khi máy thành viên gọi API Drive,
+     Google sẽ trả về HTTP 403 (Forbidden) hoặc 404 (Not Found).
+   - Hàm `downloadRealGoogleDriveFile` và `checkRemoteSheetChanges` bắt lỗi này (Catch Block):
+     * Nhận diện mã lỗi `403` hoặc `FILE_NOT_FOUND`.
+     * Tự động ghi Log kiểm toán Firestore: `Lỗi truy cập file Google Drive (Chưa được cấp quyền hoặc đã bị thu hồi)`.
+     * Hiển thị thông báo: "⚠️ Không thể đọc file liên kết trên tài khoản này (hoặc chưa được chia sẻ quyền)."
+     * Ngắt liên kết URL cục bộ để bảo vệ máy thành viên.
+
+4. Kịch bản 4: Thành viên TẮT APP RỒI MỚI MỞ LẠI SAU ĐÓ (Cold Start):
+   - Khi khởi động, hàm `performAutoConnect` trong `useDriveSync` chạy:
+   - Nó kiểm tra `masterState` của file đã lưu:
+     * Nếu `masterState.status === 'unlinked'`: Lập tức xóa `googleSheetUrl` và làm sạch LocalStorage.
+     * Người dùng mở app lên sẽ thấy trạng thái ban đầu (Trắng dữ liệu, sẵn sàng liên kết file mới),
+       không bị sót lại dữ liệu cũ đã ngắt liên kết.
+
+================================================================================
+PHẦN 5: MA TRẬN TRẠNG THÁI VÀ ỨNG XỬ GIỮA ADMIN & THÀNH VIÊN
+================================================================================
+
++----------------------------+-----------------------------+-------------------------------+
+| SỰ KIỆN / THAO TÁC         | PHÍA THIẾT BỊ ADMIN         | PHÍA THIẾT BỊ THÀNH VIÊN      |
++----------------------------+-----------------------------+-------------------------------+
+| 1. Admin Tạo Sheet mới     | - Tạo Sheet + Tab __CONFIG__| - Nhận email mời (Deep Link)  |
+|                            | - Gán adminEmail = Admin    | - Bấm link -> Nạp dữ liệu     |
+|                            | - status = 'active'         | - Gán role theo Sheet Config  |
++----------------------------+-----------------------------+-------------------------------+
+| 2. Admin Thêm Member       | - Cấp quyền Drive API       | - Được cấp quyền Drive        |
+|    (Role: VIEWER)          | - Ghi email vào __CONFIG__  | - Chỉ đọc dữ liệu (Pull only) |
+|                            | - Gửi email mời webhook     | - Không được sửa / Không Push |
++----------------------------+-----------------------------+-------------------------------+
+| 3. Admin Đổi Member        | - Đổi quyền Drive: writer   | - Nhận quyền chỉnh sửa        |
+|    thành EDITOR            | - Cập nhật __CONFIG__       | - Kích hoạt Đồng bộ 2 chiều   |
++----------------------------+-----------------------------+-------------------------------+
+| 4. Admin HỦY LIÊN KẾT      | - Thu hồi toàn bộ quyền     | - Polling phát hiện 'unlinked'|
+|    (Unlink File)           |   Drive của mọi Member      | - Hoặc nhận lỗi 403 Forbidden |
+|                            | - Ghi status: 'unlinked'    | - Tự động xóa sạch dữ liệu    |
+|                            |   lên Tab __CONFIG__        | - Ngắt kết nối về ban đầu     |
+|                            | - Xóa pointer & data local  | - Toast cảnh báo rõ ràng      |
++----------------------------+-----------------------------+-------------------------------+
+| 5. Admin Đổi sang File     | - Thu hồi quyền file cũ     | - Polling phát hiện File ID   |
+|    Sheet MỚI KHÁC          | - Cấp quyền trên file mới   |   mới có Timestamp mới hơn    |
+|                            | - status = 'active' file mới| - Tự động chuyển nạp file mới |
++----------------------------+-----------------------------+-------------------------------+
+
+================================================================================
+PHẦN 6: MÃ NGUỒN & GIẢI THÍCH CHI TIẾT CÁC HÀM KỸ THUẬT CỐT LÕI
+================================================================================
+
+--------------------------------------------------------------------------------
+1. HÀM HỦY LIÊN KẾT VÀ THU HỒI QUYỀN TOÀN BỘ THÀNH VIÊN (Admin Side):
+   File: src/utils/googleDriveService.ts -> setMasterSyncUnlinked()
+--------------------------------------------------------------------------------
+```typescript
+export async function setMasterSyncUnlinked(
+  accessToken: string,
+  userEmail?: string,
+  explicitFileId?: string
+): Promise<void> {
+  try {
+    // 1. Đặt cờ ngắt kết nối cục bộ để chặn auto-reconnect
+    setExplicitlyUnlinked(true);
+
+    const targetFileId = explicitFileId || getLocalMasterPointerFileId();
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken, targetFileId);
+
+    // 2. Bảo mật: Chỉ Admin mới có quyền thực thi Unlink
+    const adminEmailVal = currentMaster?.adminEmail || currentMaster?.linkedAccountEmail || userEmail || 'admin';
+    const cleanUser = userEmail?.trim().toLowerCase();
+    const adminEmailClean = adminEmailVal.trim().toLowerCase();
+    if (cleanUser && adminEmailClean && cleanUser !== adminEmailClean) {
+      console.warn(`[Central Hub Sync] Tài khoản ${cleanUser} không phải Admin (${adminEmailClean}). Từ chối hủy liên kết.`);
+      return;
+    }
+
+    const activeId = targetFileId || currentMaster?.activeFileId;
+
+    // 3. THU HỒI QUYỀN GOOGLE DRIVE CỦA TẤT CẢ THÀNH VIÊN (Non-Admin)
+    try {
+      if (activeId && currentMaster?.members && currentMaster.members.length > 0) {
+        for (const member of currentMaster.members) {
+          if (member.role !== 'ADMIN' && member.email) {
+            revokeFilePermission(accessToken, activeId, member.email).catch(() => {});
+          }
+        }
+      }
+    } catch (revokeErr) {
+      console.warn('Lỗi khi thu hồi quyền thành viên:', revokeErr);
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // 4. GHI TRẠNG THÁI 'unlinked' TRỰC TIẾP LÊN GOOGLE SHEET TRƯỚC KHI XÓA POINTER
+    if (activeId) {
+      const unlinkedSheetState: MasterSyncState = {
+        ...(currentMaster || {}),
+        status: 'unlinked',
+        lastAction: 'unlink',
+        activeFileId: activeId,
+        activeFileName: '',
+        activeFileUrl: '',
+        linkedTimestamp: nowIso,
+        linkedAccountEmail: userEmail || 'Google User',
+        adminEmail: adminEmailVal,
+        members: currentMaster?.members || [],
+        updatedAt: nowIso,
+      };
+
+      await saveMasterSyncStateToGoogleSheet(accessToken, activeId, unlinkedSheetState).catch((sheetErr) => {
+        console.warn('[Unlink Sync] Lỗi ghi trạng thái unlinked lên Google Sheet:', sheetErr);
+      });
+    }
+
+    // 5. Cập nhật state cục bộ và dọn dẹp bộ nhớ máy
+    saveLocalMasterPointerFileId(null);
+    saveLocalMasterPointerState(null);
+  } catch (saveErr) {
+    console.warn('Lỗi khi set master sync unlinked:', saveErr);
+    saveLocalMasterPointerFileId(null);
+    saveLocalMasterPointerState(null);
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+2. HÀM THU HỒI QUYỀN TRÊN GOOGLE DRIVE (Drive Permissions API DELETE):
+   File: src/utils/googleDriveService.ts -> revokeFilePermission()
+--------------------------------------------------------------------------------
+```typescript
+export async function revokeFilePermission(
+  accessToken: string,
+  fileId: string,
+  userEmail: string
+): Promise<boolean> {
+  try {
+    if (!fileId || !userEmail) return false;
+    const cleanEmail = userEmail.trim().toLowerCase();
+
+    // Bước 1: Lấy danh sách permission ID hiện có trên file
+    const listUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,emailAddress,role,type)&supportsAllDrives=true`;
+    const listRes = await fetch(listUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    if (!listRes.ok) return false;
+    const data = await listRes.json();
+    const permissions: Array<{ id: string; emailAddress?: string; role?: string; type?: string }> = data.permissions || [];
+
+    // Bước 2: Tìm đúng permission ID của User cần xóa
+    const userPerm = permissions.find(
+      (p) => p.type === 'user' && p.emailAddress?.trim().toLowerCase() === cleanEmail
+    );
+
+    if (!userPerm || !userPerm.id) return false;
+
+    // Bước 3: Gửi lệnh DELETE thu hồi quyền
+    const delUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${userPerm.id}?supportsAllDrives=true`;
+    const delRes = await fetch(delUrl, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+
+    return delRes.ok || delRes.status === 204;
+  } catch (err) {
+    console.warn(`Lỗi khi thu hồi quyền của ${userEmail} trên file ${fileId}:`, err);
+    return false;
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+3. HÀM ĐỒNG BỘ KIỂM TOÁN QUYỀN GOOGLE DRIVE VỚI JSON THÀNH VIÊN:
+   File: src/utils/googleDriveService.ts -> synchronizeDrivePermissionsWithJsonMembers()
+--------------------------------------------------------------------------------
+```typescript
+export async function synchronizeDrivePermissionsWithJsonMembers(
+  accessToken: string,
+  fileId: string,
+  members: WorkspaceMember[],
+  adminEmail?: string
+): Promise<void> {
+  try {
+    if (!fileId || !accessToken) return;
+    const cleanAdmin = adminEmail?.trim().toLowerCase();
+    const activeMembers = members || [];
+
+    const adminEmailsSet = new Set<string>();
+    if (cleanAdmin && cleanAdmin !== 'admin') adminEmailsSet.add(cleanAdmin);
+    activeMembers.forEach((m) => {
+      if (m.role === 'ADMIN' && m.email) adminEmailsSet.add(m.email.trim().toLowerCase());
+    });
+
+    const nonAdminMembers = activeMembers.filter((m) => m.email && m.role !== 'ADMIN');
+    const memberMap = new Map<string, WorkspaceMember>();
+    nonAdminMembers.forEach((m) => memberMap.set(m.email.trim().toLowerCase(), m));
+
+    // Lấy danh sách permission hiện thời trên Google Drive
+    const listUrl = `https://www.googleapis.com/drive/v3/files/${fileId}/permissions?fields=permissions(id,emailAddress,role,type)&supportsAllDrives=true`;
+    const listRes = await fetch(listUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!listRes.ok) return;
+
+    const data = await listRes.json();
+    const permissions = data.permissions || [];
+
+    // Đối chiếu & Dọn dẹp
+    for (const p of permissions) {
+      if (p.role === 'owner') continue; // Không bao giờ xóa Owner
+      const emailClean = p.emailAddress?.trim().toLowerCase();
+      if (emailClean && adminEmailsSet.has(emailClean)) continue;
+
+      // Nếu danh sách chia sẻ rỗng -> Thu hồi hết tất cả các quyền của người khác
+      if (nonAdminMembers.length === 0) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${p.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        continue;
+      }
+
+      // Nếu user trên Drive không nằm trong danh sách JSON -> Thu hồi quyền
+      const memberInJson = emailClean ? memberMap.get(emailClean) : null;
+      if (!memberInJson) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${p.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      } else {
+        // Khớp role (EDITOR -> writer, VIEWER -> reader)
+        const expectedRole = memberInJson.role === 'EDITOR' ? 'writer' : 'reader';
+        if (p.role !== expectedRole) {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions/${p.id}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          await shareFileWithUserEmail(accessToken, fileId, emailClean!, expectedRole);
+        }
+      }
+    }
+
+    // Cấp quyền cho thành viên mới có trong JSON nhưng chưa có trên Drive
+    const driveEmails = new Set(permissions.map((p: any) => p.emailAddress?.trim().toLowerCase()));
+    for (const m of nonAdminMembers) {
+      const email = m.email.trim().toLowerCase();
+      if (!driveEmails.has(email) && !adminEmailsSet.has(email)) {
+        const driveRole = m.role === 'EDITOR' ? 'writer' : 'reader';
+        await shareFileWithUserEmail(accessToken, fileId, email, driveRole);
+      }
+    }
+  } catch (err) {
+    console.warn('[Permission Sync] Error synchronizing Drive permissions:', err);
+  }
+}
+```
+
+--------------------------------------------------------------------------------
+4. XỬ LÝ PHÍA THIẾT BỊ THÀNH VIÊN KHI PHÁT HIỆN ADMIN HỦY LIÊN KẾT:
+   File: src/hooks/useDriveSync.ts -> checkRemoteSheetChanges() & syncBooksFromDrive()
+--------------------------------------------------------------------------------
+```typescript
+// Trích đoạn xử lý phản xạ tại Client của Thành viên khi Polling hoặc Kéo dữ liệu:
+try {
+  const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
+  
+  if (currentMaster && (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink')) {
+    console.info('[Central Hub Sync] Phát hiện Admin đã hủy liên kết file trung tâm. Tự động dọn dẹp dữ liệu...');
+    
+    // 1. Kích hoạt cờ ngắt liên kết
+    setExplicitlyUnlinked(true);
+    
+    // 2. Xóa sạch toàn bộ dữ liệu đang lưu trong bộ nhớ máy
+    setBooks([]);
+    if (setSettlementAdjustments) setSettlementAdjustments([]);
+    
+    try {
+      localStorage.setItem('savings_books_v3', JSON.stringify([]));
+      localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
+      localStorage.setItem('savings_books_cleared', 'true');
+      clearStaticHistoryFromStorage();
+      sessionStorage.setItem('explicitly_unlinked', 'true');
+    } catch {}
+
+    // 3. Reset cấu hình liên kết về rỗng
+    setSettings((prev) => ({
+      ...prev,
+      googleSheetUrl: '',
+      googleSheetName: '',
+      members: [],
+      lastSyncTime: undefined,
+      lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
+    }));
+
+    // 4. Thông báo cho người dùng
+    setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đảm bảo an toàn.');
+    return;
+  }
+} catch (masterErr) {
+  // Bắt lỗi 403/404 khi quyền đã bị thu hồi hoàn toàn
+  if (masterErr?.message?.includes('403') || masterErr?.message?.includes('FILE_NOT_FOUND')) {
+    setSyncDriveStatus('⚠️ Quyền truy cập tệp đã bị thu hồi hoặc tệp không còn tồn tại.');
+    setSettings(prev => ({ ...prev, googleSheetUrl: '' }));
+  }
+}
+```
+
+================================================================================
+PHẦN 7: CÁC TÌNH HUỐNG EDGE CASES & GIẢI PHÁP KHẮC PHỤC TRIỆT ĐỂ
+================================================================================
+
+1. Vấn đề "Ghost Re-link" (Máy thành viên tự động liên kết lại file cũ):
+   - Nguy cơ: Khi Admin hủy liên kết, nếu máy thành viên có tính năng Auto-Discover,
+     máy thành viên có thể quét thấy file cũ trong Drive và tự kết nối lại.
+   - Giải pháp:
+     * File Sheet có Tab `__CONFIG__` ghi rõ `status: 'unlinked'`. Hàm `autoDiscoverLatestCentralHub`
+       bắt buộc phải kiểm tra điều kiện `masterState.status === 'active'`, nếu là `'unlinked'`
+       sẽ BỎ QUA NGAY LẬP TỨC.
+     * Lưu cờ `sessionStorage.setItem('explicitly_unlinked', 'true')` tại máy thành viên.
+
+2. Vấn đề "Split-Brain Overwrite" (Thành viên ghi đè dữ liệu cũ lên Drive):
+   - Nguy cơ: Admin hủy liên kết trên máy Admin, nhưng thành viên chưa kịp polling và
+     vẫn đang mở app, thực hiện sửa 1 cuốn sổ rồi app tự động Push lên Sheet.
+   - Giải pháp:
+     * Trước mọi thao tác Push (`pushBooksToDrive`), app BẮT BUỘC gọi `getMasterSyncStateFromDrive`.
+     * Nếu thấy `status === 'unlinked'`, hàm push lập tức `return` (Abort), xóa dữ liệu local
+       và ngắt kết nối, không cho phép ghi bất kỳ byte nào lên Drive.
+
+3. Vấn đề "Race Condition / Token Expired":
+   - Nếu Access Token hết hạn giữa chừng khi đang thu hồi quyền:
+     App sử dụng cơ chế `trySilentRefresh()` qua Firebase Auth / Capacitor Google Auth
+     để lấy Access Token mới trong suốt mà không làm gián đoạn trải nghiệm người dùng.
+
+================================================================================
+KẾT LUẬN & ĐÁNH GIÁ
+================================================================================
+Giải pháp quản lý liên kết, phân quyền và hủy liên kết đa người dùng thông qua Tab
+ẩn `__CONFIG__` kết hợp Google Drive Permissions API là giải pháp Serverless tối ưu,
+đáp ứng hoàn hảo:
+1. Chi phí vận hành 0 VNĐ (Không cần server backend).
+2. Bảo mật tuyệt đối (Phân quyền 2 lớp từ tầng hạ tầng Google đến tầng ứng dụng).
+3. Tính nhất quán dữ liệu cao (Chống ghi đè rác, tự động dọn dẹp khi Unlink).
+4. Khả năng mở rộng và áp dụng dễ dàng cho mọi ứng dụng Hybrid/Web/Mobile khác.
+================================================================================

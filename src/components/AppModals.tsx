@@ -24,6 +24,7 @@ import {
   getGoogleAccessToken,
   createRealGoogleDriveFile,
   ensureGoogleAccessToken,
+  validateAndEnsureToken,
   getMasterSyncStateFromDrive,
   saveMasterSyncStateOnDrive,
   shareFileWithUserEmail,
@@ -48,7 +49,7 @@ const ModalLoadingSpinner = () => (
   </div>
 );
 
-interface AppModalsProps {
+export interface AppModalsProps {
   // Add/Edit Book Modal
   isAddModalOpen: boolean;
   setIsAddModalOpen: (open: boolean) => void;
@@ -204,58 +205,63 @@ export const AppModals: React.FC<AppModalsProps> = ({
   }, [setSettings]);
 
   const handleSaveMembers = async (updatedMembers: WorkspaceMember[]) => {
-    const prevMembers = settings.members || [];
     setSettings((prev) => ({
       ...prev,
       members: updatedMembers,
     }));
 
     // If online with Google token, persist members directly to Master Sync State file on Drive
-    const token = getGoogleAccessToken();
+    let token: string | null = null;
+    try {
+      token = await validateAndEnsureToken();
+    } catch {
+      token = getGoogleAccessToken();
+    }
+
     if (token) {
-      try {
-        let currentMaster = await getMasterSyncStateFromDrive(token);
-        const fileMatch = settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/);
-        const activeFileId = fileMatch ? fileMatch[1] : null;
+      const fileMatch = settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/);
+      const activeFileId = fileMatch ? fileMatch[1] : null;
 
-        if (!currentMaster) {
-          currentMaster = {
-            status: 'active',
-            lastAction: 'link',
-            activeFileId: activeFileId || undefined,
-            activeFileName: settings.googleSheetName || 'Bảng tính tiết kiệm',
-            activeFileUrl: settings.googleSheetUrl || undefined,
-            linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
-            linkedAccountEmail: currentUser?.email || 'Google User',
-            adminEmail: currentUser?.email?.toLowerCase() || 'admin',
-            members: updatedMembers,
-            updatedAt: new Date().toISOString(),
-          };
-        } else {
-          currentMaster = {
-            ...currentMaster,
-            adminEmail: currentMaster.adminEmail || currentUser?.email?.toLowerCase() || 'admin',
-            members: updatedMembers,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        await saveMasterSyncStateOnDrive(token, currentMaster);
+      let currentMaster = await getMasterSyncStateFromDrive(token);
+      if (!currentMaster) {
+        currentMaster = {
+          status: 'active',
+          lastAction: 'link',
+          activeFileId: activeFileId || undefined,
+          activeFileName: settings.googleSheetName || 'Bảng tính tiết kiệm',
+          activeFileUrl: settings.googleSheetUrl || undefined,
+          linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
+          linkedAccountEmail: currentUser?.email || 'Google User',
+          adminEmail: currentUser?.email?.toLowerCase() || 'admin',
+          members: updatedMembers,
+          updatedAt: new Date().toISOString(),
+        };
+      } else {
+        currentMaster = {
+          ...currentMaster,
+          activeFileId: activeFileId || currentMaster.activeFileId,
+          activeFileName: currentMaster.activeFileName || settings.googleSheetName || 'Bảng tính tiết kiệm',
+          activeFileUrl: currentMaster.activeFileUrl || settings.googleSheetUrl || undefined,
+          adminEmail: currentMaster.adminEmail || currentUser?.email?.toLowerCase() || 'admin',
+          members: updatedMembers,
+          updatedAt: new Date().toISOString(),
+        };
+      }
 
-        const effectiveAdminEmail = currentMaster.adminEmail || currentUser?.email;
-        if (activeFileId) {
-          await synchronizeDrivePermissionsWithJsonMembers(
-            token,
-            activeFileId,
-            updatedMembers,
-            effectiveAdminEmail
-          );
-        }
-      } catch (err) {
-        console.warn('Lỗi lưu danh sách thành viên lên Google Drive:', err);
+      await saveMasterSyncStateOnDrive(token, currentMaster);
+
+      const effectiveAdminEmail = currentMaster.adminEmail || currentUser?.email;
+      if (activeFileId) {
+        await synchronizeDrivePermissionsWithJsonMembers(
+          token,
+          activeFileId,
+          updatedMembers,
+          effectiveAdminEmail
+        );
       }
     }
   };
-  const handleCreateRecoveryFile = async () => {
+  const handleCreateRecoveryFile = async (customFileName?: string) => {
     let token = getGoogleAccessToken();
     if (!token) {
       try {
@@ -269,7 +275,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
     try {
       onSetIsSyncingDrive(true);
       onSetSyncDriveStatus('Đang khởi tạo file liên kết mới trên Google Drive...');
-      const fileName = `So_Tiet_Kiem_Gia_Dinh_Recovery_${new Date()
+      const fileName = customFileName?.trim() || `So_Tiet_Kiem_Gia_Dinh_Recovery_${new Date()
         .toLocaleDateString('vi-VN')
         .replace(/\//g, '-')}`;
       const newFileRes = await createRealGoogleDriveFile(token, fileName, books, settlementAdjustments);

@@ -59,6 +59,7 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
   const [copied, setCopied] = useState<boolean>(false);
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
   const [masterState, setMasterState] = useState<MasterSyncState | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const loadLocalLogs = () => {
     setLocalLogs(getSyncAuditLogs());
@@ -185,11 +186,10 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
     }
   };
 
-  const handleClearLocal = () => {
-    if (window.confirm('Bạn có chắc muốn xóa lịch sử nhật ký cục bộ trên máy này?')) {
-      clearSyncAuditLogs();
-      loadLocalLogs();
-    }
+  const handleConfirmClearLocal = () => {
+    clearSyncAuditLogs();
+    loadLocalLogs();
+    setShowClearConfirm(false);
   };
 
   const errorCount = activeLogs.filter((l) => l.status === 'error').length;
@@ -521,14 +521,39 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
 
         {/* Footer (Clear local logs if on local tab) */}
         {activeTab === 'local' && localLogs.length > 0 && (
-          <div className="p-2 bg-slate-50 border-t border-slate-100 flex justify-end">
-            <button
-              onClick={handleClearLocal}
-              className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 transition-colors"
-            >
-              <Trash2 className="w-3 h-3" />
-              <span>Xóa nhật ký cục bộ</span>
-            </button>
+          <div className="p-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+            {showClearConfirm ? (
+              <div className="w-full flex items-center justify-between gap-2 p-1.5 bg-rose-50 border border-rose-200 rounded-lg text-xs">
+                <span className="text-[11px] font-semibold text-rose-800">Xác nhận xóa sạch nhật ký cục bộ?</span>
+                <div className="flex gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowClearConfirm(false)}
+                    className="px-2 py-0.5 rounded bg-white border border-slate-300 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                  >
+                    Hủy
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmClearLocal}
+                    className="px-2 py-0.5 rounded bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-700 cursor-pointer"
+                  >
+                    Xác nhận xóa
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="w-full flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(true)}
+                  className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>Xóa nhật ký cục bộ</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

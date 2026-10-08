@@ -17,7 +17,7 @@ import { Capacitor } from '@capacitor/core';
 import { signInWithGoogle, signInWithGoogleRedirect } from '../utils/googleDriveService';
 import { AuthUser } from '../types';
 
-interface LoginModalProps {
+export interface LoginModalProps {
   isOpen: boolean;
   onLogin: (user: AuthUser, accessToken?: string) => void;
   currentVersion?: string;

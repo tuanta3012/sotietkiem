@@ -37,7 +37,7 @@ import { BankSelectDropdown } from './BankSelectDropdown';
 import { DatePickerVN } from './DatePickerVN';
 import { CustomSelect } from './CustomSelect';
 
-interface AddEditBookModalProps {
+export interface AddEditBookModalProps {
   isOpen: boolean;
   bookToEdit: SavingsBook | null;
   books?: SavingsBook[];

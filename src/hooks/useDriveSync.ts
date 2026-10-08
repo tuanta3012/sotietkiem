@@ -18,6 +18,8 @@ import {
   applyMasterStateToSettings,
   isExplicitlyUnlinked,
   setExplicitlyUnlinked,
+  addUnlinkedFileId,
+  isFileUnlinked,
 } from '../utils/googleDriveService';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
 import { resolveUserRole } from '../utils/roleHelper';
@@ -372,7 +374,7 @@ export function useDriveSync({
                   lastSyncTime: undefined,
                   lastLocalLinkTimestamp: masterState.updatedAt || masterState.linkedTimestamp,
                 }));
-                setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đồng bộ an toàn.');
+                setSyncDriveStatus(null);
                 isSyncingRef.current = false;
                 setIsSyncingDrive(false);
                 return;
@@ -419,6 +421,8 @@ export function useDriveSync({
           }
         }
         if (res.success) {
+          setIsDriveTokenExpired(false);
+          clearExpiredNoticeTimer();
           isRemoteUpdateRef.current = true;
           remoteSyncCooldownUntilRef.current = Date.now() + 5000;
           applyMasterSettlements(res.settlements || []);
@@ -538,30 +542,60 @@ export function useDriveSync({
         }
       } catch (err: any) {
         isInitialSyncDoneRef.current = true;
+        const isFileTrashed = err?.message?.includes('FILE_TRASHED');
+        const needsPicker = err?.message?.includes('NEEDS_PICKER_ACCESS') || err?.message?.includes('404');
+        const isPermissionDenied =
+          err?.message?.includes('PERMISSION_DENIED') ||
+          err?.message?.includes('403') ||
+          err?.message?.includes('chưa được cấp quyền') ||
+          err?.message?.includes('chưa có quyền');
+
         recordSyncAuditLog({
           type: 'SYNC_ERROR',
-          title: 'Lỗi tải dữ liệu từ Google Drive',
-          status: 'error',
+          title: isFileTrashed
+            ? 'File Google Drive đã bị chuyển vào thùng rác'
+            : needsPicker
+            ? 'Cần mở file qua Google Picker để cấp quyền'
+            : 'Lỗi tải dữ liệu từ Google Drive',
+          status: isFileTrashed ? 'warning' : 'info',
           userEmail: currentUser?.email,
           currentRole: settingsRef.current?.currentRole,
           sheetName: settingsRef.current?.googleSheetName,
-          summary: `Lỗi đọc file Google Drive: ${err?.message || err}`,
+          summary: isFileTrashed
+            ? `File Drive liên kết đã bị xóa hoặc chuyển vào thùng rác (${fileId})`
+            : needsPicker
+            ? `Cần mở file qua Google Picker để cấp quyền sử dụng (${fileId})`
+            : `Lỗi đọc file Google Drive: ${err?.message || err}`,
           errorMessage: err?.stack || err?.message,
           details: { fileId, currentUrl },
         });
+
         if (
           err?.message?.includes('hết hạn') ||
           err?.message?.includes('invalid authentication credentials')
         ) {
           console.warn('Drive sync warning:', err?.message);
           setSyncDriveStatus('Phiên đăng nhập Google hết hạn. Vui lòng bấm đăng nhập lại.');
-        } else if (
-          err?.message?.includes('FILE_NOT_FOUND') ||
-          err?.message?.includes('xóa') ||
-          err?.message?.includes('404')
-        ) {
-          console.warn('Google Drive file deleted or not found for this client:', err?.message);
-          setSyncDriveStatus('⚠️ Không thể đọc file liên kết trên tài khoản này (hoặc chưa được chia sẻ quyền).');
+        } else if (needsPicker) {
+          console.info('Google Drive file requires Google Picker grant for this user.');
+          setSyncDriveStatus('📁 Vui lòng mở Google Picker để chọn và cấp quyền cho file.');
+        } else if (isPermissionDenied) {
+          console.warn('Google Drive permission warning:', err?.message);
+          setSyncDriveStatus('⚠️ Tài khoản chưa có quyền truy cập file này trên Google Drive.');
+        } else if (isFileTrashed) {
+          console.warn('Google Drive file explicitly trashed:', err?.message);
+          if (fileId) {
+            addUnlinkedFileId(fileId);
+          }
+          setSettings((prev) => ({
+            ...prev,
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            lastSyncTime: undefined,
+          }));
+          setExplicitlyUnlinked(true);
+          setSyncDriveStatus('⚠️ File liên kết đã bị xóa hoặc chuyển vào thùng rác.');
+          setShowFileDeletedRecovery(true);
         } else {
           console.error('Drive sync error:', err);
           setSyncDriveStatus(`Lỗi đồng bộ: ${err.message}`);
@@ -657,7 +691,9 @@ export function useDriveSync({
               lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
             }));
 
-            setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã ngắt kết nối để bảo mật dữ liệu.');
+            if (!isExplicitlyUnlinked()) {
+              setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã ngắt kết nối để bảo mật dữ liệu.');
+            }
             setIsSyncingDrive(false);
             isPushingRef.current = false;
             return; // Dừng ngay lập tức, không cho phép ghi đè lên file!
@@ -835,6 +871,10 @@ export function useDriveSync({
   useEffect(() => {
     const performAutoConnect = async () => {
       if (currentUser?.isOffline || isSwitchingFileRef.current || isAutoConnectingRef.current) return;
+      if (isExplicitlyUnlinked()) {
+        console.info('[Central Hub Sync] Thiết bị đã hủy liên kết chủ động. Bỏ qua tự động kết nối.');
+        return;
+      }
       isAutoConnectingRef.current = true;
       const token = getGoogleAccessToken();
       if (!token) {
@@ -845,50 +885,8 @@ export function useDriveSync({
       try {
         console.info('[Central Hub Sync] Đang tự động quét tìm file trung tâm trên Google Drive...');
 
-        // 1. Trường hợp máy chưa có file liên kết cục bộ (hoặc máy 2 vừa mở app sau khi máy 1 tạo/liên kết lại)
+        // 1. Trường hợp chưa có file liên kết: Giữ nguyên để người dùng tự chọn file từ danh sách/Picker
         if (!settingsRef.current.googleSheetUrl) {
-          const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
-          if (hub && hub.id) {
-            const masterState = await getMasterSyncStateFromDrive(token, hub.id);
-            if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
-              applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
-              const link = hub.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-              const fileName = hub.name || masterState.activeFileName || 'Sổ tiết kiệm';
-              console.info(`[Central Hub Sync] Phát hiện file trung tâm "${fileName}". Tự động kết nối và nạp dữ liệu ngay lập tức...`);
-              setSyncDriveStatus(`Đang tự động đồng bộ file trung tâm "${fileName}"...`);
-              setExplicitlyUnlinked(false);
-
-              try {
-                sessionStorage.removeItem('explicitly_unlinked');
-              } catch {}
-
-              // Tải dữ liệu từ file trung tâm
-              try {
-                const res = await downloadRealGoogleDriveFile(token, hub.id, hub.mimeType);
-                if (res.success) {
-                  applyMasterSettlements(res.settlements || []);
-                  if (res.books && res.books.length > 0) {
-                    const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-                    const mergedBooks = sortAndReindexBooks(activeRemote);
-                    setBooks(mergedBooks);
-                    localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
-                  }
-                  const nowStr = new Date().toLocaleString('vi-VN');
-                  setSettings((prev) => ({
-                    ...prev,
-                    googleSheetUrl: link,
-                    googleSheetName: fileName,
-                    lastSyncTime: nowStr,
-                    lastLocalLinkTimestamp: masterState.linkedTimestamp || new Date().toISOString(),
-                    autoSync: true,
-                  }));
-                  setSyncDriveStatus(`⚡ Đã tự động kết nối & đồng bộ file trung tâm "${fileName}"`);
-                }
-              } catch (dlErr: any) {
-                console.warn('Lỗi tải dữ liệu cho file tự động phát hiện:', dlErr);
-              }
-            }
-          }
           isAutoConnectingRef.current = false;
           return;
         }
@@ -899,7 +897,7 @@ export function useDriveSync({
         const currentFileId = match ? match[1] : undefined;
         const masterState = await getMasterSyncStateFromDrive(token, currentFileId);
 
-        if (!masterState || masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
+        if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
           console.info('[Central Hub Sync] File master đã ở trạng thái unlinked trên Drive -> Hủy liên kết cục bộ.');
           setExplicitlyUnlinked(true);
           setBooks([]);
@@ -916,7 +914,9 @@ export function useDriveSync({
         }
 
         // Master state tồn tại và active
-        applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
+        if (masterState && masterState.status === 'active') {
+          applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
+        }
       } catch (err: any) {
         console.warn('Lỗi quét tìm file trung tâm tự động:', err);
         recordSyncAuditLog({
@@ -935,14 +935,16 @@ export function useDriveSync({
 
     performAutoConnect();
 
-    // Lắng nghe khi người dùng quay lại app (sau khi hoàn tất đăng nhập Google trên popup)
-    const handleFocus = () => {
+    // Lắng nghe khi người dùng quay lại app hoặc khi kết nối mạng được phục hồi (Online)
+    const handleFocusOrOnline = () => {
       performAutoConnect();
     };
 
-    window.addEventListener('focus', handleFocus);
+    window.addEventListener('focus', handleFocusOrOnline);
+    window.addEventListener('online', handleFocusOrOnline);
     return () => {
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('focus', handleFocusOrOnline);
+      window.removeEventListener('online', handleFocusOrOnline);
     };
   }, [currentUser, setSettings, setBooks]);
 
@@ -1189,9 +1191,21 @@ export function useDriveSync({
         }
 
         const meta = await getRealGoogleDriveFileMetadata(token, fileId);
-        if (meta?.isDeleted) {
-          console.warn('Google Drive file is marked deleted on Drive:', fileId);
-          setSyncDriveStatus('⚠️ File liên kết đang ở trong thùng rác hoặc không khả dụng.');
+        if (meta?.isTrashed) {
+          console.warn('Google Drive file is trashed on Drive:', fileId);
+          setSettings((prev) => ({
+            ...prev,
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            lastSyncTime: undefined,
+          }));
+          setSyncDriveStatus('⚠️ File liên kết đã bị xóa hoặc chuyển vào thùng rác.');
+          setShowFileDeletedRecovery(true);
+          return;
+        }
+
+        if (meta?.needsPickerAccess) {
+          // File needs user to open/pick via Google Picker in this session
           return;
         }
 
@@ -1230,20 +1244,23 @@ export function useDriveSync({
           return;
         }
 
-        if (
-          err?.message?.includes('FILE_NOT_FOUND') ||
-          err?.message?.includes('xóa') ||
-          err?.message?.includes('thùng rác') ||
-          err?.message?.includes('404')
-        ) {
-          console.warn('checkRemoteSheetChanges: file not found or inaccessible for this account:', err?.message);
+        if (err?.message?.includes('FILE_TRASHED')) {
+          console.warn('checkRemoteSheetChanges: file explicitly trashed:', err?.message);
+          setSettings((prev) => ({
+            ...prev,
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            lastSyncTime: undefined,
+          }));
+          setSyncDriveStatus('⚠️ File liên kết đã bị chuyển vào thùng rác.');
+          setShowFileDeletedRecovery(true);
           recordSyncAuditLog({
             type: 'SYNC_ERROR',
-            title: 'File Google Drive không tìm thấy hoặc đã bị xóa',
-            status: 'error',
+            title: 'File Google Drive đã bị chuyển vào thùng rác',
+            status: 'warning',
             userEmail: currentUser?.email,
             currentRole: settingsRef.current?.currentRole,
-            summary: `File không truy cập được: ${err?.message || err}`,
+            summary: `File đã bị xóa/chuyển vào thùng rác: ${err?.message || err}`,
             errorMessage: err?.stack || err?.message,
             details: { fileId },
           });
@@ -1344,20 +1361,7 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
-            if (!settingsRef.current.googleSheetUrl) {
-              const hub = await autoDiscoverLatestCentralHub(token, currentUser.email);
-              if (hub && hub.id) {
-                const sheetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-                setSettings((prev) => ({
-                  ...prev,
-                  googleSheetUrl: sheetUrl,
-                  googleSheetName: hub.name || 'Bảng tính tiết kiệm',
-                }));
-                setExplicitlyUnlinked(false);
-                console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ master workspace...');
-                await syncBooksFromDriveRef.current(false, token);
-              }
-            } else {
+            if (settingsRef.current.googleSheetUrl) {
               const currentUrl = settingsRef.current.googleSheetUrl;
               const match = currentUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || currentUrl?.match(/id=([a-zA-Z0-9-_]+)/);
               const currentFileId = match ? match[1] : undefined;
@@ -1449,20 +1453,23 @@ export function useDriveSync({
       const token = await ensureGoogleAccessToken();
       if (token) {
         clearExpiredNoticeTimer();
+        setIsDriveTokenExpired(false);
         setSyncDriveStatus('🔄 Đang kết nối và cập nhật file trung tâm...');
 
-        // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không
-        const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
-        if (hub && hub.id) {
-          const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-          if (hubUrl !== settingsRef.current.googleSheetUrl) {
-            console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
-            setSettings((prev) => ({
-              ...prev,
-              googleSheetUrl: hubUrl,
-              googleSheetName: hub.name,
-              lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-            }));
+        // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không (chỉ khi không hủy liên kết chủ động)
+        if (!isExplicitlyUnlinked()) {
+          const hub = await autoDiscoverLatestCentralHub(token, currentUser?.email);
+          if (hub && hub.id && !isFileUnlinked(hub.id)) {
+            const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+            if (hubUrl !== settingsRef.current.googleSheetUrl) {
+              console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
+              setSettings((prev) => ({
+                ...prev,
+                googleSheetUrl: hubUrl,
+                googleSheetName: hub.name,
+                lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+              }));
+            }
           }
         }
 

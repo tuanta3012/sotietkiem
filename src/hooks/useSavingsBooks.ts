@@ -178,19 +178,15 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
   const handleDeleteBook = useCallback(
     (bookId: string) => {
       if (!canEditData(currentRole)) {
-        alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa dữ liệu.');
         return false;
       }
-      if (window.confirm('Bạn có chắc muốn xóa sổ tiết kiệm này khỏi danh mục không?')) {
-        const updated = books.filter((b) => b.id !== bookId);
-        const nextBooks = sortAndReindexBooks(updated);
-        setBooks(nextBooks);
-        if (onPushToDriveRef.current) {
-          onPushToDriveRef.current(nextBooks, settlementAdjustments);
-        }
-        return true;
+      const updated = books.filter((b) => b.id !== bookId);
+      const nextBooks = sortAndReindexBooks(updated);
+      setBooks(nextBooks);
+      if (onPushToDriveRef.current) {
+        onPushToDriveRef.current(nextBooks, settlementAdjustments);
       }
-      return false;
+      return true;
     },
     [books, settlementAdjustments, currentRole]
   );
