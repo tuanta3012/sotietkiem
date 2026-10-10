@@ -80,6 +80,12 @@ let isSigningIn = false;
 export const STK_APP_ID = 'com.tietkiemgiadinh.app';
 export const STK_APP_ID_KEY = 'STK_APP_ID';
 
+function createDriveFileUnavailableError(): Error {
+  return new Error(
+    'FILE_UNAVAILABLE: Google Drive không thể xác nhận file này. File có thể đã bị xóa hoặc tài khoản hiện tại chưa được cấp quyền truy cập qua ứng dụng. Hãy kiểm tra tài khoản Google và yêu cầu Admin chia sẻ lại file.'
+  );
+}
+
 /**
  * Get current access token (reads from memory or localStorage)
  */
@@ -979,7 +985,8 @@ export async function getRealGoogleDriveFileMetadata(
     );
     if (sheetsRes.status === 404) {
       console.warn(`[getRealGoogleDriveFileMetadata] Sheets API returned 404 for fileId: ${fileId}`);
-      return { id: fileId, name: '', mimeType: '', isDeleted: true };
+      // Google APIs may return 404 both for a missing file and for a file the caller cannot access.
+      return { id: fileId, name: '', mimeType: '', isDeleted: false };
     }
     if (sheetsRes.ok) {
       const sheetsData = await sheetsRes.json();
@@ -1058,7 +1065,7 @@ export async function downloadRealGoogleDriveFile(
         );
         if (metaSheetRes.status === 404 || liveSheetsRes.status === 404) {
           console.warn(`[downloadRealGoogleDriveFile] Sheets API returned 404. metaSheetStatus: ${metaSheetRes.status}, liveSheetsStatus: ${liveSheetsRes.status}`);
-          throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+          throw createDriveFileUnavailableError();
         }
         if (metaSheetRes.status === 403 || liveSheetsRes.status === 403) {
           console.warn(`[downloadRealGoogleDriveFile] Sheets API returned 403. metaSheetStatus: ${metaSheetRes.status}, liveSheetsStatus: ${liveSheetsRes.status}`);
@@ -1078,7 +1085,11 @@ export async function downloadRealGoogleDriveFile(
           throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
         }
       } catch (sheetsErr: any) {
-        if (sheetsErr?.message?.includes('hết hạn') || sheetsErr?.message?.includes('FILE_NOT_FOUND')) {
+        if (
+          sheetsErr?.message?.includes('hết hạn') ||
+          sheetsErr?.message?.includes('FILE_NOT_FOUND') ||
+          sheetsErr?.message?.includes('FILE_UNAVAILABLE')
+        ) {
           throw sheetsErr;
         }
         console.warn('Direct Google Sheets API fetch fallback to Drive API:', sheetsErr);
@@ -1094,7 +1105,7 @@ export async function downloadRealGoogleDriveFile(
         }
       );
       if (metaRes.status === 404) {
-        throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+        throw createDriveFileUnavailableError();
       }
       if (metaRes.ok) {
         const meta = await metaRes.json();
@@ -1134,7 +1145,7 @@ export async function downloadRealGoogleDriveFile(
         throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
       }
       if (res.status === 404) {
-        throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+        throw createDriveFileUnavailableError();
       }
       throw new Error(err?.error?.message || `Không thể tải nội dung file từ Google Drive (Mã ${res.status})`);
     }
@@ -1178,7 +1189,7 @@ export async function updateRealGoogleDriveFile(
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (metaRes.status === 404) {
-        throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+        throw createDriveFileUnavailableError();
       }
       if (metaRes.ok) {
         const meta = await metaRes.json();
@@ -1187,7 +1198,7 @@ export async function updateRealGoogleDriveFile(
         }
       }
     } catch (err: any) {
-      if (err?.message?.includes('FILE_NOT_FOUND')) {
+      if (err?.message?.includes('FILE_NOT_FOUND') || err?.message?.includes('FILE_UNAVAILABLE')) {
         throw err;
       }
       // fallback for other network errors
@@ -1495,7 +1506,7 @@ export async function updateRealGoogleDriveFile(
             throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
           }
           if (putRes.status === 404) {
-            throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+            throw createDriveFileUnavailableError();
           }
           throw new Error(errMsg);
         }
@@ -1798,7 +1809,7 @@ export async function updateRealGoogleDriveFile(
           throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng bấm đăng nhập lại.');
         }
         if (res.status === 404) {
-           throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc không còn tồn tại trên Google Drive.');
+           throw createDriveFileUnavailableError();
         }
         throw new Error(err?.error?.message || `Không thể cập nhật file lên Google Drive (Mã ${res.status})`);
       }
@@ -3665,5 +3676,4 @@ export async function formatCreatedSpreadsheetColumns(
     return false;
   }
 }
-
 

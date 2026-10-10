@@ -205,7 +205,7 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
 
   if (rawRows.length === 0) {
     if (headerRowIdx >= 0) {
-      return { success: true, books: [], warnings: [], totalPrincipal: 0 };
+      return { success: true, books: [], errors: [], warnings: [], totalPrincipal: 0 };
     }
     return { success: false, books: [], errors: ['Không tìm thấy hàng dữ liệu nào trong bảng tính.'], warnings, totalPrincipal: 0 };
   }
@@ -415,11 +415,12 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
 
   if (books.length === 0) {
     if (headerRowIdx >= 0) {
-      return { success: true, books: [], warnings, totalPrincipal: 0 };
+      return { success: true, books: [], errors: [], warnings, totalPrincipal: 0 };
     }
     return {
       success: true,
       books: [],
+      errors: [],
       warnings,
       totalPrincipal: 0,
     };
@@ -748,6 +749,7 @@ export async function parseWorkbook(workbookOrBuffer: any): Promise<ParseExcelRe
     return {
       success: true,
       books: [],
+      errors: [],
       warnings,
       totalPrincipal: 0,
     };

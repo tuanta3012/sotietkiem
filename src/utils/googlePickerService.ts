@@ -167,13 +167,13 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
     }
 
     // 2. Cấu hình các View hiển thị file ở định dạng Danh sách (List mode) và chỉ định dạng Google Sheet hoặc Excel
-    // - Lọc nghiêm ngặt chỉ hiển thị file có gắn nhãn com.tietkiemgiadinh.app
+    // - Giữ truy vấn nhãn ứng dụng hiện tại để giới hạn danh sách file
     // - Ẩn hoàn toàn folder (setIncludeFolders(false))
     const listMode = google.picker.DocsViewMode?.LIST || 'list';
     const spreadsheetMimeTypes =
       'application/vnd.google-apps.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
 
-    // View 1: Bảng tính của tôi (My Drive) - Danh sách, lọc theo nhãn com.tietkiemgiadinh.app, ẩn thư mục
+    // View 1: Bảng tính của tôi (My Drive) - lọc file ứng dụng
     const viewMySpreadsheets = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
       .setMimeTypes(spreadsheetMimeTypes)
       .setMode(listMode)
@@ -182,7 +182,7 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
       .setQuery(STK_APP_ID)
       .setLabel('Drive của tôi');
 
-    // View 2: Bảng tính được chia sẻ với tôi (Shared with me) - lọc theo nhãn com.tietkiemgiadinh.app, ẩn thư mục
+    // View 2: Bảng tính được chia sẻ với tôi (Shared with me) - lọc file ứng dụng
     const viewSharedWithMe = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
       .setMimeTypes(spreadsheetMimeTypes)
       .setMode(listMode)
@@ -193,7 +193,7 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
       .setQuery(STK_APP_ID)
       .setLabel('Được chia sẻ với tôi');
 
-    // View 3: Toàn bộ bảng tính (hỗ trợ cả Bộ nhớ dùng chung / Shared Drives) - lọc theo nhãn com.tietkiemgiadinh.app, ẩn thư mục
+    // View 3: Toàn bộ bảng tính (bao gồm Shared Drives) - lọc file ứng dụng
     const viewAllDrivesSpreadsheets = new google.picker.DocsView()
       .setMimeTypes(spreadsheetMimeTypes)
       .setMode(listMode)

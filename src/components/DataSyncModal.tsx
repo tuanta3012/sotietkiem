@@ -66,6 +66,7 @@ import {
   hasAppMetadataLabel,
 } from '../utils/googleDriveService';
 import { openGooglePicker, PickedGoogleSheetFile } from '../utils/googlePickerService';
+import { resolveUserRole } from '../utils/roleHelper';
 
 interface DataSyncModalProps {
   isOpen: boolean;
@@ -154,7 +155,13 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   
   // File switch confirmation
   const [showSwitchConfirm, setShowSwitchConfirm] = useState<boolean>(false);
-  const [pendingSwitchFile, setPendingSwitchFile] = useState<{id: string, name: string, link?: string} | null>(null);
+  const [pendingSwitchFile, setPendingSwitchFile] = useState<{
+    id: string;
+    name: string;
+    webViewLink?: string;
+    mimeType?: string;
+    modifiedTime?: string;
+  } | null>(null);
   const [switchMode, setSwitchMode] = useState<'file' | 'url'>('file');
   const [urlToSwitch, setUrlToSwitch] = useState<string>('');
 
@@ -314,11 +321,18 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       setAccessToken(validToken);
       // Synchronize online user profile if we have one
       if (currentUser) {
+        const resolvedRole = resolveUserRole(
+          currentUser.email,
+          settings.currentRole,
+          settings.members,
+          settings.workspaceOwnerEmail
+        );
         const onlineUser: AuthUser = {
           email: currentUser.email || '',
           name: currentUser.displayName || 'Chủ Tài Khoản',
-          role: 'admin',
-          title: 'Quản trị viên (Admin)',
+          role: resolvedRole === 'VIEWER' ? 'viewer' : 'admin',
+          userRole: resolvedRole,
+          title: resolvedRole === 'ADMIN' ? 'Quản trị viên (Admin)' : 'Thành viên',
           isOffline: false,
         };
         onLoginOnline?.(onlineUser, validToken);
@@ -516,10 +530,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   // Mở Google Picker API để người dùng chọn/đổi File CSDL Google Sheet
   const handleOpenPickerFile = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền đổi file liên kết Google Drive.');
-      return;
-    }
     setSyncErrorMessage(null);
     const token = await validateTokenOrPrompt();
     if (!token) return;
@@ -570,14 +580,17 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     mimeType?: string;
     webViewLink?: string;
     modifiedTime?: string;
-  }) => {
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Bạn đang tham gia không gian với vai trò Thành viên. Chỉ Admin mới có quyền chọn file liên kết.');
-      return;
-    }
+  }, confirmedSwitch = false) => {
+    const role = resolveUserRole(
+      currentUser?.email || appUser?.email,
+      settings.currentRole,
+      settings.members,
+      settings.workspaceOwnerEmail
+    );
+    const canAdministerDrive = canChangeDriveFile(role);
     // Nếu app đang có dữ liệu và file khác với file hiện tại, xác nhận trước khi nạp thay thế
-    if (books.length > 0 && selectedFileId !== file.id) {
-      setPendingSwitchFile({id: file.id, name: file.name, link: file.webViewLink});
+    if (!confirmedSwitch && books.length > 0 && selectedFileId !== file.id) {
+      setPendingSwitchFile(file);
       setSwitchMode('file');
       setShowSwitchConfirm(true);
       return;
@@ -592,12 +605,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     // Kích hoạt khóa chuyển đổi file triệt để để chặn vòng lặp
     onStartFileSwitch?.();
 
-    setSelectedFileId(file.id);
-    setSelectedFileName(file.name);
-    setFileIsDeleted(false);
-    setExplicitlyUnlinked(false);
     const link = file.webViewLink || `https://docs.google.com/spreadsheets/d/${file.id}/edit`;
-    setSheetUrl(link);
 
     const token = await validateTokenOrPrompt();
     if (!token) {
@@ -607,23 +615,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
     // Update Master Sync Pointer on Google Drive
     let stampTime = '';
-    try {
-      stampTime = await setMasterSyncLinked(
-        token,
-        file.id,
-        currentUser?.email || appUser?.email,
-        previousFileId && previousFileId !== file.id ? previousFileId : undefined,
-        file.name,
-        link,
-        previousFileId === file.id ? settings.lastLocalLinkTimestamp : undefined
-      );
-    } catch (metaErr) {
-      console.warn('Failed to update master sync state on select:', metaErr);
-    }
-
-    // Đảm bảo file được gán nhãn com.tietkiemgiadinh.app cả trên Drive Metadata lẫn trong Sheet Config
-    stampGoogleDriveFileWithAppLabel(token, file.id).catch(() => {});
-
     // Auto 2-way sync: Pull real data from the selected file into the app
     setSyncStatusStep(`Đang tự động đồng bộ dữ liệu 2 chiều từ file "${file.name}" trên Google Drive...`);
     setGoogleSyncMessage(null);
@@ -634,6 +625,30 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       const nowStr = new Date().toLocaleString('vi-VN');
 
       if (parseResult.success) {
+        setSelectedFileId(file.id);
+        setSelectedFileName(file.name);
+        setFileIsDeleted(false);
+        setExplicitlyUnlinked(false);
+        setSheetUrl(link);
+
+        if (canAdministerDrive) {
+          try {
+            stampTime = await setMasterSyncLinked(
+              token,
+              file.id,
+              currentUser?.email || appUser?.email,
+              previousFileId && previousFileId !== file.id ? previousFileId : undefined,
+              file.name,
+              link,
+              previousFileId === file.id ? settings.lastLocalLinkTimestamp : undefined
+            );
+          } catch (metaErr) {
+            console.warn('Failed to update master sync state on select:', metaErr);
+          }
+
+          stampGoogleDriveFileWithAppLabel(token, file.id).catch(() => {});
+        }
+
         let fileModTime: string | undefined;
         try {
           const meta = await getRealGoogleDriveFileMetadata(token, file.id);
@@ -650,7 +665,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               parsedSettlements,
               link,
               file.name,
-              stampTime || new Date().toISOString(),
+              stampTime || settings.lastLocalLinkTimestamp || new Date().toISOString(),
               fileModTime
             );
           } else {
@@ -661,7 +676,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               googleSheetName: file.name,
               lastSyncTime: nowStr,
               autoSync: true,
-              lastLocalLinkTimestamp: stampTime || new Date().toISOString(),
+              lastLocalLinkTimestamp: stampTime || settings.lastLocalLinkTimestamp || new Date().toISOString(),
             });
           }
         } else {
@@ -671,7 +686,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               [],
               link,
               file.name,
-              stampTime || new Date().toISOString(),
+              stampTime || settings.lastLocalLinkTimestamp || new Date().toISOString(),
               fileModTime
             );
           } else {
@@ -680,7 +695,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               googleSheetName: file.name,
               lastSyncTime: nowStr,
               autoSync: true,
-              lastLocalLinkTimestamp: stampTime || new Date().toISOString(),
+              lastLocalLinkTimestamp: stampTime || settings.lastLocalLinkTimestamp || new Date().toISOString(),
             });
           }
         }
@@ -690,7 +705,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
             ? `⚡ Đã liên kết và đồng bộ thành công ${parsedBooks.length} sổ tiết kiệm từ file "${file.name}" trên Google Drive (${nowStr})`
             : `⚡ Đã liên kết thành công với file "${file.name}" trên Google Drive (${nowStr})`
         );
-        loadAppFiles(token);
+        if (canAdministerDrive) loadAppFiles(token);
       } else {
         onCancelFileSwitch?.();
         setSyncErrorMessage(
@@ -699,7 +714,11 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       }
     } catch (err: any) {
       onCancelFileSwitch?.();
-      setSyncErrorMessage(`Lỗi đọc file Google Drive: ${err.message || 'Không thể đọc nội dung file.'}`);
+      setSyncErrorMessage(
+        err?.message?.includes('FILE_UNAVAILABLE')
+          ? err.message.replace('FILE_UNAVAILABLE: ', '')
+          : `Lỗi đọc file Google Drive: ${err.message || 'Không thể đọc nội dung file.'}`
+      );
     } finally {
       setSyncStatusStep(null);
     }
@@ -1225,7 +1244,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           <button
             type="button"
             onClick={handleOpenPickerFile}
-            disabled={isPickerLoading || !canChangeDriveFile(settings.currentRole)}
+            disabled={isPickerLoading}
             className="inline-flex items-center space-x-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-50 hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
             title="Mở rộng tìm file khác từ Google Drive qua Google Picker"
           >
@@ -1273,7 +1292,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   {!isCurrentlySelected && (
                     <button
                       type="button"
-                      disabled={!canChangeDriveFile(settings.currentRole)}
                       onClick={() =>
                         handleSelectPickerFile({
                           id: file.id,
@@ -1313,7 +1331,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           <button
             type="button"
             onClick={handleOpenPickerFile}
-            disabled={isPickerLoading || !canChangeDriveFile(settings.currentRole)}
+            disabled={isPickerLoading}
             className="inline-flex items-center space-x-1.5 px-3 py-1 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 rounded-lg transition-all cursor-pointer disabled:opacity-50 shadow-2xs"
             title="Mở rộng tìm file khác từ Google Drive qua Google Picker"
           >
@@ -1894,7 +1912,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               <button
                 onClick={() => {
                    if (switchMode === 'file') {
-                      handleSelectPickerFile(pendingSwitchFile as any);
+                     handleSelectPickerFile(pendingSwitchFile, true);
                    } else {
                       handleConnectByUrl(urlToSwitch);
                    }
