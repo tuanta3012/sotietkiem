@@ -267,7 +267,7 @@ export default function App() {
   useEffect(() => {
     const splashTimer = setTimeout(() => {
       setShowSplash(false);
-    }, 1100);
+    }, 1500);
     return () => clearTimeout(splashTimer);
   }, []);
 
@@ -1117,11 +1117,9 @@ export default function App() {
           </div>
         </div>
         <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white mb-2">
-          SỔ TIẾT KIỆM GIA ĐÌNH
+          Sổ tiết kiệm
         </h1>
-        <p className="text-xs sm:text-sm font-medium text-emerald-400 mb-8 max-w-xs">
-          Quản lý tài chính chuẩn xác &bull; Ngoại tuyến tức thì
-        </p>
+
         <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-slate-800/80 border border-slate-700/60 text-slate-300 text-xs shadow-inner">
           <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
           <span>Nạp dữ liệu từ bộ nhớ máy...</span>
