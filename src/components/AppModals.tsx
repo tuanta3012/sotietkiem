@@ -139,7 +139,7 @@ interface AppModalsProps {
   // User Management Modal
   isUserManagementModalOpen?: boolean;
   setIsUserManagementModalOpen?: (open: boolean) => void;
-  onLeaveWorkspace?: () => void;
+  onLeaveWorkspace?: () => void | Promise<void>;
 
   // Core Data
   books: SavingsBook[];

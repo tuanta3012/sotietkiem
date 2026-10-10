@@ -24,7 +24,7 @@ interface UserManagementModalProps {
   currentUser: AuthUser | null;
   settings: AppSettings;
   onSaveMembers: (updatedMembers: WorkspaceMember[]) => Promise<void>;
-  onLeaveWorkspace?: () => void;
+  onLeaveWorkspace?: () => void | Promise<void>;
   onOpenSyncModal?: () => void;
 }
 
@@ -67,6 +67,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [isAddedSuccess, setIsAddedSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [isLeavingWorkspace, setIsLeavingWorkspace] = useState(false);
   const [memberToRemove, setMemberToRemove] = useState<{ id: string; email: string; name?: string } | null>(null);
 
   const hasLinkedDriveFile = Boolean(settings.googleSheetUrl && settings.googleSheetUrl.trim().length > 0);
@@ -140,6 +141,22 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       console.warn('Background role update failed, retrying:', err);
       onSaveMembers(updated).catch(() => {});
     });
+  };
+
+  const handleLeaveWorkspace = async () => {
+    if (!onLeaveWorkspace || isLeavingWorkspace) return;
+    setIsLeavingWorkspace(true);
+    setErrorMsg(null);
+    try {
+      await onLeaveWorkspace();
+      onClose();
+    } catch (err) {
+      console.error('Could not leave the workspace.', err);
+      setErrorMsg('Không thể rời workspace trên thiết bị. Vui lòng thử lại.');
+    } finally {
+      setIsLeavingWorkspace(false);
+      setShowLeaveConfirm(false);
+    }
   };
 
   const executeRemoveMember = async (memberId: string, memberEmail: string) => {
@@ -474,26 +491,24 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                     <span>Xác nhận rời không gian chia sẻ?</span>
                   </div>
                   <p className="text-[11px] text-slate-600">
-                    Ứng dụng sẽ ngắt liên kết và đưa bạn về Không gian cá nhân riêng biệt.
+                    Ứng dụng sẽ ngắt liên kết và giữ lại dữ liệu hiện tại thành bản sao riêng trên thiết bị. Nếu tài khoản không có quyền gỡ chia sẻ trên Drive, hãy nhờ Admin thu hồi quyền file.
                   </p>
                   <div className="flex gap-2 justify-end pt-1">
                     <button
                       type="button"
                       onClick={() => setShowLeaveConfirm(false)}
+                      disabled={isLeavingWorkspace}
                       className="px-2.5 py-1 bg-white border border-slate-300 text-slate-700 rounded-md font-semibold text-xs"
                     >
                       Hủy
                     </button>
                     <button
                       type="button"
-                      onClick={() => {
-                        setShowLeaveConfirm(false);
-                        onLeaveWorkspace();
-                        onClose();
-                      }}
-                      className="px-2.5 py-1 bg-rose-600 text-white rounded-md font-bold text-xs"
+                      onClick={handleLeaveWorkspace}
+                      disabled={isLeavingWorkspace}
+                      className="px-2.5 py-1 bg-rose-600 text-white rounded-md font-bold text-xs disabled:opacity-60"
                     >
-                      Xác nhận rời
+                      {isLeavingWorkspace ? 'Đang rời...' : 'Xác nhận rời'}
                     </button>
                   </div>
                 </div>

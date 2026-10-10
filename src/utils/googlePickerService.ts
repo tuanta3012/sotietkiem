@@ -10,8 +10,7 @@ import { STK_APP_ID } from './googleDriveService';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 // Cấu hình biến môi trường
-export const GOOGLE_API_KEY =
-  (import.meta as any).env?.VITE_GOOGLE_API_KEY || 'AIzaSyC52c1CvjuL2Cna8x1U9_p6lc_xwEHFlqk';
+export const GOOGLE_API_KEY = (import.meta as any).env?.VITE_GOOGLE_API_KEY || '';
 
 export const GOOGLE_CLIENT_ID = firebaseConfig.oAuthClientId;
 export const GOOGLE_APP_ID = firebaseConfig.appId.split(':')[1];
@@ -151,6 +150,13 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
 
   if (!accessToken) {
     const err = new Error('Không tìm thấy Google Access Token. Vui lòng đăng nhập Google trước khi chọn file.');
+    onError?.(err);
+    throw err;
+  }
+  if (!apiKey) {
+    const err = new Error(
+      'Chưa cấu hình Google Picker API key. Hãy đặt VITE_GOOGLE_API_KEY trong biến môi trường build của ứng dụng.'
+    );
     onError?.(err);
     throw err;
   }

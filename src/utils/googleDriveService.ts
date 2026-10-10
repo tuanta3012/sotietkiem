@@ -2905,6 +2905,8 @@ export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   userEmail?: string
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
+  if (isExplicitlyUnlinked()) return null;
+
   try {
     const targetFileId = getLocalMasterPointerFileId();
     if (targetFileId) {
@@ -3016,29 +3018,48 @@ export async function revokeFilePermission(
 export async function removeMemberFromDriveMaster(
   accessToken: string,
   memberEmailToRemove: string
-): Promise<void> {
-  try {
-    const currentMaster = await getMasterSyncStateFromDrive(accessToken);
-    if (!currentMaster || !currentMaster.members) return;
-
-    const cleanTarget = memberEmailToRemove.trim().toLowerCase();
-    const updatedMembers = currentMaster.members.filter(
-      (m) => m.email.trim().toLowerCase() !== cleanTarget
-    );
-
-    await saveMasterSyncStateOnDrive(accessToken, {
-      ...currentMaster,
-      members: updatedMembers,
-      updatedAt: new Date().toISOString(),
-    });
-
-    // Thu hồi quyền truy cập Drive trên Google Sheet liên kết
-    if (currentMaster.activeFileId) {
-      await revokeFilePermission(accessToken, currentMaster.activeFileId, cleanTarget).catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Lỗi khi xóa thành viên khỏi Master State:', err);
+): Promise<{ membershipRemoved: boolean; drivePermissionRevoked: boolean }> {
+  const currentMaster = await getMasterSyncStateFromDrive(accessToken);
+  if (!currentMaster?.members) {
+    return { membershipRemoved: false, drivePermissionRevoked: false };
   }
+
+  const cleanTarget = memberEmailToRemove.trim().toLowerCase();
+  const wasMember = currentMaster.members.some(
+    (member) => member.email.trim().toLowerCase() === cleanTarget
+  );
+  let membershipRemoved = !wasMember;
+  let drivePermissionRevoked = false;
+
+  if (wasMember) {
+    const updatedMembers = currentMaster.members.filter(
+      (member) => member.email.trim().toLowerCase() !== cleanTarget
+    );
+    try {
+      const saveResult = await saveMasterSyncStateOnDrive(accessToken, {
+        ...currentMaster,
+        members: updatedMembers,
+        updatedAt: new Date().toISOString(),
+      });
+      membershipRemoved = saveResult !== null;
+    } catch (err) {
+      console.warn('Không thể tự xóa thành viên khỏi Master State trên Drive:', err);
+    }
+  }
+
+  if (currentMaster.activeFileId) {
+    try {
+      drivePermissionRevoked = await revokeFilePermission(
+        accessToken,
+        currentMaster.activeFileId,
+        cleanTarget
+      );
+    } catch (err) {
+      console.warn('Không thể tự thu hồi quyền Google Drive của thành viên:', err);
+    }
+  }
+
+  return { membershipRemoved, drivePermissionRevoked };
 }
 
 /**

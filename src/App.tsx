@@ -646,15 +646,21 @@ export default function App() {
   const [selectedBookForDetail, setSelectedBookForDetail] = useState<SavingsBook | null>(null);
 
   const handleLeaveWorkspace = async () => {
+    setExplicitlyUnlinked(true);
     const token = getGoogleAccessToken();
+    let membershipRemoved = false;
+    let drivePermissionRevoked = false;
     if (token && currentUser?.email) {
       try {
-        await removeMemberFromDriveMaster(token, currentUser.email);
+        const result = await removeMemberFromDriveMaster(token, currentUser.email);
+        membershipRemoved = result.membershipRemoved;
+        drivePermissionRevoked = result.drivePermissionRevoked;
       } catch (err) {
         console.warn('Lỗi tự động xóa thành viên khỏi Master State trên Drive:', err);
       }
     }
 
+    // Reassert after remote cleanup so an in-flight discovery cannot reconnect this device.
     setExplicitlyUnlinked(true);
 
     setSettings((prev) => ({
@@ -665,8 +671,14 @@ export default function App() {
       workspaceOwnerEmail: undefined,
       members: [],
     }));
-    setBooks([]);
-    showToast('Đã rời không gian chia sẻ thành công! Bạn hiện là Admin không gian cá nhân mới.', 'success');
+    if (membershipRemoved && drivePermissionRevoked) {
+      showToast('Đã rời workspace. Dữ liệu hiện tại được giữ làm bản sao riêng trên thiết bị.', 'success');
+    } else {
+      showToast(
+        'Đã ngắt workspace trên thiết bị và giữ lại dữ liệu. Có thể bạn vẫn còn quyền trên file Drive; hãy nhờ Admin xóa tài khoản khỏi workspace và thu hồi quyền chia sẻ.',
+        'error'
+      );
+    }
   };
 
   // Switch tab with intelligent normalization

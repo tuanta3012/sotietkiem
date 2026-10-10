@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import { STANDARDIZED_SHEET_HEADERS } from '../dataSchema';
-import { downloadRealGoogleDriveFile } from '../googleDriveService';
+import { autoDiscoverLatestCentralHub, downloadRealGoogleDriveFile } from '../googleDriveService';
 
 function makeValues() {
   const row: Array<string | number> = Array(STANDARDIZED_SHEET_HEADERS.length).fill('');
@@ -112,6 +112,17 @@ describe('shared Drive file access', () => {
     await expect(downloadRealGoogleDriveFile('member-access-token', 'shared-sheet')).rejects.toThrow(
       'PICKER_ACCESS_NOT_GRANTED:'
     );
+  });
+
+  it('does not auto-reconnect a workspace after the user explicitly left it', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => (key === 'explicitly_unlinked' ? 'true' : null),
+    });
+
+    await expect(autoDiscoverLatestCentralHub('member-access-token', 'member@example.com')).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not describe an inaccessible or 404 file as definitely deleted', async () => {

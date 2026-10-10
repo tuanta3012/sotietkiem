@@ -2,19 +2,19 @@
 
 ## Tổng quan
 - **Mục tiêu**: Cho phép thành viên chọn file Google Sheet do Admin (`tuanta3012.backup`) chia sẻ thông qua **Google Picker API** trực tiếp giao diện ứng dụng, giải quyết triệt để lỗi thành viên không tìm thấy file do giới hạn scope `drive.file`.
-- **API Key được cung cấp**: `AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos`
+- **API Key**: Cấu hình qua biến môi trường `VITE_GOOGLE_API_KEY`; không lưu giá trị key trong tài liệu.
 
 ## Các bước thực hiện chi tiết
 
 ### 1. Cấu hình biến môi trường & Tải Google Picker API Script
-- Cập nhật biến `VITE_GOOGLE_API_KEY=AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos` vào tệp cấu hình / `.env` (hoặc cấu hình trực tiếp trong code khởi tạo Google Picker).
+- Cập nhật biến `VITE_GOOGLE_API_KEY` trong tệp `.env` cục bộ hoặc cấu hình build của môi trường triển khai.
 - Tải động (dynamic load) script `https://apis.google.com/js/api.js` khi mở hộp thoại Picker.
 
 ### 2. Xây dựng component `GoogleSheetPickerModal`
 - Mở modal chọn file trực tiếp trong ứng dụng.
 - Yêu cầu người dùng đăng nhập Google Account (thành viên) để lấy OAuth token (`access_token`) với scope `https://www.googleapis.com/auth/drive.file`.
 - Sử dụng `google.picker.PickerBuilder`:
-  - Đặt API Key: `AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos`.
+  - Đặt API Key lấy từ biến môi trường `VITE_GOOGLE_API_KEY`.
   - Đặt OAuth Token của user.
   - Thêm View `google.picker.ViewId.SPREADSHEETS` để lọc các file Google Sheets được chia sẻ với user hoặc do user sở hữu.
   - Thiết lập callback nhận file ID, file Name khi người dùng chọn.

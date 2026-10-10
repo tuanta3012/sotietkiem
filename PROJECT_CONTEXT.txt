@@ -1,0 +1,375 @@
+SỔ TIẾT KIỆM - TÀI LIỆU BÀN GIAO DỰ ÁN CHO AGENT
+Ngày đối chiếu mã nguồn: 2026-10-10
+Ngôn ngữ giao diện, chú thích và nghiệp vụ: chủ yếu là tiếng Việt.
+
+MỤC ĐÍCH TÀI LIỆU
+
+Đây là bản đồ thực tế của dự án, dành cho kỹ sư hoặc agent tiếp nhận công việc.
+Hãy đọc trước khi sửa dữ liệu, đăng nhập, đồng bộ Drive, phân quyền hoặc quy
+trình phát hành.
+
+Nội dung mô tả mã nguồn hiện tại, không phải kiến trúc dự kiến trong tương lai.
+Nếu chú thích trong mã nguồn mâu thuẫn với hành vi thực thi hoặc kiểm thử, hãy
+ưu tiên hành vi thực tế và kết quả kiểm thử.
+
+1. TỔNG QUAN SẢN PHẨM
+
+"Sổ tiết kiệm" là ứng dụng quản lý danh mục sổ tiết kiệm cho hộ gia đình. Người
+dùng theo dõi sổ/hợp đồng tiền gửi, chủ sổ, ngân hàng, hình thức gửi, lãi suất,
+tiền gốc, kỳ hạn, ngày đáo hạn, lựa chọn tái tục, tất toán và ghi chú/nhãn.
+Ứng dụng tính lãi và ngày đáo hạn, tổng hợp danh mục/lãi, đồng thời hỗ trợ so
+sánh các phương án huy động tiền, ví dụ cầm cố sổ tiết kiệm so với tất toán
+trước hạn.
+
+Ứng dụng có thể dùng độc lập trên thiết bị và có thể chia sẻ qua một tệp Google
+Sheets trên Google Drive. Trong luồng dùng chung, Admin liên kết hoặc tạo bảng
+tính trung tâm và quản lý thành viên/vai trò. Thành viên cũng kết nối đến bảng
+tính đó và đồng bộ qua Google Sheets API/Drive API.
+
+Giao diện là ứng dụng một trang (SPA) viết bằng React, chạy trên trình duyệt và
+được đóng gói cho Android bằng Capacitor. Dữ liệu hiện được lưu ở localStorage
+và đồng bộ với Google Sheets; dự án HIỆN KHÔNG sử dụng Dexie làm cơ sở dữ liệu.
+
+2. CÔNG NGHỆ VÀ MÔI TRƯỜNG CHẠY
+
+- React 19, TypeScript 5.8, Vite 6.
+- Tailwind CSS 4 qua plugin Vite; Lucide React cho biểu tượng.
+- Capacitor 6 cho ứng dụng Android và các plugin vòng đời App, Filesystem,
+  Preferences, Share, Status Bar, Local Notifications, mở tệp, Google Auth và
+  khả năng sinh trắc học trên thiết bị.
+- Firebase SDK dùng cho tích hợp Firebase App/Auth với đăng nhập Google.
+- Google Drive REST API và Google Sheets API được gọi từ client bằng fetch;
+  Google Picker chỉ được tải khi cần mở.
+- Recharts dùng cho biểu đồ, được tách tải muộn ở những nơi đã cấu hình.
+- xlsx dùng để nhập/xuất Excel/CSV, được tải muộn bởi bộ phận xử lý tệp.
+- Vitest dùng để chạy kiểm thử đơn vị.
+- package.json không có dependency Dexie và ứng dụng không có cơ sở dữ liệu
+  Dexie. IndexedDB chỉ được nhắc tới trong logic dọn dẹp, không phải nơi lưu
+  danh mục sổ tiết kiệm chính.
+- Luồng nghiệp vụ cốt lõi không cần API server do dự án tự vận hành. Google,
+  Firebase và quy trình phát hành GitHub đã cấu hình là các dịch vụ bên ngoài.
+
+3. KIẾN TRÚC VÀ SƠ ĐỒ MÃ NGUỒN
+
+Điểm vào và lắp ứng dụng
+- index.html: bộ khung trang Vite và phần tử mount ứng dụng.
+- src/main.tsx: dọn dẹp/kiểm tra khi khởi động, tạo React root,
+  ErrorBoundary và ToastProvider.
+- src/App.tsx: quản lý state cấp cao, khởi động đăng nhập/phiên, tab, cài đặt,
+  kết nối các hook dữ liệu và đồng bộ Drive, vòng đời native, thông báo, hộp
+  thoại và luồng rời workspace. Tệp này lớn; cần truy vết nơi sở hữu state trước
+  khi tách hoặc chuyển logic.
+
+Giao diện tính năng
+- src/components/Navbar.tsx: điều hướng chính, cài đặt và thao tác.
+- src/components/BookListView.tsx và ExcelSheetView.tsx: danh mục sổ và cách
+  trình bày dữ liệu dạng bảng tính.
+- src/components/AddEditBookModal.tsx và BookDetailModal.tsx: tạo/sửa/xem,
+  tất toán và tái tục sổ.
+- src/components/InterestCalculationView.tsx: tính lãi, lịch sử theo năm,
+  tăng trưởng số dư và phân tích liên quan.
+- src/components/MobilizationOptimizer.tsx: so sánh các phương án huy động vốn.
+- src/components/CashflowMaturityChart.tsx: module biểu đồ dòng tiền/đáo hạn,
+  được tải muộn.
+- src/components/DataSyncModal.tsx: đăng nhập, tạo/liên kết/chuyển bảng tính,
+  Picker, kết nối bằng URL, nhập/xuất và đồng bộ thủ công.
+- src/components/UserManagementModal.tsx: quản lý thành viên/vai trò và rời
+  workspace.
+- src/components/SyncConflictModal.tsx và LoginConflictResolveModal.tsx:
+  giao diện cho người dùng chọn cách xử lý xung đột đồng bộ/đăng nhập.
+- src/components/SyncAuditLogModal.tsx: xem nhật ký kiểm toán tại máy và trên
+  cloud.
+- src/components/AppModals.tsx: tập hợp các hộp thoại; một số hộp thoại lớn
+  được tải muộn.
+- src/context/ToastContext.tsx: thông báo ngắn/toast trong ứng dụng.
+
+Nghiệp vụ, lưu trữ và tích hợp
+- src/types.ts: kiểu dữ liệu nghiệp vụ, cài đặt, workspace/thành viên và hàm
+  kiểm tra quyền theo vai trò.
+- src/hooks/useSavingsBooks.ts: state sổ/tất toán tại máy, lọc danh sách và
+  thao tác nghiệp vụ như lưu, sửa, xóa, tất toán, tái tục.
+- src/hooks/useDriveSync.ts: điều phối đồng bộ/thăm dò từ xa, xử lý token,
+  snapshot, phát hiện/giải quyết xung đột và trạng thái đồng bộ.
+- src/utils/googleDriveService.ts: tích hợp đăng nhập Google/Firebase, vòng đời
+  token, thao tác tệp Drive, đọc/ghi Sheets, cấu hình workspace master, chia sẻ,
+  đối chiếu quyền, gắn nhãn và liên kết/hủy liên kết.
+- src/utils/googlePickerService.ts: tải muộn Google Picker SDK và chọn bảng tính.
+- src/utils/dataSchema.ts: schema Google Sheets chuẩn và phiên bản schema.
+- src/utils/dataTranslator.ts: chuyển đổi/chuẩn hóa giữa dòng trong Sheet và
+  model ứng dụng; chuẩn hóa ngân hàng/chủ sổ/lãi suất/tiền/ngày.
+- src/utils/calculator.ts: tính lãi, ngày đáo hạn, tái tục dự kiến và tối ưu
+  phương án huy động tiền.
+- src/utils/excelParser.ts: đọc Excel/CSV, tạo tệp mẫu và xuất dữ liệu.
+- src/utils/secureStorage.ts: tích hợp kho credential an toàn native,
+  Preferences, dọn dẹp lúc khởi động và kiểm tra cài đặt mới.
+- src/utils/notificationService.ts: quyền và lịch thông báo đáo hạn trên web/
+  Capacitor.
+- src/utils/syncAuditLog.ts: nhật ký kiểm toán local và cố gắng đẩy lên cấu hình
+  Google Sheet đang liên kết.
+- src/utils/roleHelper.ts: xác định vai trò.
+- src/data/banks.ts: danh sách ngân hàng mặc định và cấu hình ngân hàng tùy chỉnh.
+- src/data/historicalGrowth.ts: dữ liệu lịch sử lãi và tăng trưởng số dư tính
+  toán/lưu trữ.
+- src/data/sampleBooks.ts: dữ liệu mẫu.
+
+Cấu hình native, build và phát hành
+- capacitor.config.ts: định danh app Android, plugin native, cấu hình thông báo
+  và OAuth Google. Không sao chép giá trị credential từ cấu hình vào tài liệu
+  hoặc thông điệp công khai.
+- vite.config.ts: plugin React/Tailwind, alias và chia chunk thư viện.
+- android/: dự án Android Capacitor.
+- .github/workflows/auto-release.yml: workflow GitHub Actions build/phát hành
+  Android; hiện cấu hình Node 20 và JDK 21.
+- scripts/generate_app_icons.py: tiện ích tạo icon.
+- firebase-blueprint.json: tệp blueprint/schema mô tả các entity Firestore có
+  thể có; riêng tệp này không chứng minh các entity đó đang được ứng dụng chạy
+  sử dụng.
+
+4. MÔ HÌNH NGHIỆP VỤ VÀ QUY TẮC DỮ LIỆU
+
+SavingsBook (src/types.ts) là bản ghi chính cho một sổ tiết kiệm. Các trường
+quan trọng:
+- id, bookCode, bankId, owner.
+- depositType: online hoặc counter (tại quầy).
+- principal lưu theo VND; interestRate là lãi suất phần trăm một năm (ví dụ 5.8).
+- termMonths, startDate và maturityDate dùng định dạng YYYY-MM-DD trong model.
+- rolloverOption: tái tục cả gốc và lãi, chỉ tái tục gốc, hoặc không tái tục.
+- status: active, matured hoặc settled. Sổ đã tất toán cần được loại khỏi danh
+  sách sổ đang hoạt động và thể hiện trong lịch sử tất toán.
+- Các trường tùy chọn gồm biên độ lãi vay riêng, lãi dự kiến, nhãn, ghi chú,
+  ngày tất toán, có tất toán sớm hay không và tiền lãi thực nhận.
+
+SettlementAdjustment lưu riêng thông tin tất toán/tái tục thực tế: tiền gốc,
+ngày/năm/loại tất toán, lãi thực nhận, lãi bị mất, trạng thái tái đầu tư, ghi
+chú và timestamp. Khi đổi trạng thái sổ hoặc viết migration, phải bảo toàn lịch
+sử tất toán.
+
+AppSettings gồm chế độ hiển thị riêng tư, quy tắc VIP/LTV, biên độ lãi vay, cài
+đặt riêng theo ngân hàng, lãi không kỳ hạn, thông tin thành viên/workspace, tùy
+chọn thông báo/sinh trắc học, URL/tên Sheet đang liên kết, mốc thời gian đồng bộ
+và vai trò.
+
+Schema Sheet chuẩn được đánh phiên bản trong src/utils/dataSchema.ts
+(CURRENT_SHEET_DATA_SCHEMA_VERSION = 2). Schema này chi phối việc chuyển đổi,
+nhập/xuất và bảng tính Google đang liên kết. Schema sử dụng tiêu đề/các tên
+đồng nghĩa tiếng Việt. Các cột tiền liên quan trên Sheet tính theo đơn vị triệu
+VND, trong khi model ứng dụng dùng VND; ngày/lãi suất/chủ sổ được chuẩn hóa tại
+ranh giới đọc/ghi.
+
+Không tùy tiện đổi thứ tự cột hoặc đơn vị. Nếu cần sửa, cập nhật đồng bộ schema,
+translator, validation, tệp mẫu, nhập/xuất, logic so sánh đồng bộ và kiểm thử.
+
+Quy ước tính toán thấy trong mã nguồn:
+- Lãi đơn được làm tròn: principal * annualRatePercent / 100 * days / 365.
+- Ngày đáo hạn được tính theo tháng và giới hạn ngày cuối tháng.
+- Sổ gửi tại quầy có thể điều chỉnh ngày đáo hạn sang ngày làm việc, bao gồm
+  quy tắc làm thứ Bảy theo từng ngân hàng; sổ online giữ ngày được nhập.
+- Logic dự báo/tối ưu mô phỏng tái tục tự động và lãi kép, lãi không kỳ hạn,
+  thiệt hại tất toán sớm, chi phí vay cầm cố, biên độ lãi vay/LTV từng ngân hàng
+  và tùy chọn VIP bù trừ lãi trước. Cần xác nhận giả định nghiệp vụ với chủ sản
+  phẩm trước khi thay công thức tài chính.
+
+5. LƯU TRỮ VÀ ĐỒNG BỘ
+
+Dữ liệu tại máy
+- Danh sách sổ và tất toán được lưu dạng JSON trong localStorage, chủ yếu ở các
+  key savings_books_v3 và savings_settlements_v3. Cài đặt, danh mục ngân hàng,
+  baseline/xung đột đồng bộ, master pointer và audit log sử dụng các key
+  localStorage có đánh phiên bản riêng.
+- Đây là mô hình ưu tiên dữ liệu trên thiết bị: người dùng có thể tiếp tục
+  thao tác với dữ liệu local/offline. Tuy nhiên, đây không phải cơ sở dữ liệu có
+  giao dịch. Cần lưu ý giới hạn dung lượng localStorage, việc ghi lại cả mảng,
+  tranh chấp giữa nhiều tab và lỗi vượt quota.
+- Credential tách khỏi lưu trữ danh mục. Dịch vụ auth giữ token runtime trong
+  bộ nhớ và khôi phục credential thông qua secure storage helper; trên native,
+  credential dùng plugin lưu trữ an toàn. Trên web, token chủ yếu chỉ nằm trong
+  bộ nhớ. Không lưu OAuth token vào localStorage.
+- localStorage trên trình duyệt là nơi lưu state ứng dụng/người dùng/sổ; native
+  Preferences và secure storage được dùng cho các luồng Capacitor tương ứng.
+
+Google Drive / Google Sheets
+- Người dùng chọn, dán liên kết hoặc tạo bảng tính Google. Ứng dụng đọc/ghi qua
+  Google API bằng access token của tài khoản đang đăng nhập.
+- Các dòng sổ và bảng tài chính liên quan nằm trong bảng tính đã liên kết.
+  Translator theo schema chuẩn chuyển đổi giữa các dòng và
+  SavingsBook/SettlementAdjustment.
+- Worksheet `__CONFIG__` trong bảng tính liên kết lưu metadata master/workspace,
+  JSON thành viên, cấu hình ngân hàng và JSON audit log. Metadata/cấu hình Drive
+  cũng lưu thông tin nhận diện app/master pointer. Hiện tại, hãy coi worksheet
+  này là nguồn cấu hình workspace đang được sử dụng.
+- Master pointer local giúp tìm tệp đang liên kết. Tính năng tự động phát hiện
+  có thể tìm tệp master/app trên Drive; thao tác hủy liên kết rõ ràng được ghi
+  lại để không tự động kết nối lại ngay vào workspace người dùng vừa rời.
+- Google Picker chỉ tải khi mở. Các view tiếp tục lọc theo nhãn app; không bỏ
+  bộ lọc này nếu chưa được chấp thuận rõ ràng về sản phẩm.
+- HTTP 404 từ Sheets API không đủ để kết luận tệp chia sẻ đã bị xóa. Một số tệp
+  hiện trong Picker chưa được cấp quyền cho OAuth app theo drive.file. Luồng đọc
+  có fallback Drive export và phân biệt lỗi app chưa được cấp quyền. File hiện
+  trong Picker, quyền Drive của người dùng, quyền truy cập file của OAuth app và
+  quyền sửa là các lớp kiểm tra khác nhau.
+- Một số API helper có retry, nhưng mạng vẫn có thể mất giữa lần đọc và ghi.
+  Không thông báo đồng bộ thành công trước khi thao tác ghi remote cần thiết
+  thực sự thành công.
+
+Xử lý xung đột
+- useDriveSync lưu baseline/snapshot local gắn với file ID và so sánh dữ liệu
+  local với remote, bao gồm cả tất toán.
+- Nếu cả local và remote đều thay đổi so với baseline đã biết, trạng thái xung
+  đột được lưu lại và người dùng được yêu cầu chọn bản dữ liệu cần giữ. Không
+  thay bằng last-write-wins mù quáng hoặc ghi đè tự động nếu chưa có thiết kế
+  migration rõ ràng.
+- Luồng đồng bộ cũng kiểm tra modified time remote, cập nhật metadata workspace
+  và ghi audit local. Khi có hai client cùng sửa, cần nhớ Google Sheets không
+  cung cấp cho ứng dụng transaction hay khóa cấp ứng dụng trên toàn bộ bảng
+  nghiệp vụ.
+
+6. ĐĂNG NHẬP, VAI TRÒ VÀ RANH GIỚI BẢO MẬT
+
+- Đăng nhập Google sử dụng tích hợp Firebase Auth/native Google Auth và các
+  scope Drive, bao gồm drive.file. Access token được dùng cho các REST request
+  Drive/Sheets; gia hạn token và luồng redirect/native nằm trong
+  googleDriveService.ts.
+- Picker API key là giá trị cấu hình frontend (`VITE_GOOGLE_API_KEY`). Không
+  thể làm nó bí mật bằng cách mã hóa trong mã frontend. Hãy giới hạn key theo
+  API và origin/ứng dụng được phép, không đưa key vào mã nguồn được theo dõi và
+  không commit .env.local. Nếu key từng lộ trong lịch sử repository, nên đổi/
+  giới hạn key khi thuận tiện.
+- Vai trò trong app gồm ADMIN, EDITOR và VIEWER. ADMIN quản lý thành viên và
+  thay tệp Drive đang kết nối. ADMIN/EDITOR có thể sửa/đẩy dữ liệu; VIEWER chỉ
+  đọc. Đây là kiểm tra ở lớp ứng dụng, không thay thế ACL của Google Drive. Quyền
+  Google vẫn có thể từ chối API call.
+- Khi rời workspace, app dự kiến giữ sổ/lịch sử local thành bản sao riêng,
+  hủy liên kết tệp cũ và ngăn tự động kết nối lại. Viewer có thể không có quyền
+  tự thu hồi ACL Drive của mình; giao diện cần hướng dẫn liên hệ Admin để gỡ
+  quyền nếu cần.
+- Audit/error log có thể chứa danh tính người dùng và chi tiết thao tác. Tuyệt
+  đối không ghi access token, refresh token, API key hoặc toàn bộ dữ liệu tài
+  chính nhạy cảm vào log, fixture kiểm thử hay tài liệu bàn giao này.
+
+Làm rõ về backend
+- Mã nguồn hiện tại import Firebase App/Auth, nhưng trong phần mã runtime đã
+  kiểm tra không thấy sử dụng Firestore SDK.
+- Metadata workspace/thành viên và audit log cloud hiện đọc/ghi qua worksheet
+  `__CONFIG__` của Google Sheet đang liên kết (và localStorage cho log/state
+  local). Không chuyển các dữ liệu này sang Firestore hoặc thêm firestore.rules
+  chỉ dựa trên firebase-blueprint.json, chú thích cũ hoặc nhãn cũ trên UI.
+- Một số chú thích/giao diện vẫn nhắc Firestore/Cloud Firestore. Hãy kiểm tra
+  service call thực tế trước khi dựa vào các nhận định đó.
+
+7. CÁC LUỒNG NGƯỜI DÙNG CHÍNH
+
+Khởi động và đăng nhập
+1. main.tsx chạy các kiểm tra cài đặt mới/dọn dẹp, sau đó mount React cùng với
+   error provider và toast provider.
+2. App khôi phục profile/cài đặt local và thử khôi phục phiên Google auth khi
+   phù hợp. Nếu bật sinh trắc học, người dùng có thể cần mở khóa tại máy.
+3. Người dùng có thể tiếp tục với dữ liệu local/danh tính offline hoặc đăng nhập
+   Google để dùng Drive chia sẻ. Trạng thái offline không được nhầm với token
+   remote hợp lệ.
+
+Tạo/kết nối bảng tính chia sẻ
+1. Admin mở Data Sync và đăng nhập Google nếu cần.
+2. Admin tạo bảng tính hoặc kết nối bằng Google Picker, dán URL hoặc file ID/
+   liên kết được hỗ trợ.
+3. App đọc metadata và nội dung Sheet, kiểm tra/phân tích theo schema chuẩn, gắn
+   file vào workspace và ghi master pointer local.
+4. Khi tạo/kết nối, metadata nhãn app và trạng thái workspace trong `__CONFIG__`
+   được khởi tạo/cập nhật. Cần xác nhận trước khi chuyển khỏi dữ liệu local/tệp
+   đang sử dụng.
+5. Thành viên đăng nhập bằng tài khoản Google của mình, chọn bảng tính được chia
+   sẻ và liên kết. Quyền Viewer có thể đủ để đọc nhưng không đủ để sửa bảng tính.
+
+Sửa và đồng bộ
+1. Người dùng tìm/lọc/sắp xếp danh sách, thêm/sửa/xóa sổ hoặc ghi nhận tất
+   toán/tái tục.
+2. useSavingsBooks cập nhật state local và localStorage; thao tác của vai trò
+   được phép sẽ yêu cầu đẩy thay đổi lên Drive.
+3. useDriveSync đọc dữ liệu/modified time remote và so sánh với baseline. Nếu
+   không có thay đổi xung đột, app nhập hoặc đẩy dữ liệu theo tình huống và cập
+   nhật metadata đồng bộ. Nếu cả hai phía đều thay đổi, app mở luồng giải quyết
+   xung đột.
+4. Lỗi đồng bộ, token hết hạn và lịch sử audit được hiện qua trạng thái, hộp
+   thoại/toast và giao diện audit. Nếu mạng lỗi, phải bảo toàn dữ liệu local.
+
+Quản lý thành viên và rời workspace
+- Admin mời/chia sẻ tệp Drive và gán vai trò app được lưu trong `__CONFIG__`;
+  cần giữ nhất quán giữa thay đổi vai trò và quyền Drive.
+- Thành viên rời workspace cần giữ được bản sao local độc lập, xóa liên kết
+  workspace hiện tại, đánh dấu explicit unlink và không xóa dữ liệu tài chính
+  local. Thu hồi ACL remote có thể cần quyền của Admin.
+
+Nhập/xuất và nhắc hạn
+- Nhập Excel/CSV đọc và chuẩn hóa giá trị theo schema. Cần kiểm tra trường bắt
+  buộc và hiện lỗi dòng/định dạng; không âm thầm coi bảng sai định dạng là danh
+  mục trống.
+- Tính năng xuất Excel/tệp mẫu dùng xlsx và có thể bao gồm dữ liệu sổ, lịch sử
+  và tất toán liên quan.
+- Nhắc đáo hạn được notificationService lên lịch bằng thông báo trình duyệt
+  hoặc Capacitor Local Notifications nếu nền tảng hỗ trợ và người dùng cấp quyền.
+- Cài đặt có tùy chọn ẩn số tiền, điều kiện theo ngân hàng, thông báo, mở khóa
+  sinh trắc học và liên kết tệp.
+
+8. PHÁT TRIỂN, KIỂM THỬ VÀ PHÁT HÀNH
+
+Các script trong package.json:
+- npm run dev: chạy Vite trên cổng 3000.
+- npm run lint: kiểm tra TypeScript (`tsc --noEmit`); đây không phải ESLint.
+- npm test: chạy Vitest.
+- npm run build: build tài nguyên web vào dist/.
+- npm run preview: xem thử bản build.
+
+Khi làm Android native, hãy build tài nguyên web trước, sau đó đồng bộ/build
+Capacitor (ví dụ npm run build, rồi npx cap sync android). Repository có
+workflow GitHub Actions để build/phát hành Android. Hành vi plugin native/OAuth
+cần thiết bị/emulator thật và cấu hình Google/Firebase đúng; build web không
+kiểm chứng được các luồng native.
+
+Kiểm thử hiện tại bao phủ một số phần tính toán/Excel parsing, secure storage,
+Google Drive service và xử lý xung đột đồng bộ. Chúng không thay thế kiểm thử
+live bằng tài khoản Google cho Picker, file chia sẻ, token hết hạn, ACL Drive,
+tranh chấp nhiều người, thông báo hoặc sinh trắc học Android.
+
+9. HẠN CHẾ ĐÃ BIẾT / CẦN KIỂM TRA TRƯỚC KHI SỬA
+
+- Dự án không dựa trên Dexie/IndexedDB. Không giả định có migration Dexie; dữ
+  liệu tài chính local hiện được serialize vào localStorage.
+- Cây mã nguồn có chú thích/artifact Firestore cũ. Cấu hình workspace và audit
+  runtime hiện dùng Google Sheet như mô tả ở trên.
+- `npm run lint` chỉ chạy TypeScript. Không xem kết quả đạt là đã có đầy đủ lint,
+  quy chuẩn code hoặc kiểm tra tĩnh bảo mật.
+- Nhập file/Picker thành công không đồng nghĩa có quyền sửa. Cần phân biệt file
+  không tồn tại, OAuth app chưa được cấp quyền, ACL từ chối, token hết hạn, tệp
+  không phải Google Sheets native/không được hỗ trợ và dữ liệu Sheet sai.
+- Schema Sheet/đơn vị và lịch sử tất toán là các vùng rủi ro cao về tương thích.
+  Khi sửa, chạy kiểm thử liên quan và giữ khả năng đọc các workbook cũ.
+- Ghi Google Sheet chia sẻ không có transaction. Nếu có thể, retry phải
+  idempotent; không retry thao tác ghi phá hủy nếu chưa kiểm tra trạng thái.
+- Các module lớn (đặc biệt App.tsx, DataSyncModal.tsx, useDriveSync.ts và
+  googleDriveService.ts) gom nhiều trách nhiệm; hãy truy vết call site và nơi
+  sở hữu state trước khi tách/refactor.
+- Bundle hiện tại tải muộn các phần phân tích/biểu đồ nặng và Google Picker SDK.
+  Tránh thêm import đồng bộ thư viện lớn vào luồng khởi động.
+- Android native, chia sẻ bằng tài khoản thật và yêu cầu phát hành Play Store
+  chưa được kiểm chứng đầy đủ bằng unit test.
+- Tại thời điểm viết tài liệu, working tree có thay đổi chưa commit, bao gồm
+  cleanup/tải muộn, rời workspace và Picker/đồng bộ. Luôn chạy
+  `git status --short` và xem diff trước khi sửa hoặc gán nguồn các thay đổi.
+  Không ghi đè lên thay đổi của người khác.
+
+10. DANH SÁCH KIỂM TRA AN TOÀN KHI TIẾP NHẬN
+
+1. Đọc tài liệu này, sau đó xem package.json, src/types.ts, App.tsx, hook/
+   service liên quan và các bài test của chúng.
+2. Chạy `git status --short` trước khi sửa; bảo toàn mọi thay đổi có sẵn.
+3. Không đọc, in, sao chép hoặc commit .env.local. Dùng .env.example làm mẫu
+   cấu hình và giá trị giả trong fixture kiểm thử.
+4. Nếu sửa dữ liệu, cần xem đồng bộ model UI, lưu trữ local, schema Sheet,
+   translator, nhập/xuất, quyền, xử lý xung đột và kiểm thử.
+5. Khi lỗi truy cập Google, thu thập chi tiết status/lỗi đã loại bỏ thông tin
+   nhạy cảm và phân loại: scope/quyền app OAuth, ACL Drive hay file bị xóa.
+6. Chạy bộ test nhỏ nhất liên quan; sau đó chạy npm run lint và npm run build
+   nếu thay đổi ảnh hưởng type hoặc build.
+7. Với thay đổi liên quan phát hành, kiểm tra bằng tài khoản Admin và Member,
+   bao gồm Viewer, mất mạng/offline và Android nếu áp dụng.
+
+HẾT TÀI LIỆU BÀN GIAO
