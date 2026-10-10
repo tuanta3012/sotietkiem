@@ -121,12 +121,15 @@ export default function App() {
         }
         return true;
       }
+      return true; // Người dùng chưa đăng nhập hoặc dùng offline -> luôn mở khóa mặc định
     } catch {
       // ignore
     }
-    return false;
+    return true;
   });
 
+  const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [isLogoutWarningModalOpen, setIsLogoutWarningModalOpen] = useState<boolean>(false);
   const [showFileDeletedRecovery, setShowFileDeletedRecovery] = useState<boolean>(false);
   const [isClearDataModalOpen, setIsClearDataModalOpen] = useState<boolean>(false);
@@ -258,6 +261,14 @@ export default function App() {
       }
     };
     initNativeStatusBar();
+  }, []);
+
+  // Timer hiển thị Splash Screen thương hiệu lướt nhanh (~1.1 giây) rồi vào thẳng màn hình chính
+  useEffect(() => {
+    const splashTimer = setTimeout(() => {
+      setShowSplash(false);
+    }, 1100);
+    return () => clearTimeout(splashTimer);
   }, []);
 
   // 2. Tự động khôi phục phiên làm việc ngầm từ Capacitor Preferences và SecureStorage khi mở/khởi động lại app
@@ -709,36 +720,7 @@ export default function App() {
   const [isLoggingInGoogle, setIsLoggingInGoogle] = useState<boolean>(false);
 
   const handleLoginGoogle = async () => {
-    if (isLoggingInGoogle) return;
-    setIsLoggingInGoogle(true);
-    try {
-      // CLEAR ALL PREVIOUS SESSION DATA BEFORE LOGIN TO PREVENT LEAKS
-      (window as any).__IS_LOGGING_OUT = true;
-      await clearSessionAndLocalData();
-      (window as any).__IS_LOGGING_OUT = false;
-
-      const res = await signInWithGoogle();
-      const onlineUser: AuthUser = {
-        email: res.user.email || '',
-        name: res.user.displayName || 'Thành viên',
-        role: 'viewer', // Start as viewer until sync confirms role
-        title: 'Đang tải quyền...',
-        isOffline: false,
-      };
-      setCurrentUser(onlineUser);
-      setIsUnlocked(true);
-      if (res.accessToken) {
-        setGoogleAccessToken(res.accessToken);
-        // Force a deep sync immediately
-        await syncBooksFromDrive(true, res.accessToken, true);
-      }
-      showToast(`Đã chuyển sang trực tuyến: ${onlineUser.email}`, 'success');
-    } catch (err: any) {
-      console.warn('Lỗi đăng nhập Google (đã xử lý):', err?.message || err);
-      showToast(err?.message || 'Đăng nhập Google thất bại hoặc bị hủy.', 'error');
-    } finally {
-      setIsLoggingInGoogle(false);
-    }
+    setIsLoginModalOpen(true);
   };
 
   const clearSessionAndLocalData = async () => {
@@ -1126,6 +1108,29 @@ export default function App() {
     showToast('Đã hủy đăng nhập Google. Bạn tiếp tục sử dụng app ở chế độ Ngoại tuyến.', 'info');
   };
 
+  if (showSplash) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center select-none animate-in fade-in duration-200">
+        <div className="relative mb-5">
+          <div className="w-20 h-20 sm:w-22 sm:h-22 rounded-3xl overflow-hidden shadow-2xl shadow-emerald-500/30 ring-4 ring-emerald-500/20 bg-slate-950/70 border border-emerald-500/30 flex items-center justify-center">
+            <img src="/stk_app_icon.png" alt="Logo" className="w-full h-full object-cover" />
+          </div>
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white mb-2">
+          SỔ TIẾT KIỆM GIA ĐÌNH
+        </h1>
+        <p className="text-xs sm:text-sm font-medium text-emerald-400 mb-8 max-w-xs">
+          Quản lý tài chính chuẩn xác &bull; Ngoại tuyến tức thì
+        </p>
+        <div className="flex items-center gap-2.5 px-4 py-2 rounded-full bg-slate-800/80 border border-slate-700/60 text-slate-300 text-xs shadow-inner">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+          <span>Nạp dữ liệu từ bộ nhớ máy...</span>
+        </div>
+        <span className="text-[11px] text-slate-500 mt-6">Phiên bản {CURRENT_APP_VERSION}</span>
+      </div>
+    );
+  }
+
   if (isPendingAuth && !currentUser) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6 text-white text-center space-y-4">
@@ -1138,87 +1143,11 @@ export default function App() {
     );
   }
 
-  if (!currentUser) {
-    return (
-      <>
-        <LoginModal
-          isOpen={true}
-          onLogin={async (user, token) => {
-            setCurrentUser(user);
-            if (user.isOffline) {
-              setIsUnlocked(true);
-              setSyncDriveStatus(null);
-              // Tiếp tục sử dụng dữ liệu sổ cũ đã có sẵn trên máy
-            } else {
-              setIsUnlocked(true);
-              if (token) {
-                setGoogleAccessToken(token);
-                try {
-                  // Kiểm tra xem tài khoản này đã có file liên kết trung tâm trên Google Drive chưa
-                  const hub = await autoDiscoverLatestCentralHub(token, user.email);
-                  if (hub && hub.id && (hub as any).status !== 'unlinked' && (hub as any).lastAction !== 'unlink') {
-                    // Nếu thiết bị đang có sổ ngoại tuyến mới (books.length > 0), không tự động liên kết
-                    // Mà hiển thị Modal giải quyết xung đột để người dùng lựa chọn (gộp, ghi đè hoặc tạo mới)
-                    if (books.length > 0) {
-                      setConflictHub(hub);
-                      setConflictToken(token);
-                      setConflictUser(user);
-                    } else {
-                      const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-                      setSettings((prev) => ({
-                        ...prev,
-                        googleSheetUrl: hubUrl,
-                        googleSheetName: hub.name,
-                        lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-                      }));
-                      syncBooksFromDrive(false, token);
-                    }
-                  } else if (!settings.googleSheetUrl) {
-                    // Mở modal đồng bộ để hỗ trợ tạo file liên kết mới hoặc chọn file có sẵn
-                    setIsSyncModalOpen(true);
-                  } else {
-                    syncBooksFromDrive(false, token);
-                  }
-                } catch (err) {
-                  console.warn('Auto discover central hub failed on login:', err);
-                  if (!settings.googleSheetUrl) {
-                    setIsSyncModalOpen(true);
-                  } else {
-                    syncBooksFromDrive(false, token);
-                  }
-                }
-              } else {
-                if (!settings.googleSheetUrl) {
-                  setIsSyncModalOpen(true);
-                } else {
-                  syncBooksFromDrive(false);
-                }
-              }
-            }
-          }}
-          currentVersion={CURRENT_APP_VERSION}
-          onCheckUpdate={() => checkAppUpdate(true)}
-          hasNewUpdate={!!updateInfo}
-          newVersion={updateInfo?.version}
-          onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
-        />
-
-        {/* APK Auto-Update Modal (Hiển thị đầy đủ ngay cả khi chưa đăng nhập) */}
-        <AppUpdateModal
-          isOpen={isUpdateModalOpen}
-          currentVersion={CURRENT_APP_VERSION}
-          updateInfo={updateInfo}
-          onClose={() => setIsUpdateModalOpen(false)}
-        />
-      </>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 font-sans flex flex-col">
       {/* Biometric / Device Unlock Modal */}
       <BiometricUnlockModal
-        isOpen={!isUnlocked && !!currentUser && !currentUser.isOffline}
+        isOpen={!isUnlocked && !!currentUser && !currentUser.isOffline && !!settings.enableBiometricLogin}
         userName={currentUser?.name || ''}
         userEmail={currentUser?.email || ''}
         onSuccess={() => {
@@ -1230,7 +1159,67 @@ export default function App() {
         }}
       />
 
-        {/* Top Navbar */}
+      {/* Login Modal (Khi người dùng chủ động mở hoặc cần kết nối tài khoản) */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        onLogin={async (user, token) => {
+          setIsLoginModalOpen(false);
+          setCurrentUser(user);
+          if (user.isOffline) {
+            setIsUnlocked(true);
+            setSyncDriveStatus(null);
+          } else {
+            setIsUnlocked(true);
+            if (token) {
+              setGoogleAccessToken(token);
+              try {
+                const hub = await autoDiscoverLatestCentralHub(token, user.email);
+                if (hub && hub.id && (hub as any).status !== 'unlinked' && (hub as any).lastAction !== 'unlink') {
+                  if (books.length > 0) {
+                    setConflictHub(hub);
+                    setConflictToken(token);
+                    setConflictUser(user);
+                  } else {
+                    const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+                    setSettings((prev) => ({
+                      ...prev,
+                      googleSheetUrl: hubUrl,
+                      googleSheetName: hub.name,
+                      lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+                    }));
+                    syncBooksFromDrive(false, token);
+                  }
+                } else if (!settings.googleSheetUrl) {
+                  setIsSyncModalOpen(true);
+                } else {
+                  syncBooksFromDrive(false, token);
+                }
+              } catch (err) {
+                console.warn('Auto discover central hub failed on login:', err);
+                if (!settings.googleSheetUrl) {
+                  setIsSyncModalOpen(true);
+                } else {
+                  syncBooksFromDrive(false, token);
+                }
+              }
+            } else {
+              if (!settings.googleSheetUrl) {
+                setIsSyncModalOpen(true);
+              } else {
+                syncBooksFromDrive(false);
+              }
+            }
+          }
+        }}
+        currentVersion={CURRENT_APP_VERSION}
+        onCheckUpdate={() => checkAppUpdate(true)}
+        hasNewUpdate={!!updateInfo}
+        newVersion={updateInfo?.version}
+        onOpenUpdateModal={() => setIsUpdateModalOpen(true)}
+      />
+
+      {/* Top Navbar */}
         <Navbar
           activeTab={activeTab}
           setActiveTab={handleTabChange}

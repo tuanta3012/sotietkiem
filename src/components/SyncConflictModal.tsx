@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CloudDownload, Loader2, Upload } from 'lucide-react';
+import { AlertTriangle, CloudDownload, Loader2, Upload, GitMerge } from 'lucide-react';
 import { SyncConflictState } from '../hooks/useDriveSync';
 
 interface SyncConflictModalProps {
@@ -8,6 +8,7 @@ interface SyncConflictModalProps {
   status: string | null;
   onChooseRemote: () => void;
   onChooseLocal: () => void;
+  onChooseMerge?: () => void;
 }
 
 export function SyncConflictModal({
@@ -16,6 +17,7 @@ export function SyncConflictModal({
   status,
   onChooseRemote,
   onChooseLocal,
+  onChooseMerge,
 }: SyncConflictModalProps) {
   if (!conflict) return null;
 
@@ -34,7 +36,7 @@ export function SyncConflictModal({
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="sync-conflict-title" className="text-base sm:text-lg font-black text-slate-900 leading-tight">
-              Xung đột dữ liệu
+              Xung đột dữ liệu đồng bộ
             </h2>
             <p className="text-xs text-slate-500 truncate mt-0.5">
               File: {conflict.fileName}
@@ -56,7 +58,7 @@ export function SyncConflictModal({
           </div>
 
           <p className="text-xs text-slate-500 text-center">
-            Cả 2 nơi đều có thay đổi mới. Vui lòng chọn bản bạn muốn giữ:
+            Cả 2 nơi đều có thay đổi mới. Bạn có thể tự động gộp hoặc chọn bản cần giữ:
           </p>
 
           {status && (status.includes('❌') || status.includes('⚠️')) && (
@@ -67,6 +69,32 @@ export function SyncConflictModal({
 
           {/* Action Buttons - Clear, Short & Touch-friendly */}
           <div className="space-y-2 pt-1">
+            {onChooseMerge && (
+              <button
+                type="button"
+                disabled={isResolving}
+                onClick={onChooseMerge}
+                className="flex w-full items-center justify-between gap-2.5 rounded-xl border-2 border-indigo-500 bg-indigo-50/80 p-3 sm:p-3.5 text-left transition hover:bg-indigo-100 active:scale-[0.98] disabled:cursor-wait disabled:opacity-60 cursor-pointer shadow-xs"
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="rounded-lg bg-indigo-600 text-white p-2 shrink-0 shadow-xs">
+                    {isResolving ? <Loader2 className="h-4 w-4 animate-spin" /> : <GitMerge className="h-4 w-4" />}
+                  </div>
+                  <div>
+                    <div className="text-sm font-bold text-indigo-950 leading-snug">
+                      Hợp nhất thông minh (Gộp cả hai)
+                    </div>
+                    <div className="text-[11px] text-indigo-700 font-medium">
+                      Bảo toàn sổ của cả gia đình, không bỏ sót ai
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-200/80 px-2 py-0.5 rounded-full shrink-0">
+                  Khuyên dùng
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               disabled={isResolving}
@@ -86,9 +114,6 @@ export function SyncConflictModal({
                   </div>
                 </div>
               </div>
-              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-200/60 px-2 py-0.5 rounded-full shrink-0">
-                Khuyên dùng
-              </span>
             </button>
 
             <button
@@ -116,7 +141,7 @@ export function SyncConflictModal({
           </div>
 
           <p className="text-[10px] text-slate-400 text-center pt-1">
-            🔒 Dữ liệu cũ đều được tự động lưu dự phòng trên thiết bị
+            🔒 Dữ liệu cũ đều được tự động lưu dự phòng an toàn trên thiết bị
           </p>
         </div>
       </section>

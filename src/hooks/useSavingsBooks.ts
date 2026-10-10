@@ -6,6 +6,20 @@ import { calculateInterest, getDaysBetween } from '../utils/calculator';
 import { getSortedBanksByUsage } from '../data/banks';
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
+import {
+  getSavingsBooksFromFile,
+  saveSavingsBooksToFile,
+  getSettlementsFromFile,
+  saveSettlementsToFile,
+  migrateFromLocalStorageIfNeeded,
+  clearAllLocalAppFiles,
+} from '../utils/fileStorage';
+import {
+  recordBookUpsert,
+  recordBookDelete,
+  recordBookSettle,
+  clearOutbox,
+} from '../utils/syncOutbox';
 
 interface UseSavingsBooksProps {
   currentRole?: string;
@@ -14,6 +28,10 @@ interface UseSavingsBooksProps {
 }
 
 export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }: UseSavingsBooksProps = {}) {
+  // Trạng thái nạp dữ liệu ban đầu từ File Storage
+  const [isLoadingStorage, setIsLoadingStorage] = useState<boolean>(true);
+
+  // Khởi tạo state với dữ liệu đồng bộ nhanh từ localStorage (để render tức thì không giật)
   const [books, setBooks] = useState<SavingsBook[]>(() => {
     try {
       const isCleared = localStorage.getItem('savings_books_cleared');
@@ -67,29 +85,61 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
 
   // Khóa chống nhấp đúp hoặc gọi chồng lấn cho cùng 1 sổ
   const actionLockRef = useRef<Record<string, number>>({});
+  const isInitialLoadDoneRef = useRef<boolean>(false);
 
-  // Single-source of truth cho việc ghi localStorage của books
+  // 1. Tự động kiểm tra Migration & Nạp dữ liệu bất đồng bộ từ Filesystem khi khởi động
   useEffect(() => {
-    try {
-      localStorage.setItem('savings_books_v3', JSON.stringify(books));
-      if (books.length > 0) {
-        localStorage.removeItem('savings_books_cleared');
-      } else {
-        localStorage.setItem('savings_books_cleared', 'true');
+    let isMounted = true;
+    const initStorage = async () => {
+      try {
+        await migrateFromLocalStorageIfNeeded();
+        const fileBooks = await getSavingsBooksFromFile();
+        const fileSettlements = await getSettlementsFromFile();
+
+        if (isMounted) {
+          if (Array.isArray(fileBooks) && fileBooks.length > 0) {
+            setBooks(sortAndReindexBooks(fileBooks));
+          }
+          if (Array.isArray(fileSettlements) && fileSettlements.length > 0) {
+            const normalized = fileSettlements.map((a) => ({
+              ...a,
+              owner: normalizeOwner(a.owner, a.bankId, a.bookCode),
+            }));
+            setSettlementAdjustments(deduplicateSettlementAdjustments(normalized));
+          }
+        }
+      } catch (err) {
+        console.warn('[useSavingsBooks] Lỗi nạp dữ liệu từ Filesystem:', err);
+      } finally {
+        if (isMounted) {
+          setIsLoadingStorage(false);
+          isInitialLoadDoneRef.current = true;
+        }
       }
-    } catch {
-      // ignore
-    }
+    };
+
+    initStorage();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // 2. Tự động lưu dữ liệu bất đồng bộ vào Filesystem và localStorage khi books thay đổi
+  useEffect(() => {
+    if (!isInitialLoadDoneRef.current) return;
+    saveSavingsBooksToFile(books).catch((err) => {
+      console.error('[useSavingsBooks] Lỗi lưu books vào file:', err);
+    });
   }, [books]);
 
-  // Single-source of truth cho việc ghi localStorage của settlementAdjustments
+  // 3. Tự động lưu bản ghi tất toán vào Filesystem và localStorage
   useEffect(() => {
-    try {
-      const deduped = deduplicateSettlementAdjustments(settlementAdjustments);
-      localStorage.setItem('savings_settlements_v3', JSON.stringify(deduped));
-    } catch {
-      // ignore
-    }
+    if (!isInitialLoadDoneRef.current) return;
+    const deduped = deduplicateSettlementAdjustments(settlementAdjustments);
+    saveSettlementsToFile(deduped).catch((err) => {
+      console.error('[useSavingsBooks] Lỗi lưu settlements vào file:', err);
+    });
   }, [settlementAdjustments]);
 
   // Loại bỏ các sổ đã tất toán nếu còn sót trong books (không tự tạo thêm nhật ký ma)
@@ -141,7 +191,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
   }, [activeBooks, ownerFilter, bankFilter, searchQuery, sortBy]);
 
   const handleUpdateBook = useCallback(
-    (updatedBook: SavingsBook) => {
+    async (updatedBook: SavingsBook) => {
       if (!canEditData(currentRole)) {
         alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền chỉnh sửa hoặc tác động vào dữ liệu.');
         return;
@@ -149,6 +199,10 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
       const updated = books.map((b) => (b.id === updatedBook.id ? updatedBook : b));
       const nextBooks = sortAndReindexBooks(updated);
       setBooks(nextBooks);
+
+      // Ghi nhận biến động vào vùng đệm Outbox để đồng bộ ngầm chuẩn xác
+      await recordBookUpsert(updatedBook).catch((err) => console.warn('Lỗi ghi Outbox upsert:', err));
+
       if (onPushToDriveRef.current) {
         onPushToDriveRef.current(nextBooks, settlementAdjustments);
       }
@@ -157,7 +211,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
   );
 
   const handleSaveBook = useCallback(
-    (savedBook: SavingsBook) => {
+    async (savedBook: SavingsBook) => {
       if (!canEditData(currentRole)) {
         alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền lưu hoặc thêm dữ liệu.');
         return;
@@ -168,6 +222,10 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         : [savedBook, ...books];
       const nextBooks = sortAndReindexBooks(updated);
       setBooks(nextBooks);
+
+      // Ghi nhận biến động vào vùng đệm Outbox
+      await recordBookUpsert(savedBook).catch((err) => console.warn('Lỗi ghi Outbox upsert:', err));
+
       if (onPushToDriveRef.current) {
         onPushToDriveRef.current(nextBooks, settlementAdjustments);
       }
@@ -176,7 +234,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
   );
 
   const handleDeleteBook = useCallback(
-    (bookId: string) => {
+    async (bookId: string) => {
       if (!canEditData(currentRole)) {
         alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa dữ liệu.');
         return false;
@@ -185,6 +243,10 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         const updated = books.filter((b) => b.id !== bookId);
         const nextBooks = sortAndReindexBooks(updated);
         setBooks(nextBooks);
+
+        // Ghi nhận xóa vào vùng đệm Outbox để chống Google Sheets hồi sinh lại sổ này
+        await recordBookDelete(bookId).catch((err) => console.warn('Lỗi ghi Outbox delete:', err));
+
         if (onPushToDriveRef.current) {
           onPushToDriveRef.current(nextBooks, settlementAdjustments);
         }
@@ -196,7 +258,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
   );
 
   const handleSettleBook = useCallback(
-    (
+    async (
       bookId: string,
       extra?: { isEarlySettled: boolean; settlementDate: string; actualInterestVND: number }
     ) => {
@@ -242,9 +304,11 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
       });
 
       let updatedAdjustments = settlementAdjustments;
+      let newAdjustment: SettlementAdjustment | null = null;
+
       if (!isAlreadySettled) {
         const nextIdx = settlementAdjustments.length + 1;
-        const newAdjustment: SettlementAdjustment = {
+        newAdjustment = {
           id: `ADJ_${nextIdx}_${cleanBookCode || 'SO'}`,
           bookCode: bookToSettle.bookCode,
           bankId: bookToSettle.bankId,
@@ -268,6 +332,9 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         };
         updatedAdjustments = deduplicateSettlementAdjustments([newAdjustment, ...settlementAdjustments]);
         setSettlementAdjustments(updatedAdjustments);
+
+        // Ghi nhận vào vùng đệm Outbox
+        await recordBookSettle(bookId, newAdjustment).catch((err) => console.warn('Lỗi ghi Outbox settle:', err));
 
         // Ghi nhật ký kiểm toán cho thao tác tất toán sổ
         recordSyncAuditLog({
@@ -296,11 +363,11 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         onPushToDriveRef.current(nextBooks, updatedAdjustments);
       }
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleRolloverBook = useCallback(
-    (
+    async (
       oldBookId: string,
       rolloverConfig: {
         newPrincipal: number;
@@ -368,6 +435,9 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         updatedAdjustments = deduplicateSettlementAdjustments([newAdjustment, ...settlementAdjustments]);
         setSettlementAdjustments(updatedAdjustments);
 
+        // Ghi nhận tất toán sổ cũ vào vùng đệm Outbox
+        await recordBookSettle(oldBookId, newAdjustment).catch((err) => console.warn('Lỗi ghi Outbox settle:', err));
+
         // Ghi nhật ký kiểm toán cho thao tác tất toán & tái tục
         recordSyncAuditLog({
           type: 'SETTLEMENT_CHANGE',
@@ -407,6 +477,9 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         ).toLocaleString('vi-VN')} Tr.`,
       };
 
+      // Ghi nhận sổ mới tạo vào Outbox
+      await recordBookUpsert(newBook).catch((err) => console.warn('Lỗi ghi Outbox upsert:', err));
+
       const withoutOld = books.filter((b) => b.id !== oldBookId);
       const updated = [newBook, ...withoutOld];
       const nextBooks = sortAndReindexBooks(updated);
@@ -416,11 +489,11 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         onPushToDriveRef.current(nextBooks, updatedAdjustments);
       }
     },
-    [books, settlementAdjustments]
+    [books, settlementAdjustments, currentRole]
   );
 
   const handleImportBooks = useCallback(
-    (newBooks: SavingsBook[], mode: 'replace' | 'merge' = 'replace') => {
+    async (newBooks: SavingsBook[], mode: 'replace' | 'merge' = 'replace') => {
       if (!canEditData(currentRole)) {
         alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền nhập hoặc thay thế dữ liệu.');
         return;
@@ -431,9 +504,15 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
         newBooks.forEach((b) => existingMap.set(b.id, b));
         finalBooks = Array.from(existingMap.values());
       }
-      setBooks(finalBooks);
+      const reindexed = sortAndReindexBooks(finalBooks);
+      setBooks(reindexed);
+
+      for (const b of reindexed) {
+        await recordBookUpsert(b).catch(() => {});
+      }
+
       if (onPushToDriveRef.current) {
-        onPushToDriveRef.current(finalBooks, settlementAdjustments);
+        onPushToDriveRef.current(reindexed, settlementAdjustments);
       }
     },
     [books, settlementAdjustments, currentRole]
@@ -447,9 +526,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
       }
       setSettlementAdjustments((prev) => {
         const next = prev.filter((a) => a.id !== id);
-        try {
-          localStorage.setItem('savings_settlements_v3', JSON.stringify(next));
-        } catch {}
+        saveSettlementsToFile(next).catch(() => {});
         if (onPushToDriveRef.current) {
           onPushToDriveRef.current(books, next);
         }
@@ -460,7 +537,7 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
     [books, currentRole]
   );
 
-  const handleDeleteAllAppData = useCallback(() => {
+  const handleDeleteAllAppData = useCallback(async () => {
     if (!canEditData(currentRole)) {
       alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa toàn bộ dữ liệu.');
       return;
@@ -468,10 +545,9 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
     setBooks([]);
     setSettlementAdjustments([]);
     try {
-      localStorage.removeItem('savings_books_v3');
-      localStorage.removeItem('savings_settlements_v3');
+      await clearAllLocalAppFiles();
+      await clearOutbox();
       clearStaticHistoryFromStorage();
-      localStorage.setItem('savings_books_cleared', 'true');
     } catch {
       // ignore
     }
@@ -506,5 +582,6 @@ export function useSavingsBooks({ currentRole, onPushToDrive, onShowSyncStatus }
     handleImportBooks,
     handleDeleteSettlementAdjustment,
     handleDeleteAllAppData,
+    isLoadingStorage,
   };
 }

@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch tích hợp Google Picker API với API Key do người dùng cung cấp (Cách 2) để thành viên liên kết file Google Sheet chia sẻ từ Admin một cách mượt mà, bảo mật với scope drive.file.",
-  "updatedAt":  "2026-10-08T16:27:32.179305103Z",
+  "summary":  "Cập nhật Kế hoạch kiến trúc Offline-First chi tiết:\n1. Phân tích rõ giới hạn của Token Google Drive và khẳng định sự cần thiết tuyệt đối của Vùng đệm đồng bộ cục bộ (Local Sync Outbox Queue).\n2. Xây dựng Vùng đệm Outbox (sync_outbox.json trên @capacitor/filesystem) theo mẫu Store-and-Forward: bảo toàn 100% dữ liệu khi mất mạng hoặc token hết hạn.\n3. Thuật toán Xử lý Xung đột Chuẩn xác cấp độ bản ghi (Granular Record-Level Merge): Tự động gộp các sổ khác nhau từ các thành viên gia đình (không làm mất sổ của nhau), cơ chế Soft-delete chống hồi sinh sổ đã xóa, và Last-Write-Wins theo từng cuốn sổ cụ thể.\n4. Cơ chế Silent Token Renewal & Auto Retry khi kết nối mạng được phục hồi.",
+  "updatedAt":  "2026-10-10T13:35:14.608376551Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

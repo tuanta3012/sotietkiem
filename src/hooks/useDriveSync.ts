@@ -28,6 +28,13 @@ import { resolveUserRole } from '../utils/roleHelper';
 import { getAdjustedMaturityDate } from '../utils/calculator';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
+import { mergeBooksAndSettlements } from '../utils/conflictResolver';
+import {
+  getOutboxData,
+  acknowledgeSyncedMutations,
+  acknowledgeDeletedBooks,
+} from '../utils/syncOutbox';
+import { saveSavingsBooksToFile, saveSettlementsToFile } from '../utils/fileStorage';
 
 function isActuallyUnlinked(masterState: any, localLinkTimestamp?: string): boolean {
   if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
@@ -645,29 +652,81 @@ export function useDriveSync({
             (baselineSettlements !== null && !settlementsHaveSameSheetData(remoteSettlements, baselineSettlements));
 
           if (localHasChanges && remoteHasChanges) {
-            const meta = await getRealGoogleDriveFileMetadata(token, fileId);
-            const conflict: SyncConflictState = {
-              fileId,
-              fileName: meta?.name || settingsRef.current?.googleSheetName || 'Google Sheets',
-              remoteModifiedTime: meta?.modifiedTime || '',
-              localBooks,
-              localSettlements,
-              remoteBooks,
-              remoteSettlements,
-            };
-            hasUnresolvedSyncConflictRef.current = true;
-            needsPushRef.current = false;
-            pendingBooksRef.current = null;
-            pendingAdjsRef.current = null;
-            setSyncConflict(conflict);
             try {
-              localStorage.setItem(SYNC_CONFLICT_STORAGE_KEY, JSON.stringify(conflict));
-            } catch (err) {
-              console.error('[Drive Sync] Failed to persist pull conflict snapshots.', err);
+              const outbox = await getOutboxData();
+              const mergeResult = mergeBooksAndSettlements({
+                localBooks,
+                remoteBooks,
+                localSettlements,
+                remoteSettlements,
+                deletedBookIds: outbox.deletedBookIds,
+                pendingMutations: outbox.pendingMutations,
+              });
+
+              isRemoteUpdateRef.current = true;
+              remoteSyncCooldownUntilRef.current = Date.now() + 5000;
+              setBooks(mergeResult.mergedBooks);
+              if (setSettlementAdjustments) {
+                setSettlementAdjustments(mergeResult.mergedSettlements);
+              }
+              applyMasterSettlements(mergeResult.mergedSettlements);
+              saveSavingsBooksToFile(mergeResult.mergedBooks).catch(() => {});
+              saveSettlementsToFile(mergeResult.mergedSettlements).catch(() => {});
+
+              lastSyncedBooksRef.current = mergeResult.mergedBooks;
+              lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
+
+              if (mergeResult.hasChangesToPush && canPushToDrive(settingsRef.current?.currentRole || settings.currentRole)) {
+                await updateRealGoogleDriveFile(token, fileId, mergeResult.mergedBooks, mergeResult.mergedSettlements);
+                await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
+                await acknowledgeDeletedBooks(outbox.deletedBookIds);
+              }
+
+              const meta = await getRealGoogleDriveFileMetadata(token, fileId);
+              lastCheckedModifiedTimeRef.current = meta?.modifiedTime || null;
+              persistSyncBaseline({
+                fileId,
+                modifiedTime: meta?.modifiedTime || null,
+                books: mergeResult.mergedBooks,
+                settlements: mergeResult.mergedSettlements,
+              });
+
+              hasUnresolvedSyncConflictRef.current = false;
+              setSyncConflict(null);
+              try {
+                localStorage.removeItem(SYNC_CONFLICT_STORAGE_KEY);
+              } catch {}
+
+              isInitialSyncDoneRef.current = true;
+              setSyncDriveStatus(`✅ Đã đồng bộ & gộp dữ liệu gia đình (${new Date().toLocaleTimeString('vi-VN')})`);
+              setTimeout(() => setSyncDriveStatus(null), 4000);
+              return;
+            } catch (mergeErr) {
+              console.warn('[Drive Sync] Tự động hợp nhất thất bại, chuyển sang hiển thị hộp thoại xung đột:', mergeErr);
+              const meta = await getRealGoogleDriveFileMetadata(token, fileId);
+              const conflict: SyncConflictState = {
+                fileId,
+                fileName: meta?.name || settingsRef.current?.googleSheetName || 'Google Sheets',
+                remoteModifiedTime: meta?.modifiedTime || '',
+                localBooks,
+                localSettlements,
+                remoteBooks,
+                remoteSettlements,
+              };
+              hasUnresolvedSyncConflictRef.current = true;
+              needsPushRef.current = false;
+              pendingBooksRef.current = null;
+              pendingAdjsRef.current = null;
+              setSyncConflict(conflict);
+              try {
+                localStorage.setItem(SYNC_CONFLICT_STORAGE_KEY, JSON.stringify(conflict));
+              } catch (err) {
+                console.error('[Drive Sync] Failed to persist pull conflict snapshots.', err);
+              }
+              isInitialSyncDoneRef.current = true;
+              setSyncDriveStatus('⚠️ Xung đột đồng bộ: dữ liệu trên Drive và thiết bị đều đã thay đổi. Hãy chọn bản cần giữ.');
+              return;
             }
-            isInitialSyncDoneRef.current = true;
-            setSyncDriveStatus('⚠️ Xung đột đồng bộ: dữ liệu trên Drive và thiết bị đều đã thay đổi. Hãy chọn bản cần giữ.');
-            return;
           }
 
           if (localHasChanges && !remoteHasChanges) {
@@ -1004,6 +1063,67 @@ export function useDriveSync({
             !settlementsHaveSameSheetData(remoteSettlements, baselineSettlements);
 
           if (dataChangedRemotely) {
+            try {
+              const outbox = await getOutboxData();
+              const mergeResult = mergeBooksAndSettlements({
+                localBooks: updatedBooks,
+                remoteBooks,
+                localSettlements: currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [],
+                remoteSettlements,
+                deletedBookIds: outbox.deletedBookIds,
+                pendingMutations: outbox.pendingMutations,
+              });
+
+              const pushSuccess = await updateRealGoogleDriveFile(
+                token,
+                fileId,
+                mergeResult.mergedBooks,
+                mergeResult.mergedSettlements
+              );
+
+              if (pushSuccess) {
+                lastLocalPushTimeRef.current = Date.now();
+                setBooks(mergeResult.mergedBooks);
+                if (setSettlementAdjustments) {
+                  setSettlementAdjustments(mergeResult.mergedSettlements);
+                }
+                applyMasterSettlements(mergeResult.mergedSettlements);
+                saveSavingsBooksToFile(mergeResult.mergedBooks).catch(() => {});
+                saveSettlementsToFile(mergeResult.mergedSettlements).catch(() => {});
+                await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
+                await acknowledgeDeletedBooks(outbox.deletedBookIds);
+
+                lastSyncedBooksRef.current = mergeResult.mergedBooks;
+                lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
+                const updatedMeta = await getRealGoogleDriveFileMetadata(token, fileId);
+                if (updatedMeta?.modifiedTime) {
+                  lastCheckedModifiedTimeRef.current = updatedMeta.modifiedTime;
+                }
+                persistSyncBaseline({
+                  fileId,
+                  modifiedTime: updatedMeta?.modifiedTime || null,
+                  books: mergeResult.mergedBooks,
+                  settlements: mergeResult.mergedSettlements,
+                });
+
+                hasUnresolvedSyncConflictRef.current = false;
+                setSyncConflict(null);
+                try {
+                  localStorage.removeItem(SYNC_CONFLICT_STORAGE_KEY);
+                } catch {}
+
+                const nowStr = new Date().toLocaleString('vi-VN');
+                setSettings((prev) => ({ ...prev, lastSyncTime: nowStr }));
+                setSyncDriveStatus(`✅ Đã đồng bộ & lưu lên Google Sheets (${nowStr})`);
+                setTimeout(() => setSyncDriveStatus(null), 4000);
+                setIsSyncingDrive(false);
+                isPushingRef.current = false;
+                return;
+              }
+            } catch (mergeErr) {
+              console.warn('[Auto-Push] Hợp nhất tự động khi push thất bại, mở hộp thoại xung đột:', mergeErr);
+            }
+
             const conflict: SyncConflictState = {
               fileId,
               fileName: remoteMeta.name || settingsRef.current?.googleSheetName || 'Google Sheets',
@@ -1817,10 +1937,17 @@ export function useDriveSync({
       }
     };
 
+    const handleOnline = () => {
+      console.info('[Smart Sync] Thiết bị đã có mạng trở lại (Online). Kích hoạt kiểm tra và đồng bộ ngầm...');
+      checkDriveTokenValidity(true);
+      checkRemoteSheetChanges(false);
+    };
+
     window.addEventListener('focus', handleFocusOrVisible);
     window.addEventListener('pageshow', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
     document.addEventListener('resume', handleFocusOrVisible); // Hỗ trợ Capacitor / Android Native App Resume!
+    window.addEventListener('online', handleOnline);
 
     // 3. Chu kỳ polling ngầm thông minh: 5 phút/lần (300,000ms), tự động dừng hoàn toàn khi màn hình tắt/app ẩn
     const intervalId = setInterval(() => {
@@ -1838,6 +1965,7 @@ export function useDriveSync({
       window.removeEventListener('pageshow', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
       document.removeEventListener('resume', handleFocusOrVisible);
+      window.removeEventListener('online', handleOnline);
       clearInterval(intervalId);
     };
   }, [checkDriveTokenValidity, checkRemoteSheetChanges, currentUser?.email, applyMasterSettlements, setSettings]);
@@ -1890,7 +2018,7 @@ export function useDriveSync({
   }, [currentUser, setSettings, clearExpiredNoticeTimer]);
 
   const resolveSyncConflict = useCallback(
-    async (choice: 'remote' | 'local') => {
+    async (choice: 'remote' | 'local' | 'merge') => {
       if (isResolvingSyncConflictRef.current || isSyncingRef.current || isPushingRef.current) return;
       isResolvingSyncConflictRef.current = true;
       setIsSyncingDrive(true);
@@ -1929,6 +2057,60 @@ export function useDriveSync({
           );
           return;
         }
+      }
+
+      if (choice === 'merge') {
+        const outbox = await getOutboxData();
+        const mergeResult = mergeBooksAndSettlements({
+          localBooks: conflict.localBooks,
+          remoteBooks: conflict.remoteBooks,
+          localSettlements: conflict.localSettlements,
+          remoteSettlements: conflict.remoteSettlements,
+          deletedBookIds: outbox.deletedBookIds,
+          pendingMutations: outbox.pendingMutations,
+        });
+
+        const success = await updateRealGoogleDriveFile(
+          token,
+          conflict.fileId,
+          mergeResult.mergedBooks,
+          mergeResult.mergedSettlements
+        );
+        if (!success) {
+          setSyncDriveStatus('❌ Không thể lưu bản hợp nhất lên Drive.');
+          return;
+        }
+
+        setBooks(mergeResult.mergedBooks);
+        if (setSettlementAdjustments) {
+          setSettlementAdjustments(mergeResult.mergedSettlements);
+        }
+        applyMasterSettlements(mergeResult.mergedSettlements);
+        saveSavingsBooksToFile(mergeResult.mergedBooks).catch(() => {});
+        saveSettlementsToFile(mergeResult.mergedSettlements).catch(() => {});
+        await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
+        await acknowledgeDeletedBooks(outbox.deletedBookIds);
+
+        lastSyncedBooksRef.current = mergeResult.mergedBooks;
+        lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
+        const meta = await getRealGoogleDriveFileMetadata(token, conflict.fileId);
+        lastCheckedModifiedTimeRef.current = meta?.modifiedTime || null;
+        persistSyncBaseline({
+          fileId: conflict.fileId,
+          modifiedTime: meta?.modifiedTime || null,
+          books: mergeResult.mergedBooks,
+          settlements: mergeResult.mergedSettlements,
+        });
+
+        setSyncConflict(null);
+        hasUnresolvedSyncConflictRef.current = false;
+        try {
+          localStorage.removeItem(SYNC_CONFLICT_STORAGE_KEY);
+        } catch {}
+
+        setSyncDriveStatus('✅ Đã hợp nhất dữ liệu hai bên thành công lên Google Drive!');
+        setTimeout(() => setSyncDriveStatus(null), 5000);
+        return;
       }
 
       if (choice === 'remote') {

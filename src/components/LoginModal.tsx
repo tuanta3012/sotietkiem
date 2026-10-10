@@ -20,6 +20,7 @@ import { AuthUser } from '../types';
 interface LoginModalProps {
   isOpen: boolean;
   onLogin: (user: AuthUser, accessToken?: string) => void;
+  onClose?: () => void;
   currentVersion?: string;
   onCheckUpdate?: () => void;
   hasNewUpdate?: boolean;
@@ -30,6 +31,7 @@ interface LoginModalProps {
 export const LoginModal: React.FC<LoginModalProps> = ({
   isOpen,
   onLogin,
+  onClose,
   currentVersion,
   onCheckUpdate,
   hasNewUpdate,
@@ -117,6 +119,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     <div className="fixed inset-0 z-50 min-h-dvh h-dvh w-full flex flex-col justify-between items-center bg-gradient-to-b from-slate-950 via-slate-900 to-emerald-950 text-white px-5 py-8 sm:py-12 select-none overflow-hidden animate-in fade-in duration-300">
       {/* Background Subtle Ambient Glow */}
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-72 h-72 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Đóng"
+          className="absolute top-4 right-4 z-20 p-2.5 rounded-full bg-slate-800/70 border border-slate-700/60 text-slate-300 hover:text-white hover:bg-slate-700/80 transition-all cursor-pointer shadow-lg"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      )}
 
       {/* Top / Center Branding Section */}
       <div className="w-full max-w-sm sm:max-w-md mx-auto my-auto pt-4 pb-6 flex flex-col items-center text-center relative z-10">
