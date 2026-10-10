@@ -24,6 +24,19 @@ import { resolveUserRole } from '../utils/roleHelper';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 
+function isActuallyUnlinked(masterState: any, localLinkTimestamp?: string): boolean {
+  if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
+    return false;
+  }
+  const unlinkMs = masterState.updatedAt
+    ? new Date(masterState.updatedAt).getTime()
+    : masterState.linkedTimestamp
+    ? new Date(masterState.linkedTimestamp).getTime()
+    : 0;
+  const localMs = localLinkTimestamp ? new Date(localLinkTimestamp).getTime() : 0;
+  return unlinkMs > localMs && unlinkMs > 0;
+}
+
 
 interface UseDriveSyncProps {
   currentUser: AuthUser | null;
@@ -285,7 +298,7 @@ export function useDriveSync({
   // Intelligent Drive Synchronization
   const syncBooksFromDrive = useCallback(
     async (forceTokenPrompt = false, explicitToken?: string, pushAfterSync = false) => {
-      if (currentUser?.isOffline) return;
+      if (!currentUser || currentUser.isOffline) return;
       if (isSwitchingFileRef.current || isPushingRef.current || isSyncingRef.current) {
         return;
       }
@@ -347,7 +360,7 @@ export function useDriveSync({
           const masterState = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
           if (masterState) {
             applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
-            if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink') {
+            if (isActuallyUnlinked(masterState, settingsRef.current?.lastLocalLinkTimestamp)) {
               const unlinkMs = masterState.updatedAt
                 ? new Date(masterState.updatedAt).getTime()
                 : masterState.linkedTimestamp
@@ -594,7 +607,7 @@ export function useDriveSync({
       if (!isInitialSyncDoneRef.current) return;
       if (isSwitchingFileRef.current || isSyncingRef.current || isPushingRef.current) return;
       if (Date.now() < fileSwitchCooldownUntilRef.current) return;
-      if (currentUser?.isOffline || !settings.googleSheetUrl) return;
+      if (!currentUser || currentUser.isOffline || !settings.googleSheetUrl) return;
       if (!canPushToDrive(settings.currentRole)) {
         console.info('[Smart Sync] Thành viên với vai trò VIEWER (Chỉ xem) không thực hiện đẩy dữ liệu lên Google Drive.');
         return;
@@ -635,7 +648,7 @@ export function useDriveSync({
         // KIỂM TRA TRẠNG THÁI TRÊN DRIVE TRƯỚC KHI GHI (TRÁNH GHI ĐÈ KHI THIẾT BỊ KHÁC ĐÃ UNLINK)
         try {
           const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
-          if (currentMaster && (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink')) {
+          if (currentMaster && isActuallyUnlinked(currentMaster, settingsRef.current?.lastLocalLinkTimestamp)) {
             console.warn('[Central Hub Sync] Phát hiện tệp cấu hình đã được hủy liên kết từ thiết bị khác. Hủy đẩy dữ liệu và tự động ngắt liên kết.');
             
             setExplicitlyUnlinked(true);
@@ -701,18 +714,20 @@ export function useDriveSync({
             // ignore
           }
 
-          // Cập nhật Master State trực tiếp vào Tab __CONFIG__ của Sheet
+          // Cập nhật Master State trực tiếp vào Tab __CONFIG__ của Sheet (dùng settingsRef.current để luôn bảo toàn members mới nhất)
           if (token) {
+            const currentMembers = settingsRef.current?.members || settings.members || [];
+            const effectiveAdmin = settingsRef.current?.workspaceOwnerEmail || settings.workspaceOwnerEmail || currentUser?.email;
             saveMasterSyncStateOnDrive(token, {
               status: 'active',
               lastAction: 'link',
               activeFileId: fileId,
-              activeFileName: settings.googleSheetName || 'Sổ tiết kiệm',
-              activeFileUrl: settings.googleSheetUrl,
-              linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
+              activeFileName: settingsRef.current?.googleSheetName || settings.googleSheetName || 'Sổ tiết kiệm',
+              activeFileUrl: settingsRef.current?.googleSheetUrl || settings.googleSheetUrl,
+              linkedTimestamp: settingsRef.current?.lastLocalLinkTimestamp || settings.lastLocalLinkTimestamp || new Date().toISOString(),
               linkedAccountEmail: currentUser?.email,
-              adminEmail: settings.workspaceOwnerEmail || currentUser?.email,
-              members: settings.members,
+              adminEmail: effectiveAdmin,
+              members: currentMembers,
               settlements: adjs,
               updatedAt: new Date().toISOString(),
             }).catch(() => {});
@@ -784,6 +799,12 @@ export function useDriveSync({
           console.warn('Google Drive file push failed - file not accessible:', err?.message);
           setSyncDriveStatus('⚠️ Không thể ghi vào file Google Drive. Vui lòng kiểm tra quyền chỉnh sửa của tài khoản.');
         } else if (
+          err?.message?.toLowerCase().includes('permission') ||
+          err?.message?.includes('403')
+        ) {
+          console.warn('Google Drive file push failed - permission denied:', err?.message);
+          setSyncDriveStatus('⚠️ Bạn không có quyền chỉnh sửa file này. Vui lòng chọn lại file trong Google Picker để cấp quyền ghi.');
+        } else if (
           err?.message?.includes('hết hạn') ||
           err?.message?.includes('invalid authentication credentials')
         ) {
@@ -834,12 +855,27 @@ export function useDriveSync({
   // Tự động nhận diện và kết nối file trung tâm khi login hoặc mở app trên thiết bị mới
   useEffect(() => {
     const performAutoConnect = async () => {
-      if (currentUser?.isOffline || isSwitchingFileRef.current || isAutoConnectingRef.current) return;
+      if (!currentUser || currentUser.isOffline || isSwitchingFileRef.current || isAutoConnectingRef.current) return;
       isAutoConnectingRef.current = true;
       const token = getGoogleAccessToken();
       if (!token) {
         isAutoConnectingRef.current = false;
         return;
+      }
+
+      // SECURITY CHECK: Ensure the token belongs to the current user
+      try {
+        const savedProfileStr = localStorage.getItem('google_drive_user_profile_v4');
+        if (savedProfileStr && currentUser?.email) {
+          const profile = JSON.parse(savedProfileStr);
+          if (profile.email && profile.email.toLowerCase() !== currentUser.email.toLowerCase()) {
+            console.warn('[Central Hub Sync] Token profile email mismatch. Potential cross-user leak detected. Aborting auto-connect.');
+            isAutoConnectingRef.current = false;
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[Central Hub Sync] Error checking token email match:', e);
       }
 
       try {
@@ -851,6 +887,18 @@ export function useDriveSync({
           if (hub && hub.id) {
             const masterState = await getMasterSyncStateFromDrive(token, hub.id);
             if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+              
+              // GIẢM THIỂU NHẦM LẪN: Chỉ tự động kết nối nếu email người dùng khớp với Admin của file
+              // hoặc tên file cực kỳ khớp với ứng dụng.
+              const isOwner = masterState.adminEmail === currentUser?.email;
+              const isKnownName = (hub.name || '').toLowerCase().includes('so tiet kiem') || (hub.name || '').toLowerCase().includes('so_tiet_kiem');
+              
+              if (!isOwner && !isKnownName) {
+                console.info('[Central Hub Sync] Phát hiện file trung tâm nhưng không tự động kết nối do không khớp email Admin và tên file lạ.');
+                isAutoConnectingRef.current = false;
+                return;
+              }
+
               applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
               const link = hub.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
               const fileName = hub.name || masterState.activeFileName || 'Sổ tiết kiệm';
@@ -899,7 +947,7 @@ export function useDriveSync({
         const currentFileId = match ? match[1] : undefined;
         const masterState = await getMasterSyncStateFromDrive(token, currentFileId);
 
-        if (!masterState || masterState.status === 'unlinked' || masterState.lastAction === 'unlink' || !masterState.activeFileId) {
+        if (!masterState || !masterState.activeFileId || isActuallyUnlinked(masterState, settingsRef.current?.lastLocalLinkTimestamp)) {
           console.info('[Central Hub Sync] File master đã ở trạng thái unlinked trên Drive -> Hủy liên kết cục bộ.');
           setExplicitlyUnlinked(true);
           setBooks([]);
@@ -1063,7 +1111,7 @@ export function useDriveSync({
               const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
               if (currentMaster) {
                 applyMasterStateToSettings(currentMaster, currentUser?.email, setSettings, settingsRef.current, token);
-                if (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink') {
+                if (isActuallyUnlinked(currentMaster, settingsRef.current?.lastLocalLinkTimestamp)) {
                   console.info('[Central Hub Sync] Phát hiện thiết bị khác đã hủy liên kết file trung tâm. Tự động ngắt kết nối và dọn dẹp dữ liệu...');
                   
                   // Thực hiện hủy liên kết và làm sạch toàn bộ dữ liệu cục bộ
@@ -1364,7 +1412,7 @@ export function useDriveSync({
               const masterState = token ? await getMasterSyncStateFromDrive(token, currentFileId) : null;
               if (masterState && masterState.status === 'active' && masterState.activeFileId) {
                 applyMasterStateToSettings(masterState, currentUser.email, setSettings, settingsRef.current, token);
-              } else if (masterState && (masterState.status === 'unlinked' || masterState.lastAction === 'unlink')) {
+              } else if (masterState && isActuallyUnlinked(masterState, settingsRef.current?.lastLocalLinkTimestamp)) {
                 setExplicitlyUnlinked(true);
                 setBooks([]);
                 if (setSettlementAdjustments) setSettlementAdjustments([]);

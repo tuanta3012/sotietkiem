@@ -24,6 +24,9 @@ import {
   getGoogleAccessToken,
   createRealGoogleDriveFile,
   ensureGoogleAccessToken,
+  isGoogleTokenValid,
+  trySilentRefresh,
+  getLocalMasterPointerFileId,
   getMasterSyncStateFromDrive,
   saveMasterSyncStateOnDrive,
   shareFileWithUserEmail,
@@ -204,55 +207,111 @@ export const AppModals: React.FC<AppModalsProps> = ({
   }, [setSettings]);
 
   const handleSaveMembers = async (updatedMembers: WorkspaceMember[]) => {
-    const prevMembers = settings.members || [];
+    // 0. Xác định email Admin và đảm bảo Admin luôn được bảo toàn trong mảng dữ liệu tổng thể
+    const effectiveAdminEmail = (currentUser?.email || settings.workspaceOwnerEmail || '').trim().toLowerCase();
+    let finalMembers: WorkspaceMember[] = [...updatedMembers];
+    if (effectiveAdminEmail) {
+      const hasAdmin = finalMembers.some((m) => m.email.trim().toLowerCase() === effectiveAdminEmail);
+      if (!hasAdmin) {
+        finalMembers.unshift({
+          id: `owner-${Date.now()}`,
+          email: effectiveAdminEmail,
+          name: currentUser?.name || 'Admin',
+          role: 'ADMIN',
+          addedAt: new Date().toISOString(),
+          addedBy: 'Hệ thống',
+        });
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // 1. Cập nhật state settings và lưu ngay vào localStorage kèm timestamp mới nhất
+    const updatedSettings: AppSettings = {
+      ...settings,
+      members: finalMembers,
+      workspaceOwnerEmail: settings.workspaceOwnerEmail || effectiveAdminEmail,
+      lastLocalLinkTimestamp: nowIso,
+    };
     setSettings((prev) => ({
       ...prev,
-      members: updatedMembers,
+      members: finalMembers,
+      workspaceOwnerEmail: prev.workspaceOwnerEmail || effectiveAdminEmail,
+      lastLocalLinkTimestamp: nowIso,
     }));
+    try {
+      localStorage.setItem('savings_settings_v3', JSON.stringify(updatedSettings));
+    } catch {}
 
-    // If online with Google token, persist members directly to Master Sync State file on Drive
-    const token = getGoogleAccessToken();
-    if (token) {
+    // 2. Xác thực và đảm bảo token Google Drive còn hiệu lực
+    let token = getGoogleAccessToken();
+    if (!token || !isGoogleTokenValid()) {
+      token = await trySilentRefresh();
+    }
+    if (!token) {
       try {
-        let currentMaster = await getMasterSyncStateFromDrive(token);
-        const fileMatch = settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/);
-        const activeFileId = fileMatch ? fileMatch[1] : null;
-
-        if (!currentMaster) {
-          currentMaster = {
-            status: 'active',
-            lastAction: 'link',
-            activeFileId: activeFileId || undefined,
-            activeFileName: settings.googleSheetName || 'Bảng tính tiết kiệm',
-            activeFileUrl: settings.googleSheetUrl || undefined,
-            linkedTimestamp: settings.lastLocalLinkTimestamp || new Date().toISOString(),
-            linkedAccountEmail: currentUser?.email || 'Google User',
-            adminEmail: currentUser?.email?.toLowerCase() || 'admin',
-            members: updatedMembers,
-            updatedAt: new Date().toISOString(),
-          };
-        } else {
-          currentMaster = {
-            ...currentMaster,
-            adminEmail: currentMaster.adminEmail || currentUser?.email?.toLowerCase() || 'admin',
-            members: updatedMembers,
-            updatedAt: new Date().toISOString(),
-          };
-        }
-        await saveMasterSyncStateOnDrive(token, currentMaster);
-
-        const effectiveAdminEmail = currentMaster.adminEmail || currentUser?.email;
-        if (activeFileId) {
-          await synchronizeDrivePermissionsWithJsonMembers(
-            token,
-            activeFileId,
-            updatedMembers,
-            effectiveAdminEmail
-          );
-        }
-      } catch (err) {
-        console.warn('Lỗi lưu danh sách thành viên lên Google Drive:', err);
+        token = await ensureGoogleAccessToken();
+      } catch (authErr: any) {
+        throw new Error('Phiên đăng nhập Google Drive đã hết hạn. Vui lòng đăng nhập lại Google để cấp quyền thành viên.');
       }
+    }
+
+    // 3. Xác định file ID đang liên kết
+    const fileMatch = settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/);
+    const activeFileId = fileMatch
+      ? fileMatch[1]
+      : (settings.googleSheetUrl && settings.googleSheetUrl.length > 20 && !settings.googleSheetUrl.includes('/')
+          ? settings.googleSheetUrl
+          : getLocalMasterPointerFileId());
+
+    if (!activeFileId) {
+      throw new Error('Chưa tìm thấy file Google Sheet được liên kết. Vui lòng kết nối file trước khi phân quyền.');
+    }
+
+    // 4. Lấy master sync state hiện tại từ Drive
+    let currentMaster = await getMasterSyncStateFromDrive(token, activeFileId);
+
+    if (!currentMaster) {
+      currentMaster = {
+        status: 'active',
+        lastAction: 'link',
+        activeFileId,
+        activeFileName: settings.googleSheetName || 'Bảng tính tiết kiệm',
+        activeFileUrl: settings.googleSheetUrl || `https://docs.google.com/spreadsheets/d/${activeFileId}/edit`,
+        linkedTimestamp: nowIso,
+        linkedAccountEmail: currentUser?.email || 'Google User',
+        adminEmail: effectiveAdminEmail || 'admin',
+        members: finalMembers,
+        updatedAt: nowIso,
+      };
+    } else {
+      currentMaster = {
+        ...currentMaster,
+        activeFileId: activeFileId || currentMaster.activeFileId,
+        activeFileName: settings.googleSheetName || currentMaster.activeFileName,
+        activeFileUrl: settings.googleSheetUrl || currentMaster.activeFileUrl,
+        adminEmail: currentMaster.adminEmail || effectiveAdminEmail,
+        members: finalMembers,
+        updatedAt: nowIso,
+      };
+    }
+
+    // 5. Lưu vào Master Sync State trên Drive (ghi tab __CONFIG__, appProperties và đồng bộ quyền Drive)
+    const saveDriveRes = await saveMasterSyncStateOnDrive(token, currentMaster);
+    if (!saveDriveRes) {
+      throw new Error('Không thể ghi cấu hình Master State lên Google Drive. Vui lòng kiểm tra quyền truy cập file.');
+    }
+
+    // 6. Đồng bộ quyền Drive trực tiếp một lần nữa để đảm bảo và kiểm tra kết quả
+    const syncRes = await synchronizeDrivePermissionsWithJsonMembers(
+      token,
+      activeFileId,
+      finalMembers,
+      effectiveAdminEmail
+    );
+
+    if (syncRes && syncRes.errors && syncRes.errors.length > 0) {
+      throw new Error(`Đã lưu cấu hình nhưng chưa thể chia sẻ quyền Google Drive: ${syncRes.errors.join('; ')}`);
     }
   };
   const handleCreateRecoveryFile = async () => {

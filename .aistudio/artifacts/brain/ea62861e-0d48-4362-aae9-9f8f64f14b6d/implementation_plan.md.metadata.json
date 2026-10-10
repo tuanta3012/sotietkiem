@@ -1,6 +1,6 @@
 {
-  "summary":  "Kế hoạch tối ưu hóa dung lượng APK siêu an toàn (Zero-Risk): chỉ nén hình ảnh Splash Screen và Asset mà hoàn toàn không đụng vào ProGuard hay cấu hình Gradle.",
-  "updatedAt":  "2026-10-02T13:07:36.537474731Z",
+  "summary":  "Kế hoạch tích hợp Google Picker API với API Key do người dùng cung cấp (Cách 2) để thành viên liên kết file Google Sheet chia sẻ từ Admin một cách mượt mà, bảo mật với scope drive.file.",
+  "updatedAt":  "2026-10-08T16:27:32.179305103Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

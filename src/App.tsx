@@ -39,7 +39,7 @@ import {
   getDynamicBalanceGrowthHistory,
   clearStaticHistoryFromStorage,
 } from './data/historicalGrowth';
-import { getSecureItem, setSecureItem, autoCleanupStartupCache } from './utils/secureStorage';
+import { getSecureItem, setSecureItem, autoCleanupStartupCache, clearAppStorageExceptTokens } from './utils/secureStorage';
 import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
@@ -378,7 +378,7 @@ export default function App() {
     }
   }, [settings, isSessionRestored]);
 
-  // Lưu user khi thay đổi - Chỉ ghi đè sau khi đã hoàn thành khôi phục từ Preferences
+  // Lưu user khi thay đổi & Phát hiện chuyển đổi tài khoản (Account Switching Detection)
   useEffect(() => {
     if (!isSessionRestored) return;
     try {
@@ -386,8 +386,70 @@ export default function App() {
         const json = JSON.stringify(currentUser);
         localStorage.setItem('savings_auth_user_v3', json);
         Preferences.set({ key: 'savings_auth_user_v3', value: json }).catch(() => {});
+
+        const lastEmail = localStorage.getItem('savings_auth_email_v3');
+        const currentEmail = currentUser.email?.trim().toLowerCase();
+
+        if (lastEmail && currentEmail && lastEmail !== currentEmail) {
+          console.info('[Auth] Detected account switch from', lastEmail, 'to', currentEmail, '- Wiping all local data...');
+          (async () => {
+            // Nuclear cleanup for the old account
+            (window as any).__IS_LOGGING_OUT = true;
+            await clearAppStorageExceptTokens();
+            (window as any).__IS_LOGGING_OUT = false;
+
+            // Reset all in-memory states
+            setBooks([]);
+            setSettlementAdjustments([]);
+          setSettings({
+            privacyMode: false,
+            isVipMode: true,
+            upfrontNetting: true,
+            defaultLoanMargin: 1.5,
+            bankLoanMargins: {
+              seabank: 1.5,
+              shb: 1.5,
+              sea2: 1.5,
+              vietcombank: 1.5,
+              techcombank: 1.8,
+              bidv: 1.5,
+              vpbank: 2.0,
+              mbbank: 1.5,
+              acb: 1.6,
+              agribank: 1.5,
+              hdbank: 2.0,
+              vib: 1.9,
+              tpbank: 1.8,
+            },
+            defaultDemandRate: 0.2,
+            defaultLTV: 1.0,
+            husbandName: 'Chồng',
+            wifeName: 'Vợ',
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            lastSyncTime: undefined,
+            notificationsEnabled: false,
+            enableBiometricLogin: false,
+            members: [],
+            currentRole: 'ADMIN',
+          });
+          
+          // Re-save the current email after wipe
+          localStorage.setItem('savings_auth_email_v3', currentEmail);
+          
+          // FORCE RELOAD ON WEB TO FLUSH MEMORY (CRITICAL FOR SPA)
+          if (!Capacitor.isNativePlatform()) {
+             console.info('[Auth] Reloading page to ensure clean memory for the new user...');
+             window.location.reload();
+          }
+        })();
+      }
+        if (currentEmail) {
+          localStorage.setItem('savings_auth_email_v3', currentEmail);
+        }
       } else {
         localStorage.removeItem('savings_auth_user_v3');
+        localStorage.removeItem('savings_auth_email_v3');
         Preferences.remove({ key: 'savings_auth_user_v3' }).catch(() => {});
       }
     } catch {
@@ -506,36 +568,6 @@ export default function App() {
   pushBooksToDriveRef.current = pushBooksToDrive;
   showSyncStatusRef.current = setSyncDriveStatus;
 
-  // Sync drive status notification effect (Floating Toast - 1 time on initial load, silent on background auto-sync)
-  const hasShownInitialDriveConnToastRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    if (syncDriveStatus && currentUser && !currentUser.isOffline) {
-      const isError =
-        syncDriveStatus.includes('❌') ||
-        syncDriveStatus.toLowerCase().includes('lỗi') ||
-        syncDriveStatus.toLowerCase().includes('thất bại') ||
-        syncDriveStatus.toLowerCase().includes('hết hạn');
-
-      const isWarning =
-        syncDriveStatus.includes('⚡') ||
-        syncDriveStatus.toLowerCase().includes('hủy liên kết') ||
-        syncDriveStatus.toLowerCase().includes('đã dọn');
-
-      if (isError) {
-        showToast(syncDriveStatus, 'error', 5000);
-      } else if (isWarning) {
-        showToast(syncDriveStatus, 'error', 8000);
-      } else {
-        // Chỉ xuất hiện 1 lần duy nhất khi mở app để xác nhận đã kết nối thành công với file liên kết
-        if (!hasShownInitialDriveConnToastRef.current) {
-          hasShownInitialDriveConnToastRef.current = true;
-          showToast('Đã kết nối và đồng bộ thành công với file Google Drive', 'success', 3500);
-        }
-      }
-    }
-  }, [syncDriveStatus, currentUser, showToast]);
-
   // Tự động lập lịch thông báo nhắc đáo hạn (Local Notifications trên Capacitor Android)
   useEffect(() => {
     if (settings.notificationsEnabled && books.length > 0) {
@@ -550,19 +582,22 @@ export default function App() {
       try {
         const redirectRes = await checkRedirectResult();
         if (redirectRes) {
+          // CLEAR PREVIOUS DATA BEFORE LOGGING IN NEW USER (CRITICAL)
+          (window as any).__IS_LOGGING_OUT = true;
+          await clearSessionAndLocalData();
+          (window as any).__IS_LOGGING_OUT = false;
+
           const email = redirectRes.user.email || '';
           const cleanEmail = email.trim().toLowerCase();
 
-          const role: 'admin' | 'viewer' = 'admin';
-          const title = 'Quản trị viên (Admin) - Toàn quyền quản lý & Đồng bộ Google Drive';
-          const name = redirectRes.user.displayName || 'Chủ Tài Khoản';
+          const name = redirectRes.user.displayName || 'Thành viên';
 
           const onlineUser: AuthUser = {
             email: cleanEmail,
             name,
             photoURL: redirectRes.user.photoURL || undefined,
-            role,
-            title,
+            role: 'viewer', // Always start as viewer until sync confirms role
+            title: 'Đang tải quyền...',
             isOffline: false,
           };
 
@@ -570,7 +605,8 @@ export default function App() {
           setIsUnlocked(true);
           setGoogleAccessToken(redirectRes.accessToken);
           setIsPendingAuth(false);
-          syncBooksFromDrive(false, redirectRes.accessToken);
+          // Trigger deep sync
+          await syncBooksFromDrive(true, redirectRes.accessToken, true);
         } else {
           setIsPendingAuth(false);
         }
@@ -652,19 +688,25 @@ export default function App() {
     if (isLoggingInGoogle) return;
     setIsLoggingInGoogle(true);
     try {
+      // CLEAR ALL PREVIOUS SESSION DATA BEFORE LOGIN TO PREVENT LEAKS
+      (window as any).__IS_LOGGING_OUT = true;
+      await clearSessionAndLocalData();
+      (window as any).__IS_LOGGING_OUT = false;
+
       const res = await signInWithGoogle();
       const onlineUser: AuthUser = {
         email: res.user.email || '',
-        name: res.user.displayName || 'Chủ Tài Khoản',
-        role: 'admin',
-        title: 'Quản trị viên (Admin)',
+        name: res.user.displayName || 'Thành viên',
+        role: 'viewer', // Start as viewer until sync confirms role
+        title: 'Đang tải quyền...',
         isOffline: false,
       };
       setCurrentUser(onlineUser);
       setIsUnlocked(true);
       if (res.accessToken) {
         setGoogleAccessToken(res.accessToken);
-        syncBooksFromDrive(false, res.accessToken);
+        // Force a deep sync immediately
+        await syncBooksFromDrive(true, res.accessToken, true);
       }
       showToast(`Đã chuyển sang trực tuyến: ${onlineUser.email}`, 'success');
     } catch (err: any) {
@@ -675,56 +717,48 @@ export default function App() {
     }
   };
 
-  const clearSessionAndLocalData = () => {
-    // 1. Đồng bộ xóa sạch mọi dữ liệu tài chính trong localStorage ngay lập tức để tránh race condition khi unmount
-    try {
-      localStorage.removeItem('savings_books_v3');
-      localStorage.removeItem('savings_settlements_v3');
-      localStorage.setItem('savings_books_cleared', 'true');
-      localStorage.removeItem('savings_auth_user_v3');
-      localStorage.removeItem('google_drive_access_token');
-      localStorage.removeItem('google_drive_access_token_v4');
-      sessionStorage.removeItem('google_drive_access_token_v4');
-      
-      // Xóa sạch dấu vết liên kết file để tránh liên kết tự động sau này
-      localStorage.removeItem('last_linked_file_id_v2');
-      localStorage.removeItem('master_pointer_file_id');
-      localStorage.removeItem('master_sync_state_local_v2');
-      
-      const savedSettings = localStorage.getItem('savings_settings_v3');
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        delete parsed.googleSheetUrl;
-        delete parsed.googleSheetName;
-        delete parsed.lastSyncTime;
-        delete parsed.lastLocalLinkTimestamp;
-        localStorage.setItem('savings_settings_v3', JSON.stringify(parsed));
-      }
-    } catch (err) {
-      console.warn('Lỗi khi xóa sạch dữ liệu cục bộ khi đăng xuất:', err);
-    }
+  const clearSessionAndLocalData = async () => {
+    // 1. Nuclear cleanup of all storage layers (LocalStorage, Session, Preferences, SecureStorage)
+    await clearAppStorageExceptTokens();
 
-    // 2. Xóa khỏi Capacitor Preferences để tránh tự động khôi phục phiên khi khởi động lại ứng dụng
-    try {
-      Preferences.remove({ key: 'savings_auth_user_v3' }).catch(() => {});
-      Preferences.remove({ key: 'savings_books_v3' }).catch(() => {});
-      Preferences.remove({ key: 'savings_settlements_v3' }).catch(() => {});
-    } catch (err) {
-      console.warn('Lỗi khi dọn dẹp Capacitor Preferences:', err);
-    }
-
-    // 3. Xóa cứng React State (Bỏ qua hoàn toàn canEditData check của hook) để dọn sạch dữ liệu hiển thị tức thì
+    // 2. Immediate visual reset of in-memory data
     setBooks([]);
     setSettlementAdjustments([]);
     clearStaticHistoryFromStorage();
 
-    setSettings((prev) => ({
-      ...prev,
+    // 3. Reset settings to fresh default state (Wiping any linked sheet URLs/Names/Members/Roles)
+    setSettings({
+      privacyMode: false,
+      isVipMode: true,
+      upfrontNetting: true,
+      defaultLoanMargin: 1.5,
+      bankLoanMargins: {
+        seabank: 1.5,
+        shb: 1.5,
+        sea2: 1.5,
+        vietcombank: 1.5,
+        techcombank: 1.8,
+        bidv: 1.5,
+        vpbank: 2.0,
+        mbbank: 1.5,
+        acb: 1.6,
+        agribank: 1.5,
+        hdbank: 2.0,
+        vib: 1.9,
+        tpbank: 1.8,
+      },
+      defaultDemandRate: 0.2,
+      defaultLTV: 1.0,
+      husbandName: 'Chồng',
+      wifeName: 'Vợ',
       googleSheetUrl: undefined,
       googleSheetName: undefined,
       lastSyncTime: undefined,
-      lastLocalLinkTimestamp: undefined,
-    }));
+      notificationsEnabled: false,
+      enableBiometricLogin: false,
+      members: [],
+      currentRole: 'ADMIN', // Bảo mật: Mặc định là ADMIN cho người dùng mới cho đến khi xác định được file trung tâm
+    });
   };
 
   const handleDeleteAppDataAndUnlink = () => {
@@ -767,7 +801,9 @@ export default function App() {
   // Logout Safeguard
   const handleRequestLogout = async () => {
     if (currentUser?.isOffline) {
-      clearSessionAndLocalData();
+      (window as any).__IS_LOGGING_OUT = true;
+      await clearSessionAndLocalData();
+      (window as any).__IS_LOGGING_OUT = false;
       setCurrentUser(null);
       setIsUnlocked(false);
       setGoogleAccessToken(null);
@@ -793,7 +829,9 @@ export default function App() {
       }
       
       // Đăng xuất UI lập tức không chờ tác vụ mạng chặn UI
-      clearSessionAndLocalData();
+      (window as any).__IS_LOGGING_OUT = true;
+      await clearSessionAndLocalData();
+      (window as any).__IS_LOGGING_OUT = false;
       setCurrentUser(null);
       setIsUnlocked(false);
       setGoogleAccessToken(null);
@@ -803,7 +841,9 @@ export default function App() {
       if (books.length > 0) {
         setIsLogoutWarningModalOpen(true);
       } else {
-        clearSessionAndLocalData();
+        (window as any).__IS_LOGGING_OUT = true;
+        await clearSessionAndLocalData();
+        (window as any).__IS_LOGGING_OUT = false;
         setCurrentUser(null);
         setIsUnlocked(false);
         setGoogleAccessToken(null);
@@ -823,7 +863,18 @@ export default function App() {
   );
 
   const handleLoginOnlineFromModal = useCallback(
-    (user: AuthUser, token?: string) => {
+    async (user: AuthUser, token?: string) => {
+      // KIỂM TRA CHUYỂN ĐỔI TÀI KHOẢN (TRÁNH RÒ RỈ DỮ LIỆU CỦA USER TRƯỚC)
+      const prevEmail = currentUser?.email?.trim().toLowerCase();
+      const nextEmail = user.email?.trim().toLowerCase();
+
+      if (prevEmail && nextEmail && prevEmail !== nextEmail) {
+        console.info('[Auth] Phát hiện login tài khoản khác. Tiến hành dọn sạch dữ liệu user cũ...');
+        (window as any).__IS_LOGGING_OUT = true;
+        await clearSessionAndLocalData();
+        (window as any).__IS_LOGGING_OUT = false;
+      }
+
       setCurrentUser(user);
       setIsUnlocked(true);
       if (token) {
@@ -831,7 +882,7 @@ export default function App() {
         syncBooksFromDrive(false, token);
       }
     },
-    [syncBooksFromDrive]
+    [currentUser, syncBooksFromDrive, clearSessionAndLocalData]
   );
 
   const handleDriveFileNotFoundFromModal = useCallback(() => {
@@ -922,7 +973,9 @@ export default function App() {
     setIsLogoutWarningModalOpen(false);
     
     // Đăng xuất UI và xóa dữ liệu lập tức (0ms delay)
-    clearSessionAndLocalData();
+    (window as any).__IS_LOGGING_OUT = true;
+    await clearSessionAndLocalData();
+    (window as any).__IS_LOGGING_OUT = false;
     setCurrentUser(null);
     setIsUnlocked(false);
     setGoogleAccessToken(null);
@@ -941,7 +994,9 @@ export default function App() {
     setIsLogoutWarningModalOpen(false);
     
     // 2. Đăng xuất UI lập tức
-    clearSessionAndLocalData();
+    (window as any).__IS_LOGGING_OUT = true;
+    await clearSessionAndLocalData();
+    (window as any).__IS_LOGGING_OUT = false;
     setCurrentUser(null);
     setIsUnlocked(false);
     setGoogleAccessToken(null);
@@ -1022,7 +1077,6 @@ export default function App() {
     setConflictHub(null);
     setConflictToken(null);
     setConflictUser(null);
-    showToast('Đang thiết lập kết nối và tải toàn bộ sổ cũ từ Google Drive về máy...', 'info');
     setTimeout(() => {
       syncBooksFromDrive(false, conflictToken);
     }, 200);
@@ -1033,15 +1087,14 @@ export default function App() {
     setConflictToken(null);
     setConflictUser(null);
     setIsSyncModalOpen(true);
-    showToast('Vui lòng nhấp vào nút "Tạo file mới" hoặc "Chọn file" trong bảng đồng bộ.', 'info');
   };
 
-  const resolveConflictClose = () => {
+  const resolveConflictClose = async () => {
     // Trở lại chế độ ngoại tuyến bằng cách hủy phiên Google vừa đăng nhập
     setConflictHub(null);
     setConflictToken(null);
     setConflictUser(null);
-    clearSessionAndLocalData();
+    await clearSessionAndLocalData();
     setCurrentUser(null);
     setIsUnlocked(false);
     setGoogleAccessToken(null);
@@ -1166,6 +1219,7 @@ export default function App() {
           setIsMobilePreview={setIsMobilePreview}
           currentUser={currentUser}
           isSyncingDrive={isSyncingDrive}
+          syncDriveStatus={syncDriveStatus}
           onLoginGoogle={handleLoginGoogle}
           isLoggingInGoogle={isLoggingInGoogle}
           onLogout={handleRequestLogout}
@@ -1219,6 +1273,7 @@ export default function App() {
                       setSortBy={setSortBy}
                       sortedBanksInfo={sortedBanksInfo}
                       isSyncingDrive={isSyncingDrive}
+                      syncDriveStatus={syncDriveStatus}
                       onOpenSyncModal={() => setIsSyncModalOpen(true)}
                       onOpenAddModal={() => {
                         setBookToEdit(null);
@@ -1287,6 +1342,7 @@ export default function App() {
                   banksVersion={banksVersion}
                   sortedBanksInfo={sortedBanksInfo}
                   isSyncingDrive={isSyncingDrive}
+                  syncDriveStatus={syncDriveStatus}
                   onOpenSyncModal={() => setIsSyncModalOpen(true)}
                   onOpenAddModal={() => {
                     setBookToEdit(null);

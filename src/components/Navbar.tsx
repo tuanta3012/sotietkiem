@@ -33,6 +33,8 @@ import {
   Globe,
   WifiOff,
   RefreshCw,
+  Check,
+  AlertCircle,
 } from 'lucide-react';
 import { SyncAuditLogModal } from './SyncAuditLogModal';
 import { AppSettings, AuthUser, canEditData } from '../types';
@@ -72,6 +74,7 @@ interface NavbarProps {
   onLoginGoogle?: () => void;
   isLoggingInGoogle?: boolean;
   isSyncingDrive?: boolean;
+  syncDriveStatus?: string | null;
   onTriggerManualCheckUpdate?: () => void;
   currentVersion?: string;
 }
@@ -98,6 +101,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onLoginGoogle,
   isLoggingInGoogle = false,
   isSyncingDrive,
+  syncDriveStatus,
   onTriggerManualCheckUpdate,
   currentVersion = '1.0.0',
 }) => {
@@ -105,6 +109,57 @@ export const Navbar: React.FC<NavbarProps> = ({
   const [showMenu, setShowMenu] = useState(false);
   const [isAuditLogOpen, setIsAuditLogOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [navBriefStatus, setNavBriefStatus] = useState<{
+    text: string;
+    type: 'syncing' | 'success' | 'error';
+  } | null>(null);
+
+  // Hiển thị ngắn gọn trạng thái đồng bộ và tự động ẩn đi sau 3 giây
+  useEffect(() => {
+    if (isSyncingDrive) {
+      setNavBriefStatus({ text: 'Đang đồng bộ...', type: 'syncing' });
+      return;
+    }
+
+    if (!syncDriveStatus) {
+      return;
+    }
+
+    const s = syncDriveStatus.trim();
+    const isError =
+      s.includes('❌') ||
+      s.toLowerCase().includes('lỗi') ||
+      s.toLowerCase().includes('thất bại') ||
+      s.toLowerCase().includes('hết hạn') ||
+      s.toLowerCase().includes('không thể');
+
+    let text = 'Đã đồng bộ';
+    let type: 'success' | 'error' = 'success';
+
+    if (isError) {
+      type = 'error';
+      if (s.toLowerCase().includes('hết hạn')) {
+        text = 'Hết hạn phiên';
+      } else {
+        text = 'Lỗi đồng bộ';
+      }
+    } else {
+      type = 'success';
+      if (s.toLowerCase().includes('kết nối') || s.toLowerCase().includes('tự động')) {
+        text = 'Đã liên kết';
+      } else {
+        text = 'Đã đồng bộ';
+      }
+    }
+
+    setNavBriefStatus({ text, type });
+
+    const timer = setTimeout(() => {
+      setNavBriefStatus(null);
+    }, 3000);
+
+    return () => clearTimeout(timer);
+  }, [syncDriveStatus, isSyncingDrive]);
 
   const togglePrivacy = () => {
     setSettings((prev) => ({ ...prev, privacyMode: !prev.privacyMode }));
@@ -213,6 +268,52 @@ export const Navbar: React.FC<NavbarProps> = ({
               <Plus className="w-3.5 h-3.5 text-emerald-400" />
               <span>Thêm sổ</span>
             </button>
+
+            {/* Quick Sync Button for Online Users */}
+            {!currentUser?.isOffline && onOpenSyncModal && (
+              <button
+                id="btn-navbar-sync-drive"
+                onClick={onOpenSyncModal}
+                title={
+                  navBriefStatus
+                    ? `Trạng thái: ${navBriefStatus.text}`
+                    : settings.googleSheetName
+                    ? `File: ${settings.googleSheetName}`
+                    : 'Đồng bộ Google Drive'
+                }
+                className={`hidden md:flex items-center space-x-1.5 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-semibold border shadow-xs transition-all cursor-pointer ${
+                  isSyncingDrive || navBriefStatus?.type === 'syncing'
+                    ? 'bg-amber-950/60 border-amber-500/60 text-amber-300 ring-1 ring-amber-400/40 animate-pulse'
+                    : navBriefStatus?.type === 'success'
+                    ? 'bg-emerald-600 border-emerald-500 text-white font-bold'
+                    : navBriefStatus?.type === 'error'
+                    ? 'bg-rose-950/60 border-rose-500/60 text-rose-300'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                }`}
+              >
+                {isSyncingDrive || navBriefStatus?.type === 'syncing' ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+                    <span className="text-amber-300">Đang đồng bộ...</span>
+                  </>
+                ) : navBriefStatus?.type === 'success' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-white" />
+                    <span>{navBriefStatus.text}</span>
+                  </>
+                ) : navBriefStatus?.type === 'error' ? (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                    <span>{navBriefStatus.text}</span>
+                  </>
+                ) : (
+                  <>
+                    <Cloud className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Đồng bộ Drive</span>
+                  </>
+                )}
+              </button>
+            )}
 
             {/* Privacy Toggle Quick Button */}
             <button
@@ -327,7 +428,19 @@ export const Navbar: React.FC<NavbarProps> = ({
                     >
                       <Cloud className="w-4 h-4 text-emerald-400 shrink-0" />
                       <div>
-                        <div className="font-bold">Đồng bộ dữ liệu</div>
+                        <div className="font-bold flex items-center gap-1.5">
+                          <span>Đồng bộ dữ liệu</span>
+                          {isSyncingDrive && (
+                            <span className="text-[10px] text-amber-400 font-normal animate-pulse">
+                              (Đang đồng bộ...)
+                            </span>
+                          )}
+                          {!isSyncingDrive && navBriefStatus && (
+                            <span className={`text-[10px] font-normal ${navBriefStatus.type === 'error' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                              ({navBriefStatus.text})
+                            </span>
+                          )}
+                        </div>
                         <p className="text-[10px] text-slate-400">
                           {settings.lastSyncTime
                             ? `Gần nhất: ${settings.lastSyncTime}`

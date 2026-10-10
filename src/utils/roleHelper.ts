@@ -30,7 +30,12 @@ export function resolveUserRole(
     return 'VIEWER';
   }
 
-  // 3. Nếu chưa có danh sách thành viên (file riêng tư cá nhân) -> ADMIN
+  // 3. Nếu có workspaceOwnerEmail mà user này khác owner -> Chắc chắn không phải Admin, mặc định VIEWER
+  if (workspaceOwnerEmail && cleanEmail !== workspaceOwnerEmail.trim().toLowerCase()) {
+    return 'VIEWER';
+  }
+
+  // 4. Nếu chưa có danh sách thành viên (file riêng tư cá nhân) -> ADMIN
   if (currentRole) {
     const upper = currentRole.toUpperCase();
     if (upper === 'ADMIN' || upper === 'EDITOR' || upper === 'VIEWER') {
@@ -40,3 +45,4 @@ export function resolveUserRole(
 
   return 'ADMIN';
 }
+

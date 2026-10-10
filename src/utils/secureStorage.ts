@@ -7,10 +7,14 @@ import { SecureStoragePlugin } from 'capacitor-secure-storage-plugin';
  */
 const isNative = Capacitor.isNativePlatform();
 
+const TOKEN_KEY = 'google_drive_access_token_v4';
+const TOKEN_EXPIRES_AT_KEY = 'google_drive_token_expires_at';
+const REFRESH_TOKEN_KEY = 'google_drive_refresh_token_v4';
+const ID_TOKEN_KEY = 'google_drive_id_token_v4';
+const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
+
 /**
  * Securely store a key-value pair.
- * On native platforms, uses the encrypted SecureStoragePlugin.
- * On web/iframe, falls back to Capacitor Preferences with unencrypted localStorage.
  */
 export async function setSecureItem(key: string, value: string): Promise<void> {
   if (isNative) {
@@ -22,7 +26,6 @@ export async function setSecureItem(key: string, value: string): Promise<void> {
     }
   }
 
-  // Fallback to Preferences (and also update localStorage just in case)
   try {
     await Preferences.set({ key, value });
     localStorage.setItem(key, value);
@@ -33,8 +36,6 @@ export async function setSecureItem(key: string, value: string): Promise<void> {
 
 /**
  * Retrieve a securely stored value by key.
- * On native platforms, uses the encrypted SecureStoragePlugin.
- * On web/iframe, falls back to Capacitor Preferences and localStorage.
  */
 export async function getSecureItem(key: string): Promise<string | null> {
   if (isNative) {
@@ -48,7 +49,6 @@ export async function getSecureItem(key: string): Promise<string | null> {
     }
   }
 
-  // Fallback to Preferences/localStorage
   try {
     const prefResult = await Preferences.get({ key });
     if (prefResult && prefResult.value) {
@@ -74,7 +74,6 @@ export async function removeSecureItem(key: string): Promise<void> {
     }
   }
 
-  // Fallback
   try {
     await Preferences.remove({ key });
     localStorage.removeItem(key);
@@ -84,8 +83,7 @@ export async function removeSecureItem(key: string): Promise<void> {
 }
 
 /**
- * Automatically clean up temporary cache memory on app startup while preserving
- * active Google Drive sync settings, authentication tokens, and user savings data.
+ * Automatically clean up temporary cache memory on app startup.
  */
 export async function autoCleanupStartupCache(): Promise<void> {
   try {
@@ -98,7 +96,6 @@ export async function autoCleanupStartupCache(): Promise<void> {
       'stk_',
     ];
 
-    // 1. Scan and purge orphan/temporary localStorage keys
     if (typeof window !== 'undefined' && window.localStorage) {
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -119,7 +116,6 @@ export async function autoCleanupStartupCache(): Promise<void> {
       });
     }
 
-    // 2. Clear browser CacheStorage if available
     if (typeof window !== 'undefined' && 'caches' in window) {
       const cacheNames = await caches.keys();
       for (const name of cacheNames) {
@@ -136,23 +132,14 @@ export async function autoCleanupStartupCache(): Promise<void> {
 /**
  * Tầng 3 (Runtime Keystore Guard):
  * Phát hiện và quét sạch 100% dữ liệu zombie do Google One Cloud Backup tự ý khôi phục trên cài đặt mới.
- * Sử dụng chip bảo mật phần cứng Android Keystore để nhận diện trạng thái cài đặt mới (Fresh Install).
- * Khi gỡ ứng dụng, Android Keystore phần cứng sẽ bị hệ điều hành xóa vĩnh viễn,
- * nhưng Google One có thể vẫn cố tiêm SharedPreferences/localStorage snapshot cũ.
  */
 export async function enforceFreshInstallCleanState(): Promise<boolean> {
-  const KEYSTORE_GUARD_KEY = 'stk_hardware_keystore_install_token';
   const PREFS_GUARD_KEY = 'stk_hardware_keystore_install_token';
-
   try {
-    if (isNative) {
-      // Đảm bảo token cài đặt được ghi nhận mà tuyệt đối không xóa dữ liệu hợp lệ của người dùng
+    if (Capacitor.isNativePlatform()) {
       const prefResult = await Preferences.get({ key: PREFS_GUARD_KEY }).catch(() => ({ value: null }));
       if (!prefResult?.value) {
         const newToken = `stk_install_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-        try {
-          await SecureStoragePlugin.set({ key: KEYSTORE_GUARD_KEY, value: newToken });
-        } catch {}
         await Preferences.set({ key: PREFS_GUARD_KEY, value: newToken }).catch(() => {});
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem(PREFS_GUARD_KEY, newToken);
@@ -163,4 +150,97 @@ export async function enforceFreshInstallCleanState(): Promise<boolean> {
     console.warn('[KeystoreGuard] Bỏ qua kiểm tra token khởi động an toàn:', err);
   }
   return false;
+}
+
+/**
+ * Nuclear cleanup of all application data across all storage layers.
+ */
+export async function clearAppStorageExceptTokens(): Promise<void> {
+  const AUTH_KEYS_TO_KEEP = [
+    TOKEN_KEY,
+    TOKEN_EXPIRES_AT_KEY,
+    REFRESH_TOKEN_KEY,
+    ID_TOKEN_KEY,
+    USER_PROFILE_KEY,
+    'google_drive_ever_logged_in',
+    'drive_scope_migrated_v2',
+  ];
+
+  try {
+    const isManualLogout = (window as any).__IS_LOGGING_OUT === true;
+    console.info(`[SecureStorage] Initiating nuclear cleanup (Manual Logout: ${isManualLogout})...`);
+
+    // 1. CLEAR LOCALSTORAGE
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const allKeys = Object.keys(localStorage);
+      allKeys.forEach(key => {
+        if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key)) {
+          localStorage.removeItem(key);
+        }
+      });
+      localStorage.setItem('savings_books_cleared', 'true');
+    }
+
+    // 2. CLEAR SESSIONSTORAGE
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      sessionStorage.clear();
+    }
+
+    // 3. CLEAR CAPACITOR PREFERENCES
+    const { keys } = await Preferences.keys();
+    await Promise.all(
+      keys.map(async (key) => {
+        if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key)) {
+          await Preferences.remove({ key }).catch(() => {});
+        }
+      })
+    );
+
+    // 4. CLEAR NATIVE SECURE STORAGE
+    if (isNative) {
+      const dataKeys = [
+        'savings_auth_user_v3',
+        'savings_auth_email_v3',
+        'savings_books_v3',
+        'savings_settlements_v3',
+        'savings_settings_v3',
+        'last_linked_file_id_v2',
+        'master_pointer_file_id',
+        'master_sync_state_local_v2',
+        'explicitly_unlinked',
+        'savings_setting_biometrics',
+        'savings_setting_notifications',
+        'savings_sync_audit_log_v1',
+        'savings_offline_vault_key',
+        'google_drive_file_id',
+      ];
+      await Promise.all(
+        dataKeys.map(async (key) => {
+          if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key)) {
+            await SecureStoragePlugin.remove({ key }).catch(() => {});
+          }
+        })
+      );
+    }
+
+    // 5. CLEAR INDEXEDB (Optional but recommended for thoroughness)
+    // Note: This might clear Firebase Auth persistence if not careful, 
+    // but if it's a manual logout, we WANT that.
+    if (isManualLogout && typeof window !== 'undefined' && window.indexedDB) {
+      try {
+        const dbs = await window.indexedDB.databases();
+        dbs.forEach(db => {
+          if (db.name && (db.name.includes('firebase') || db.name.includes('firestore'))) {
+             window.indexedDB.deleteDatabase(db.name);
+          }
+        });
+      } catch (e) {
+        // ignore errors in indexedDB listing
+      }
+    }
+
+    console.info('[SecureStorage] Nuclear cleanup completed.');
+  } catch (err) {
+    console.error('[SecureStorage] Error during nuclear clear:', err);
+  }
 }

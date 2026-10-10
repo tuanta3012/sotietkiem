@@ -28,7 +28,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['ngân hàng', 'bank', 'nh', 'tổ chức tín dụng', 'tên ngân hàng', 'mã nh', 'ngan hang'],
     description: 'Tên viết tắt hoặc mã ngân hàng (SEA, SHB, VCB, CTG, BIDV, TCB, VPB, MB, ACB, VIB, TPB, LPB, HDB, MSB, OCB, NAB, NCB, BVB, AGRI, SCB, PVB...)',
     example: 'SHB',
-    width: 14,
+    width: 9, // 'Ngân hàng'.length
   },
   {
     index: 1,
@@ -40,7 +40,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['chủ sổ', 'người gửi', 'đứng tên', 'owner', 'chủ sở hữu', 'chủ', 'nguoi gui', 'chu so'],
     description: 'Người đứng tên sổ tiết kiệm (Chồng / Vợ hoặc tên người sở hữu). Tuyệt đối không để trống hoặc lẫn với lãi suất.',
     example: 'Chồng',
-    width: 14,
+    width: 6, // 'Chủ sổ'.length
   },
   {
     index: 2,
@@ -52,7 +52,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['hình thức', 'loại sổ', 'kênh gửi', 'kênh', 'deposit type', 'type', 'hinh thuc', 'loai so'],
     description: 'Kênh gửi tiết kiệm: "Tại quầy" (Sổ giấy tại quầy giao dịch) hoặc "Online" (Ứng dụng/Web ngân hàng)',
     example: 'Tại quầy',
-    width: 12,
+    width: 9, // 'Hình thức'.length
   },
   {
     index: 3,
@@ -64,7 +64,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['lãi suất', 'lai suat', 'rate', 'lãi %', '%/năm', 'lãi suất %/năm'],
     description: 'Lãi suất %/năm (ví dụ: 6.55%, 6.80%, 7.40%, 8.20%).',
     example: '6,80%',
-    width: 12,
+    width: 8, // 'Lãi suất'.length
   },
   {
     index: 4,
@@ -76,7 +76,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['tiền gửi', 'tiền gởi', 'số tiền', 'gốc', 'principal', 'amount', 'tien gui', 'tien goi', 'so tien'],
     description: 'Số tiền gốc gửi (Đơn vị: Triệu VNĐ trong bảng tính, ví dụ: 1100 = 1.100.000.000 VNĐ).',
     example: 1100,
-    width: 14,
+    width: 8, // 'Tiền gửi'.length
   },
   {
     index: 5,
@@ -88,7 +88,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['gửi', 'ngày gửi', 'ngày mở', 'start', 'start date', 'ngay gui', 'ngay mo'],
     description: 'Ngày mở sổ tiết kiệm (Định dạng: D/M/YYYY hoặc DD/MM/YYYY, ví dụ: 22/8/2025).',
     example: '22/8/2025',
-    width: 14,
+    width: 3, // 'Gửi'.length
   },
   {
     index: 6,
@@ -100,7 +100,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['đáo hạn', 'ngày đáo hạn', 'đến hạn', 'hạn', 'maturity', 'end date', 'dao han', 'ngay dao han'],
     description: 'Ngày đáo hạn sổ tiết kiệm (Định dạng: D/M/YYYY hoặc DD/MM/YYYY, ví dụ: 22/8/2026).',
     example: '22/8/2026',
-    width: 14,
+    width: 7, // 'Đáo hạn'.length
   },
   {
     index: 7,
@@ -112,7 +112,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['kỳ', 'kỳ hạn', 'tháng', 'term', 'months', 'ky', 'ky han', 'so thang'],
     description: 'Kỳ hạn gửi tính theo số tháng (ví dụ: 1, 3, 6, 9, 12, 13, 18, 24, 36).',
     example: 12,
-    width: 8,
+    width: 2, // 'Kỳ'.length
   },
   {
     index: 8,
@@ -124,7 +124,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['thời gian còn', 'còn lại', 'số tháng còn', 'thoi gian con', 'con lai', 'thoi gian con lai'],
     description: 'Số tháng/số ngày còn lại đến hạn tính theo thời gian thực từ ngày hiện tại.',
     example: 8,
-    width: 14,
+    width: 13, // 'Thời gian còn'.length
   },
   {
     index: 9,
@@ -136,7 +136,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['tiền lãi theo sổ', 'lãi theo sổ', 'lãi kỳ hạn', 'lãi trọn kỳ', 'tien lai theo so', 'lai theo so'],
     description: 'Tổng tiền lãi thực nhận khi giữ sổ đến ngày đáo hạn (Đơn vị: Triệu VNĐ).',
     example: 74.8,
-    width: 18,
+    width: 16, // 'Tiền lãi theo sổ'.length
   },
   {
     index: 10,
@@ -148,7 +148,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['tiền lãi 1 năm', 'lãi 1 năm', 'lãi năm', 'lãi tương đương 1 năm', 'tien lai 1 nam', 'lai 1 nam'],
     description: 'Tiền lãi quy đổi tương đương theo 1 năm (Triệu VNĐ = Gốc × Lãi suất).',
     example: 74.8,
-    width: 18,
+    width: 14, // 'Tiền lãi 1 năm'.length
   },
   {
     index: 11,
@@ -160,7 +160,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['tháng đáo hạn', 'tháng/năm', 'tháng đến hạn', 'thang dao han', 'thang/nam'],
     description: 'Tháng và năm đáo hạn dạng MM/YY (ví dụ: 08/26, 09/26).',
     example: '08/26',
-    width: 14,
+    width: 13, // 'Tháng đáo hạn'.length
   },
   {
     index: 12,
@@ -184,7 +184,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['lãi hàng năm', 'năm lịch sử lãi', 'năm', 'lai hang nam', 'nam'],
     description: 'Bảng phụ: Năm thống kê lãi thực nhận trong quá khứ (ví dụ: 2021, 2022, 2023, 2024, 2025, 2026).',
     example: 2025,
-    width: 14,
+    width: 12, // 'Lãi hàng năm'.length
   },
   {
     index: 14,
@@ -196,7 +196,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['số tiền', 'lãi nhận', 'tiền lãi năm', 'so tien', 'lai nhan'],
     description: 'Bảng phụ: Tổng số tiền lãi thực nhận trong năm tương ứng (Triệu VNĐ).',
     example: 2150,
-    width: 12,
+    width: 7, // 'Số tiền'.length
   },
   {
     index: 15,
@@ -220,7 +220,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['số cuối năm', 'năm số dư', 'dư cuối năm', 'so cuoi nam', 'nam so du'],
     description: 'Bảng phụ: Năm thống kê số dư tổng tài sản tiết kiệm cuối năm (ví dụ: 2021, 2022, 2023, 2024, 2025, 2026).',
     example: 2025,
-    width: 14,
+    width: 11, // 'Số cuối năm'.length
   },
   {
     index: 17,
@@ -232,7 +232,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['số tiền', 'tổng số dư', 'gốc cuối năm', 'so tien', 'tong so du'],
     description: 'Bảng phụ: Tổng số dư gốc tiết kiệm vào ngày 31/12 của năm tương ứng (Triệu VNĐ).',
     example: 34500,
-    width: 12,
+    width: 7, // 'Số tiền'.length
   },
   {
     index: 18,
@@ -244,7 +244,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['thu nhập năm', 'thu nhập tích lũy', 'thu nhập', 'thu nhap nam', 'thu nhap'],
     description: 'Bảng phụ: Tổng thu nhập gia đình tăng thêm trong năm (Triệu VNĐ).',
     example: 3600,
-    width: 16,
+    width: 12, // 'Thu nhập năm'.length
   },
   {
     index: 19,
@@ -268,7 +268,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['id biến động', 'id', 'mã biến động'],
     description: 'Bảng phụ: Mã nhận diện duy nhất của nhật ký biến động',
     example: 'ADJ_1727000000000',
-    width: 18,
+    width: 12, // 'ID biến động'.length
   },
   {
     index: 21,
@@ -280,7 +280,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['ngày biến động', 'ngày tất toán', 'ngày thực hiện'],
     description: 'Bảng phụ: Ngày diễn ra biến động sổ (YYYY-MM-DD hoặc DD/MM/YYYY)',
     example: '22/09/2026',
-    width: 14,
+    width: 14, // 'Ngày biến động'.length
   },
   {
     index: 22,
@@ -292,7 +292,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['loại biến động', 'hình thức tất toán', 'loại giao dịch'],
     description: 'Bảng phụ: Mở sổ mới / Tất toán đúng hạn / Tất toán trước hạn / Tái tục sổ',
     example: 'Tất toán đúng hạn',
-    width: 18,
+    width: 14, // 'Loại biến động'.length
   },
   {
     index: 23,
@@ -304,7 +304,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['mã sổ', 'mã sổ tiết kiệm', 'book code'],
     description: 'Bảng phụ: Mã sổ phát sinh biến động',
     example: 'SHB-2609-1100',
-    width: 16,
+    width: 5, // 'Mã sổ'.length
   },
   {
     index: 24,
@@ -316,7 +316,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['ngân hàng', 'bank'],
     description: 'Bảng phụ: Ngân hàng quản lý sổ',
     example: 'SHB',
-    width: 12,
+    width: 9, // 'Ngân hàng'.length
   },
   {
     index: 25,
@@ -328,7 +328,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['chủ sở hữu', 'chủ sổ', 'owner'],
     description: 'Bảng phụ: Chủ sở hữu đứng tên',
     example: 'Chồng',
-    width: 14,
+    width: 10, // 'Chủ sở hữu'.length
   },
   {
     index: 26,
@@ -340,7 +340,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['tiền gốc', 'số tiền gốc'],
     description: 'Bảng phụ: Tiền gốc của sổ (Triệu VNĐ)',
     example: 1100,
-    width: 14,
+    width: 8, // 'Tiền gốc'.length
   },
   {
     index: 27,
@@ -352,7 +352,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['lãi thực nhận', 'lãi chốt'],
     description: 'Bảng phụ: Tiền lãi chốt thực nhận (Triệu VNĐ)',
     example: 74.8,
-    width: 14,
+    width: 13, // 'Lãi thực nhận'.length
   },
   {
     index: 28,
@@ -364,7 +364,7 @@ export const CANONICAL_COLUMNS: ColumnDefinition[] = [
     aliases: ['ghi chú', 'nội dung', 'lý do'],
     description: 'Bảng phụ: Ghi chú chi tiết biến động',
     example: 'Đã tất toán chuyển về tài khoản',
-    width: 24,
+    width: 7, // 'Ghi chú'.length
   },
 ];
 

@@ -204,6 +204,9 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
   }
 
   if (rawRows.length === 0) {
+    if (headerRowIdx >= 0) {
+      return { success: true, books: [], warnings: [], totalPrincipal: 0 };
+    }
     return { success: false, books: [], errors: ['Không tìm thấy hàng dữ liệu nào trong bảng tính.'], warnings, totalPrincipal: 0 };
   }
 
@@ -411,10 +414,12 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
   }
 
   if (books.length === 0) {
+    if (headerRowIdx >= 0) {
+      return { success: true, books: [], warnings, totalPrincipal: 0 };
+    }
     return {
-      success: false,
+      success: true,
       books: [],
-      errors: ['Không trích xuất được dòng dữ liệu sổ tiết kiệm hợp lệ nào. Vui lòng kiểm tra lại cấu trúc hàng và cột trong Google Sheet/Excel.'],
       warnings,
       totalPrincipal: 0,
     };
@@ -741,9 +746,8 @@ export async function parseWorkbook(workbookOrBuffer: any): Promise<ParseExcelRe
 
   if (!bestResult || bestResult.books.length === 0) {
     return {
-      success: false,
+      success: true,
       books: [],
-      errors: ['Không trích xuất được dòng dữ liệu sổ tiết kiệm hợp lệ nào. Vui lòng kiểm tra lại cấu trúc hàng và cột trong Google Sheet/Excel.'],
       warnings,
       totalPrincipal: 0,
     };
@@ -802,38 +806,20 @@ export async function buildSavingsWorkbook(
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'SoTietKiem');
 
-  // Set column widths matching sheet with Owner and DepositType columns
-  worksheet['!cols'] = [
-    { wch: 14 }, // A: Ngân hàng
-    { wch: 14 }, // B: Chủ sổ
-    { wch: 12 }, // C: Hình thức
-    { wch: 12 }, // D: Lãi suất
-    { wch: 14 }, // E: Tiền gửi
-    { wch: 14 }, // F: Gửi
-    { wch: 14 }, // G: Đáo hạn
-    { wch: 8 },  // H: Kỳ
-    { wch: 14 }, // I: Ngày hôm nay
-    { wch: 18 }, // J: Tiền lãi theo sổ
-    { wch: 18 }, // K: Tiền lãi 1 năm
-    { wch: 14 }, // L: Tháng đáo hạn
-    { wch: 4 },  // M: Separator
-    { wch: 14 }, // N: Lãi hàng năm
-    { wch: 12 }, // O: Số tiền (Lãi)
-    { wch: 4 },  // P: Separator
-    { wch: 14 }, // Q: Số cuối năm
-    { wch: 12 }, // R: Số tiền (Gốc)
-    { wch: 16 }, // S: Thu nhập năm
-    { wch: 4 },  // T: Separator
-    { wch: 14 }, // U: Nhật ký biến động
-    { wch: 14 }, // V: Ngày GD
-    { wch: 14 }, // W: Loại
-    { wch: 14 }, // X: Ngân hàng
-    { wch: 14 }, // Y: Mã sổ
-    { wch: 14 }, // Z: Tiền gốc
-    { wch: 14 }, // AA: Tiền lãi thực nhận
-    { wch: 14 }, // AB: Chủ sổ
-    { wch: 24 }, // AC: Ghi chú
-  ];
+  // Cấu hình lại độ rộng các cột bằng với độ dài của nội dung tiêu đề khi tạo file mới
+  const headerRow = matrix[0] || [];
+  worksheet['!cols'] = headerRow.map((headerCell) => {
+    const text = headerCell !== undefined && headerCell !== null ? String(headerCell).trim() : '';
+    if (!text) {
+      return { wch: 3, wpx: 24 };
+    }
+    const charLen = text.length;
+    const pixelWidth = Math.max(36, Math.round(charLen * 8.2 + 14));
+    return {
+      wch: Math.max(charLen + 1, 3),
+      wpx: pixelWidth,
+    };
+  });
 
   // Định dạng số có dấu chấm phân cách hàng nghìn cho tất cả các cột tiền tệ
   for (let r = 1; r < matrix.length; r++) {
@@ -875,6 +861,8 @@ export async function buildSavingsWorkbook(
     schemaVersion: 2,
     updatedAt: new Date().toISOString(),
     settlements: settlements || [],
+    appId: 'com.tietkiemgiadinh.app',
+    appLabel: 'com.tietkiemgiadinh.app',
     ...(metadata || {}),
   };
 
@@ -886,10 +874,21 @@ export async function buildSavingsWorkbook(
     ['Last Updated', new Date().toLocaleString('vi-VN')],
     ['Settlements Count', settlements?.length || 0],
     ['Settlements JSON', JSON.stringify(settlements || [])],
+    ['App ID', 'com.tietkiemgiadinh.app'],
+    ['App Label', 'com.tietkiemgiadinh.app'],
+    ['App Package', 'com.tietkiemgiadinh.app'],
   ];
 
   const wsConfig = XLSX.utils.aoa_to_sheet(configMatrix);
   XLSX.utils.book_append_sheet(workbook, wsConfig, '__CONFIG__');
+
+  // Đảm bảo tab __CONFIG__ luôn bị ẩn khi file Excel được mở hoặc convert sang Google Sheets
+  if (!workbook.Workbook) workbook.Workbook = {};
+  if (!workbook.Workbook.Sheets) workbook.Workbook.Sheets = [];
+  const configSheetIndex = workbook.SheetNames.indexOf('__CONFIG__');
+  if (configSheetIndex !== -1) {
+    workbook.Workbook.Sheets[configSheetIndex] = { Hidden: 1 }; // 1 = Hidden
+  }
 
   return workbook;
 }
@@ -960,7 +959,16 @@ export async function exportStandardTemplateExcel(fileName = 'Mau_Bang_Du_Lieu_S
   ];
 
   const wsData = XLSX.utils.aoa_to_sheet(sampleMatrix);
-  wsData['!cols'] = CANONICAL_COLUMNS.map((col) => ({ wch: col.width }));
+  wsData['!cols'] = CANONICAL_COLUMNS.map((col) => {
+    const text = (col.header || '').trim();
+    if (!text) return { wch: 3, wpx: 24 };
+    const charLen = text.length;
+    const pixelWidth = Math.max(36, Math.round(charLen * 8.2 + 14));
+    return {
+      wch: Math.max(charLen + 1, 3),
+      wpx: pixelWidth,
+    };
+  });
 
   // Sheet 2: Data Dictionary & Field Instructions
   const guideMatrix: (string | number)[][] = [

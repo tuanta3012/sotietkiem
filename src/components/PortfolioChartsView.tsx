@@ -806,7 +806,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
           <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-4">
             <h3 className="text-sm sm:text-base font-bold text-slate-900 flex items-center">
               <TrendingUp className="w-4 h-4 text-indigo-600 mr-2" />
-              Tăng Trưởng Số Dư Cuối Năm (2019 - 2026)
+              Tăng Trưởng Số Dư Cuối (2019 - 2026)
             </h3>
             <div className="h-60 w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -821,7 +821,7 @@ export const PortfolioChartsView: React.FC<PortfolioChartsViewProps> = ({
                   <XAxis dataKey="year" tick={{ fontSize: 11 }} />
                   <YAxis tickFormatter={(val) => (settings.privacyMode ? '••' : `${formatDecimal(val / 1000, 0)}T`)} tick={{ fontSize: 11 }} />
                   <Tooltip
-                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${formatDecimal(Number(val) / 1000, 1)} Tỷ VNĐ`, 'Số dư cuối năm']}
+                    formatter={(val: any) => [settings.privacyMode ? '••••••' : `${formatDecimal(Number(val) / 1000, 1)} Tỷ VNĐ`, 'Số dư cuối']}
                     contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '12px', fontSize: '12px' }}
                   />
                   <Area type="monotone" dataKey="balanceMillion" stroke="#4f46e5" strokeWidth={2} fillOpacity={1} fill="url(#balanceGrad)" />

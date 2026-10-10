@@ -186,7 +186,7 @@ export const HistoricalGrowthView: React.FC<HistoricalGrowthViewProps> = ({
                 <BarChart3 className="w-4 h-4" />
               </span>
               <h3 className="font-bold text-slate-900 text-sm sm:text-base">
-                Quy Mô Số Dư Cuối Năm ({firstYear} - {lastYear})
+                Quy Mô Số Dư Cuối ({firstYear} - {lastYear})
               </h3>
             </div>
             <span className="text-xs font-semibold text-slate-500">Đơn vị: Tỷ VNĐ</span>

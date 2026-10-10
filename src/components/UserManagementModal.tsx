@@ -16,6 +16,7 @@ import {
   FolderSync,
 } from 'lucide-react';
 import { AppSettings, AuthUser, WorkspaceMember, UserRole, canManageMembers } from '../types';
+import { getGoogleAccessToken, ensureGoogleAccessToken, getLocalMasterPointerFileId, revokeFilePermission } from '../utils/googleDriveService';
 
 interface UserManagementModalProps {
   isOpen: boolean;
@@ -47,44 +48,30 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const isAdmin = canManageMembers(currentRole);
 
   const [members, setMembers] = useState<WorkspaceMember[]>(() => {
-    if (settings.members && settings.members.length > 0) {
-      return settings.members;
-    }
-    if (currentUser?.email) {
-      return [
-        {
-          id: 'owner-1',
-          email: currentUser.email.toLowerCase(),
-          name: currentUser.name || 'Admin',
-          role: 'ADMIN',
-          addedAt: new Date().toISOString(),
-        },
-      ];
-    }
-    return [];
+    return settings.members || [];
   });
 
   React.useEffect(() => {
-    if (settings.members && settings.members.length > 0) {
-      setMembers((prev) => {
-        const prevStr = JSON.stringify(prev);
-        const nextStr = JSON.stringify(settings.members);
-        return prevStr === nextStr ? prev : (settings.members || prev);
-      });
-    }
+    setMembers((prev) => {
+      const incoming = settings.members || [];
+      const prevStr = JSON.stringify(prev);
+      const nextStr = JSON.stringify(incoming);
+      return prevStr === nextStr ? prev : incoming;
+    });
   }, [settings.members]);
 
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<UserRole>('VIEWER');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [isAddedSuccess, setIsAddedSuccess] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState<{ id: string; email: string; name?: string } | null>(null);
 
   const hasLinkedDriveFile = Boolean(settings.googleSheetUrl && settings.googleSheetUrl.trim().length > 0);
 
-  const handleAddMember = async (e: React.FormEvent) => {
+  const handleAddMember = (e: React.FormEvent) => {
     e.preventDefault();
     if (!hasLinkedDriveFile) {
       setErrorMsg('Vui lòng kết nối hoặc tạo file Google Drive trước khi thêm thành viên.');
@@ -95,20 +82,30 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       return;
     }
 
-    const cleanEmail = newEmail.trim().toLowerCase();
+    let cleanEmail = newEmail.trim().toLowerCase();
+    
+    // Auto-append @gmail.com if it's just a username
+    if (cleanEmail && !cleanEmail.includes('@')) {
+      cleanEmail = `${cleanEmail}@gmail.com`;
+    }
+
     if (!cleanEmail.includes('@') || !cleanEmail.includes('.')) {
       setErrorMsg('Địa chỉ Gmail không hợp lệ.');
       return;
     }
 
-    if (members.some((m) => m.email.toLowerCase() === cleanEmail)) {
-      setErrorMsg('Email đã tồn tại trong danh sách.');
+    const effectiveAdmin = ownerEmail || (isAdmin ? userEmail : '');
+    if (cleanEmail === userEmail || cleanEmail === ownerEmail || (effectiveAdmin && cleanEmail === effectiveAdmin)) {
+      setErrorMsg('Tài khoản này là Admin của sổ, không cần thêm vào danh sách chia sẻ.');
       return;
     }
 
-    setIsSubmitting(true);
+    if (members.some((m) => m.email.toLowerCase() === cleanEmail)) {
+      setErrorMsg('Email này đã tồn tại trong danh sách thành viên.');
+      return;
+    }
+
     setErrorMsg(null);
-    setSuccessMsg(null);
 
     const newMember: WorkspaceMember = {
       id: `member-${Date.now()}`,
@@ -119,52 +116,69 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       addedBy: currentUser?.email || 'Admin',
     };
 
-    const updated = [...members, newMember];
-    try {
-      await onSaveMembers(updated);
-      setMembers(updated);
-      setNewName('');
-      setNewEmail('');
-      setSuccessMsg(`Đã thêm thành viên ${cleanEmail}`);
-      setTimeout(() => setSuccessMsg(null), 3000);
-    } catch (err) {
-      setErrorMsg('Lỗi khi lưu thành viên.');
-    } finally {
-      setIsSubmitting(false);
-    }
+    const updated = [...members.filter((m) => m.email.toLowerCase() !== cleanEmail), newMember];
+    
+    // Cập nhật giao diện ngay lập tức cho UX siêu mượt mà
+    setMembers(updated);
+    setNewName('');
+    setNewEmail('');
+
+    // Xử lý ngầm ở phía dưới đảm bảo chắc chắn thực thi kèm cơ chế tự động thử lại (retry)
+    onSaveMembers(updated).catch((err: any) => {
+      console.warn('Background member save failed, retrying:', err);
+      onSaveMembers(updated).catch((retryErr) => {
+        console.error('Background member save retry failed:', retryErr);
+      });
+    });
   };
 
-  const handleRoleChange = async (memberId: string, targetRole: UserRole) => {
+  const handleRoleChange = (memberId: string, targetRole: UserRole) => {
     setErrorMsg(null);
-    setSuccessMsg(null);
-
     const updated = members.map((m) => (m.id === memberId ? { ...m, role: targetRole } : m));
-
-    try {
-      setMembers(updated);
-      await onSaveMembers(updated);
-      setSuccessMsg('Đã cập nhật quyền.');
-      setTimeout(() => setSuccessMsg(null), 2500);
-    } catch (err) {
-      setErrorMsg('Không thể cập nhật quyền.');
-    }
+    setMembers(updated);
+    onSaveMembers(updated).catch((err) => {
+      console.warn('Background role update failed, retrying:', err);
+      onSaveMembers(updated).catch(() => {});
+    });
   };
 
-  const handleRemoveMember = async (memberId: string, memberEmail: string) => {
-    if (!window.confirm(`Thu hồi quyền truy cập của ${memberEmail}?`)) return;
-
+  const executeRemoveMember = async (memberId: string, memberEmail: string) => {
     setErrorMsg(null);
-    setSuccessMsg(null);
-
     const updated = members.filter((m) => m.id !== memberId);
+    setMembers(updated);
+
     try {
-      setMembers(updated);
-      await onSaveMembers(updated);
-      setSuccessMsg(`Đã xóa ${memberEmail}`);
-      setTimeout(() => setSuccessMsg(null), 2500);
-    } catch (err) {
-      setErrorMsg('Lỗi khi xóa thành viên.');
+      let token = getGoogleAccessToken();
+      if (!token) {
+        token = await ensureGoogleAccessToken().catch(() => null);
+      }
+      const fileMatch = settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/) || settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/);
+      const fileId = fileMatch ? fileMatch[1] : (settings.googleSheetUrl && settings.googleSheetUrl.length > 20 && !settings.googleSheetUrl.includes('/') ? settings.googleSheetUrl : getLocalMasterPointerFileId());
+      if (token && fileId && memberEmail) {
+        // Import dynamic to avoid circular dependencies if necessary
+        const { synchronizeDrivePermissionsWithJsonMembers } = await import('../utils/googleDriveService');
+        
+        await revokeFilePermission(token, fileId, memberEmail).catch(() => {});
+        
+        // Cập nhật lại quyền trên Drive sau khi xóa để đảm bảo đồng bộ
+        await synchronizeDrivePermissionsWithJsonMembers(
+          token,
+          fileId,
+          updated,
+          settings.workspaceOwnerEmail || currentUser?.email
+        );
+      }
+    } catch (revokeErr) {
+      console.warn('Direct revoke permission warning:', revokeErr);
     }
+
+    onSaveMembers(updated).catch((err) => {
+      console.warn('Background remove member failed, retrying:', err);
+      onSaveMembers(updated).catch((retryErr) => {
+        console.error('Background remove member retry failed:', retryErr);
+        setErrorMsg('Không thể đồng bộ việc xóa thành viên lên Google Drive.');
+      });
+    });
   };
 
   return (
@@ -192,42 +206,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         {/* Modal Scroll Content */}
         <div className="p-3 sm:p-4 space-y-3.5 max-h-[82vh] overflow-y-auto text-slate-800">
           
-          {/* Account status bar */}
-          <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-2 text-xs">
-            <div className="truncate min-w-0 font-medium text-slate-700">
-              <span className="text-slate-400 mr-1">Tài khoản:</span>
-              <span className="font-semibold text-slate-900 truncate">{currentUser?.email || 'Chưa đăng nhập'}</span>
-            </div>
-            <div className="shrink-0">
-              {currentRole === 'ADMIN' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
-                  <Crown className="w-3 h-3 text-amber-600" />
-                  Admin
-                </span>
-              )}
-              {currentRole === 'EDITOR' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-300">
-                  <Edit3 className="w-3 h-3 text-blue-600" />
-                  Sửa
-                </span>
-              )}
-              {currentRole === 'VIEWER' && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                  <Eye className="w-3 h-3 text-emerald-600" />
-                  Xem
-                </span>
-              )}
-            </div>
-          </div>
-
           {/* Feedback messages */}
-          {successMsg && (
-            <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-1.5 animate-in fade-in">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
-
           {errorMsg && (
             <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-1.5 animate-in fade-in">
               <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
@@ -281,8 +260,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 <div className="relative">
                   <Mail className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
                   <input
-                    type="email"
-                    placeholder="Gmail Google"
+                    type="text"
+                    placeholder="Gmail hoặc Username"
                     value={newEmail}
                     onChange={(e) => setNewEmail(e.target.value)}
                     className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 outline-none"
@@ -322,11 +301,10 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+                className="w-full py-2 px-3 rounded-lg font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
               >
                 <UserPlus className="w-3.5 h-3.5" />
-                <span>{isSubmitting ? 'Đang lưu...' : 'Thêm & Cấp quyền'}</span>
+                <span>Thêm & Cấp quyền</span>
               </button>
             </form>
           ) : (
@@ -335,98 +313,146 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
             </div>
           )}
 
-          {/* Members List */}
+          {/* Members List (Hiển thị đầy đủ cả Admin và các thành viên được chia sẻ) */}
           <div>
-            <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5 mb-2">
-              <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Thành viên ({members.length})</span>
-            </div>
+            {(() => {
+              const effectiveAdminEmail = (ownerEmail || userEmail || '').trim().toLowerCase();
+              let list = [...members];
+              const hasAdmin = list.some((m) => {
+                const mRole = String(m.role || '').toUpperCase();
+                const mEmail = (m.email || '').trim().toLowerCase();
+                return mRole === 'ADMIN' || (effectiveAdminEmail && mEmail === effectiveAdminEmail);
+              });
 
-            <div className="space-y-1.5">
-              {members.length === 0 ? (
-                <div className="text-center py-4 text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
-                  Chưa có thành viên nào.
-                </div>
-              ) : (
-                members.map((member) => {
-                  const isSelf = currentUser?.email && member.email.toLowerCase() === currentUser.email.toLowerCase();
-                  const isOwner = member.role === 'ADMIN';
+              if (!hasAdmin && effectiveAdminEmail) {
+                list.push({
+                  id: 'owner-admin-member',
+                  email: effectiveAdminEmail,
+                  name: currentUser?.name || 'Admin',
+                  role: 'ADMIN',
+                  addedAt: new Date().toISOString(),
+                });
+              }
 
-                  return (
-                    <div
-                      key={member.id}
-                      className="p-2 sm:p-2.5 bg-white border border-slate-200 rounded-xl flex items-center justify-between gap-2 shadow-2xs"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div
-                          className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                            member.role === 'ADMIN'
-                              ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                              : member.role === 'EDITOR'
-                              ? 'bg-blue-100 text-blue-800 border border-blue-300'
-                              : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                          }`}
-                        >
-                          {member.name ? member.name.charAt(0).toUpperCase() : 'U'}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1">
-                            <span className="text-xs font-bold text-slate-800 truncate max-w-[100px] sm:max-w-[130px]">
-                              {member.name}
-                            </span>
-                            {isSelf && (
-                              <span className="text-[9px] bg-slate-100 text-slate-600 px-1 py-0.2 rounded font-semibold shrink-0">
-                                Bạn
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[10px] text-slate-500 truncate max-w-[130px] sm:max-w-[160px]">
-                            {member.email}
-                          </div>
-                        </div>
+              list.sort((a, b) => {
+                const aRole = String(a.role || '').toUpperCase();
+                const bRole = String(b.role || '').toUpperCase();
+                const aEmail = (a.email || '').trim().toLowerCase();
+                const bEmail = (b.email || '').trim().toLowerCase();
+                const aAdmin = aRole === 'ADMIN' || (effectiveAdminEmail && aEmail === effectiveAdminEmail);
+                const bAdmin = bRole === 'ADMIN' || (effectiveAdminEmail && bEmail === effectiveAdminEmail);
+
+                if (aAdmin && !bAdmin) return -1;
+                if (!aAdmin && bAdmin) return 1;
+
+                const timeA = a.addedAt ? new Date(a.addedAt).getTime() : 0;
+                const timeB = b.addedAt ? new Date(b.addedAt).getTime() : 0;
+                return timeB - timeA;
+              });
+
+              return (
+                <>
+                  <div className="text-xs font-bold text-slate-800 flex items-center justify-between gap-1.5 mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Thành viên ({list.length})</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {list.length === 0 ? (
+                      <div className="text-center py-4 text-xs text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                        Chưa có thành viên nào.
                       </div>
+                    ) : (
+                      list.map((member) => {
+                        const mRole = String(member.role || '').toUpperCase();
+                        const mEmail = (member.email || '').trim().toLowerCase();
+                        const isThisAdmin = mRole === 'ADMIN' || (effectiveAdminEmail && mEmail === effectiveAdminEmail);
+                        const isSelf = userEmail && mEmail === userEmail;
 
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        {isAdmin && !isOwner ? (
-                          <div className="flex items-center gap-1">
-                            <select
-                              value={member.role}
-                              onChange={(e) => handleRoleChange(member.id, e.target.value as UserRole)}
-                              className="text-[11px] py-1 px-1.5 bg-slate-100 border border-slate-200 rounded-md font-semibold text-slate-700 outline-none"
-                            >
-                              <option value="VIEWER">👁️ Xem</option>
-                              <option value="EDITOR">✏️ Sửa</option>
-                              <option value="ADMIN">👑 Admin</option>
-                            </select>
-
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveMember(member.id, member.email)}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
-                              title="Thu hồi quyền"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              member.role === 'ADMIN'
-                                ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                                : member.role === 'EDITOR'
-                                ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        return (
+                          <div
+                            key={member.id}
+                            className={`p-2 sm:p-2.5 bg-white border rounded-xl flex items-center justify-between gap-2 shadow-2xs ${
+                              isThisAdmin ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200'
                             }`}
                           >
-                            {member.role === 'ADMIN' ? '👑 Admin' : member.role === 'EDITOR' ? '✏️ Sửa' : '👁️ Xem'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div
+                                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                                  isThisAdmin
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                    : member.role === 'EDITOR'
+                                    ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                    : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                }`}
+                              >
+                                {isThisAdmin ? <Crown className="w-3.5 h-3.5 text-amber-600" /> : (member.name ? member.name.charAt(0).toUpperCase() : 'U')}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs font-bold text-slate-800 truncate max-w-[100px] sm:max-w-[130px]">
+                                    {member.name}
+                                  </span>
+                                  {isSelf && (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                      Bạn
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate max-w-[130px] sm:max-w-[160px]">
+                                  {member.email}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="shrink-0">
+                              {isThisAdmin ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                                  <Crown className="w-3 h-3 text-amber-600" />
+                                  Admin
+                                </span>
+                              ) : isAdmin ? (
+                                <div className="flex items-center gap-1">
+                                  <select
+                                    value={member.role}
+                                    onChange={(e) => handleRoleChange(member.id, e.target.value as UserRole)}
+                                    className="text-[11px] py-1 px-1.5 bg-slate-100 border border-slate-200 rounded-md font-semibold text-slate-700 outline-none"
+                                  >
+                                    <option value="VIEWER">👁️ Xem</option>
+                                    <option value="EDITOR">✏️ Sửa</option>
+                                  </select>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setMemberToRemove({ id: member.id, email: member.email, name: member.name })}
+                                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                                    title="Thu hồi quyền"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    member.role === 'EDITOR'
+                                      ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                                      : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  }`}
+                                >
+                                  {member.role === 'EDITOR' ? '✏️ Sửa' : '👁️ Xem'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              );
+            })()}
           </div>
 
           {/* Autonomy / Leave Workspace Option */}
@@ -489,6 +515,48 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
         </div>
 
       </div>
+
+      {/* Red Confirmation Modal Popup for Member Removal */}
+      {memberToRemove && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-sm rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-150">
+            <div className="p-5 text-center space-y-3">
+              <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-bold text-base text-slate-900">
+                  Xác Nhận Thu Hồi Quyền?
+                </h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Bạn có chắc chắn muốn thu hồi quyền truy cập của thành viên <span className="font-semibold text-slate-800">{memberToRemove.name}</span> ({memberToRemove.email}) không?
+                </p>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-50 border-t border-slate-200 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setMemberToRemove(null)}
+                className="w-full py-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-300 transition-colors cursor-pointer"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const { id, email } = memberToRemove;
+                  setMemberToRemove(null);
+                  await executeRemoveMember(id, email);
+                }}
+                className="w-full py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-sm transition-all active:scale-98 flex items-center justify-center space-x-1.5 cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Thu Hồi Quyền</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,68 +1,28 @@
-# Kế hoạch Tối ưu hóa Dung lượng Siêu An toàn (Zero-Risk Asset Compression)
+# Kế hoạch tích hợp Google Picker API (Cách 2: Sử dụng API Key riêng)
 
-Kế hoạch này tập trung tối ưu hóa và nén hình ảnh Splash Screen, Icon và Assets đồ họa thô. **Hoàn toàn không can thiệp vào ProGuard hay cấu hình Gradle**, đảm bảo 100% không ảnh hưởng đến việc viết code và nâng cấp tính năng ở các phiên bản tiếp theo.
+## Tổng quan
+- **Mục tiêu**: Cho phép thành viên chọn file Google Sheet do Admin (`tuanta3012.backup`) chia sẻ thông qua **Google Picker API** trực tiếp giao diện ứng dụng, giải quyết triệt để lỗi thành viên không tìm thấy file do giới hạn scope `drive.file`.
+- **API Key được cung cấp**: `AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos`
 
----
+## Các bước thực hiện chi tiết
 
-## Quyết định của người dùng & Phân tích giải pháp
+### 1. Cấu hình biến môi trường & Tải Google Picker API Script
+- Cập nhật biến `VITE_GOOGLE_API_KEY=AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos` vào tệp cấu hình / `.env` (hoặc cấu hình trực tiếp trong code khởi tạo Google Picker).
+- Tải động (dynamic load) script `https://apis.google.com/js/api.js` khi mở hộp thoại Picker.
 
-> [!IMPORTANT]
-> **Quyết định đã chọn: KHÔNG DÙNG PROGUARD, CHỈ NÉN ASSET ĐỒ HỌA**
-> * **Zero-Risk 100%**: Mã nguồn React, TypeScript, cấu hình Capacitor và Android Gradle giữ nguyên bản. Bạn tiếp tục phát triển tính năng, thêm trang mới hay sửa logic như bình thường mà không cần bất kỳ kiến thức nào về Android ProGuard.
-> * **Mục tiêu**: Giảm trực tiếp ~2.5MB - 3MB dung lượng bộ cài đặt nhờ nén ảnh Splash và Icon kích thước lớn.
+### 2. Xây dựng component `GoogleSheetPickerModal`
+- Mở modal chọn file trực tiếp trong ứng dụng.
+- Yêu cầu người dùng đăng nhập Google Account (thành viên) để lấy OAuth token (`access_token`) với scope `https://www.googleapis.com/auth/drive.file`.
+- Sử dụng `google.picker.PickerBuilder`:
+  - Đặt API Key: `AIzaSyAnw7aOX0jaHNAp43xor-RVWHIBh7Jtaos`.
+  - Đặt OAuth Token của user.
+  - Thêm View `google.picker.ViewId.SPREADSHEETS` để lọc các file Google Sheets được chia sẻ với user hoặc do user sở hữu.
+  - Thiết lập callback nhận file ID, file Name khi người dùng chọn.
 
----
+### 3. Tích hợp vào màn hình Đồng bộ / Liên kết sổ
+- Thay thế hoặc bổ sung nút "Chọn file Google Sheet (Google Picker)" trong phần đồng bộ của thành viên.
+- Khi chọn xong file `file_C`, app tự động lưu `fileId` vào cấu hình đồng bộ, kết nối thành công với dữ liệu thực tế do Admin chia sẻ.
 
-## 1. Phân tích nguyên nhân dung lượng ảnh đồ họa
-
-Hiện tại trong thư mục `resources/`:
-* `resources/splash.png`: **2.6MB** (kích thước 2732x2732 px, định dạng PNG thô chưa nén). Khi công cụ Capacitor Assets tạo ra các biến thể drawable cho các mật độ màn hình (hdpi, xhdpi, xxhdpi, xxxhdpi), nó nhân bản dung lượng này lên nhiều lần.
-* `resources/icon-foreground.png`: **3.2MB**.
-* `resources/android/`: **3.2MB**.
-
-Bằng cách sử dụng các thuật toán nén ảnh chuẩn (ImageMagick / pngquant tối ưu bảng màu 256 màu và nén PNG mức cao), các file ảnh này sẽ giảm từ **~9MB tổng dung lượng ảnh thô xuống chỉ còn dưới 1MB**, trong khi chất lượng hiển thị trên màn hình điện thoại vẫn sắc nét và chuẩn xác 100%.
-
----
-
-## 2. Chi tiết các bước thực hiện
-
-### A. Tối ưu script sinh ảnh `scripts/generate_app_icons.py`
-Cập nhật script tạo ảnh với các tham số nén PNG tối ưu của ImageMagick:
-* Thêm `-quality 85` và `-define png:compression-level=9` khi xuất ảnh Splash Screen và Icons.
-* Giảm kích thước vùng đệm dư thừa của file Splash mà vẫn giữ nguyên tỷ lệ và độ sắc nét cho logo trung tâm.
-
-### B. Thực hiện nén trực tiếp các tệp trong `resources/` và `public/`
-* Chạy nén lại các tệp:
-  - `resources/splash.png` (từ 2.6MB -> ~200-300KB)
-  - `resources/icon-foreground.png` (từ 3.2MB -> ~150KB)
-  - `resources/icon.png` và `resources/master_solid.png`
-* Chạy lại `python3 scripts/generate_app_icons.py` để đồng bộ lại các icon mipmap trong `android/app/src/main/res/`.
-
-### C. Giữ nguyên toàn bộ cấu hình phát triển
-* Không chạm vào `proguard-rules.pro`.
-* Không thay đổi `build.gradle`.
-* Giữ nguyên 100% quy trình build hiện tại trong `.github/workflows/auto-release.yml`.
-
----
-
-## 3. Kiến trúc luồng tối ưu Asset
-
-```
-[Master Image Assets]
-       │
-       ▼ (ImageMagick Nén Mức 9 + Tối ưu hóa Palette)
-[Compressed Splash & Icons] (Giảm ~80% dung lượng thô)
-       │
-       ▼ (Đồng bộ vào Android mipmap / drawables)
-[Thư mục Android Res & Web Assets siêu nhẹ]
-       │
-       ▼ (Gradle Assemble thông thường)
-[Bản APK nhẹ hơn ~2.5MB - 3MB, an toàn tuyệt đối]
-```
-
----
-
-## 4. Kế hoạch kiểm tra
-1. Kiểm tra dung lượng thư mục `resources/` trước và sau khi nén.
-2. Kiểm tra giao diện icon và màn hình khởi động (splash screen) không bị vỡ hạt hay biến dạng.
-3. Chạy `npm run lint` & `npm run build` để xác nhận toàn bộ hệ thống hoạt động hoàn hảo.
+### 4. Kiểm tra & Kiểm thử
+- Kiểm tra tài khoản thành viên (`app.hay.ai`) mở Google Picker, thấy danh sách file chia sẻ từ Admin (`tuanta3012.backup`), chọn file `file_C` và đồng bộ dữ liệu thành công.
+- Kiểm tra `compile_applet` để đảm bảo không có lỗi TypeScript / build.
