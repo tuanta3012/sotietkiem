@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as XLSX from 'xlsx';
 import { STANDARDIZED_SHEET_HEADERS } from '../dataSchema';
 import { downloadRealGoogleDriveFile } from '../googleDriveService';
 
@@ -44,6 +45,40 @@ describe('shared Drive file access', () => {
     expect(result.success).toBe(true);
     expect(result.books).toHaveLength(1);
     expect(result.books[0].bankId).toBe('shb');
+  });
+
+  it('falls back to Drive export when Sheets API cannot resolve a shared spreadsheet', async () => {
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(makeValues()), 'Sổ');
+    const workbookBytes = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/drive/v3/files/shared-sheet?')) {
+        return Response.json({
+          id: 'shared-sheet',
+          name: 'Shared savings',
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          modifiedTime: '2026-10-10T00:00:00.000Z',
+        });
+      }
+      if (url.includes('fields=sheets(properties(title,sheetId))') || url.includes('/values/')) {
+        return Response.json({}, { status: 404 });
+      }
+      if (url.includes('/export?mimeType=')) {
+        return new Response(workbookBytes);
+      }
+      return Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await downloadRealGoogleDriveFile('member-access-token', 'shared-sheet');
+
+    expect(result.success).toBe(true);
+    expect(result.books).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/export?mimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+      expect.anything()
+    );
   });
 
   it('does not describe an inaccessible or 404 file as definitely deleted', async () => {

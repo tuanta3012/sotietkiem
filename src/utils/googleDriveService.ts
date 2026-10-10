@@ -1056,7 +1056,8 @@ export async function downloadRealGoogleDriveFile(
         );
         if (metaSheetRes.status === 404 || liveSheetsRes.status === 404) {
           console.warn(`[downloadRealGoogleDriveFile] Sheets API returned 404. metaSheetStatus: ${metaSheetRes.status}, liveSheetsStatus: ${liveSheetsRes.status}`);
-          throw createDriveFileUnavailableError();
+          // A shared file may be visible through Drive while the Sheets API cannot
+          // resolve it for this OAuth session. Try Drive export before reporting it unavailable.
         }
         if (metaSheetRes.status === 403 || liveSheetsRes.status === 403) {
           console.warn(`[downloadRealGoogleDriveFile] Sheets API returned 403. metaSheetStatus: ${metaSheetRes.status}, liveSheetsStatus: ${liveSheetsRes.status}`);
