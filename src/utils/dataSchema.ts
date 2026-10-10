@@ -17,6 +17,8 @@ export interface ColumnDefinition {
   width: number;
 }
 
+export const CURRENT_SHEET_DATA_SCHEMA_VERSION = 2;
+
 export const CANONICAL_COLUMNS: ColumnDefinition[] = [
   {
     index: 0,

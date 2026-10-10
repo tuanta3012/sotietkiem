@@ -148,9 +148,13 @@ function parseInterestRate(val: any): number {
 /**
  * Parses a 2D matrix of rows (from Google Sheets API values.get or Excel sheet_to_json)
  */
-export function parseMatrixData(matrix: any[][]): ParseExcelResult {
+export function parseMatrixData(
+  matrix: any[][],
+  options: { strictSchema?: boolean } = {}
+): ParseExcelResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const strictSchema = options.strictSchema === true;
 
   if (!matrix || matrix.length === 0) {
     return { success: false, books: [], errors: ['Dữ liệu bảng tính trống.'], warnings, totalPrincipal: 0 };
@@ -183,7 +187,10 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
           rowData[`__col_${cIdx}`] = val; // Store positional column index for reliable fallback
         }
       });
-      if (hasContent) rawRows.push(rowData);
+      if (hasContent) {
+        rowData.__sourceRow = r + 1;
+        rawRows.push(rowData);
+      }
     }
   } else {
     // Treat row 0 as header if no explicit keyword matched
@@ -199,7 +206,45 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
           rowData[`__col_${cIdx}`] = val; // Store positional column index for reliable fallback
         }
       });
-      if (hasContent) rawRows.push(rowData);
+      if (hasContent) {
+        rowData.__sourceRow = r + 1;
+        rawRows.push(rowData);
+      }
+    }
+  }
+
+  if (strictSchema) {
+    if (headerRowIdx < 0) {
+      return {
+        success: false,
+        books: [],
+        errors: ['Không xác định được hàng tiêu đề của bảng sổ tiết kiệm. Không nhập dữ liệu theo vị trí cột dự phòng.'],
+        warnings,
+        totalPrincipal: 0,
+      };
+    }
+
+    const headers = (matrix[headerRowIdx] || []).map((value) =>
+      String(value || '').trim().toLowerCase().normalize('NFC')
+    );
+    const requiredKeys = ['bank', 'principal', 'interestRate', 'startDate', 'maturityDate'];
+    const missingHeaders = requiredKeys.filter((key) => {
+      const definition = CANONICAL_COLUMNS.find((column) => column.key === key);
+      const aliases = [definition?.header, ...(definition?.aliases || [])]
+        .filter(Boolean)
+        .map((alias) => String(alias).trim().toLowerCase().normalize('NFC'));
+      return !headers.slice(0, 12).some((header) =>
+        aliases.some((alias) => alias === 'nh' ? header.split(/[\s,.\-_/()]+/).includes(alias) : header.includes(alias))
+      );
+    });
+    if (missingHeaders.length > 0) {
+      return {
+        success: false,
+        books: [],
+        errors: [`Thiếu hoặc đổi tên cột bắt buộc: ${missingHeaders.join(', ')}. Khôi phục tiêu đề chuẩn rồi thử đồng bộ lại.`],
+        warnings,
+        totalPrincipal: 0,
+      };
     }
   }
 
@@ -213,10 +258,12 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
   const books: SavingsBook[] = [];
   let parsedIndex = 1;
 
-  for (const row of rawRows) {
+  for (let rowIndex = 0; rowIndex < rawRows.length; rowIndex++) {
+    const row = rawRows[rowIndex];
+    const sourceRowNumber = Number(row.__sourceRow) || headerRowIdx + rowIndex + 2;
     const findVal = (patterns: string[], excludePatterns: string[] = []): any => {
       for (const key of Object.keys(row)) {
-        if (key.startsWith('__col_')) continue; // Skip positional keys during header matching
+        if (key.startsWith('__')) continue;
         const cleanKey = key.trim().toLowerCase().normalize('NFC');
         // Skip if key contains any excluded substring
         if (excludePatterns.some((ex) => cleanKey.includes(ex.toLowerCase().normalize('NFC')))) {
@@ -246,7 +293,6 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
 
     // Skip summary or non-book rows
     if (
-      !bankRaw ||
       bankLower.includes('total') ||
       bankLower.includes('tổng') ||
       bankLower.includes('lãi hàng năm') ||
@@ -254,6 +300,15 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
       bankLower.includes('thu nhập') ||
       /^\d{4}$/.test(bankRaw)
     ) {
+      continue;
+    }
+
+    if (!bankRaw) {
+      const principalWithoutBank =
+        findVal(['tiền gửi', 'tiền gởi', 'số tiền', 'gốc', 'principal', 'amount']) ?? row['__col_4'];
+      if (strictSchema && principalWithoutBank !== undefined && principalWithoutBank !== '') {
+        errors.push(`Dòng ${sourceRowNumber}: thiếu tên ngân hàng.`);
+      }
       continue;
     }
 
@@ -283,6 +338,7 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
     const principal = translateMoneyFromSheet(rawPrincipal);
 
     if (!principal || principal <= 0) {
+      if (strictSchema) errors.push(`Dòng ${sourceRowNumber}: số tiền gốc phải lớn hơn 0.`);
       continue;
     }
 
@@ -290,6 +346,14 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
     const rawRate = findVal(['lãi suất', 'rate', '%', 'lãi'], ['lãi theo', 'lãi 1', 'tiền lãi']) ?? 
       (isLegacy17ColLayout ? row['__col_1'] : row['__col_3']);
     const interestRate = translateInterestRateFromSheet(rawRate);
+    const rawRateNumber = parseVietnameseNumber(rawRate);
+    const plausibleRawRate =
+      rawRateNumber > 0 &&
+      (rawRateNumber <= 25 || rawRateNumber < 0.3 || (rawRateNumber >= 100 && rawRateNumber <= 2500));
+    if (strictSchema && (!rawRate || !plausibleRawRate || interestRate <= 0 || interestRate > 25)) {
+      errors.push(`Dòng ${sourceRowNumber}: lãi suất không hợp lệ (phải lớn hơn 0% và không vượt quá 25%).`);
+      continue;
+    }
 
     // 4. Dates & Term
     const startDateRaw = findVal(['ngày gửi', 'ngày mở', 'gửi', 'start'], ['tiền']) ?? 
@@ -299,9 +363,15 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
     const termRaw = findVal(['kỳ', 'kỳ hạn', 'tháng', 'term'], ['tháng đáo', 'ngày']) ?? 
       (isLegacy17ColLayout ? row['__col_5'] : row['__col_7']);
 
-    const startDate = translateDateFromSheet(startDateRaw) || '2025-09-15';
+    const parsedStartDate = translateDateFromSheet(startDateRaw);
+    const startDate = parsedStartDate || (strictSchema ? '' : '2025-09-15');
     let maturityDate = translateDateFromSheet(maturityDateRaw);
     let termMonths = typeof termRaw === 'number' ? termRaw : (termRaw ? parseInt(String(termRaw), 10) : 0);
+
+    if (strictSchema && (!startDate || !maturityDate || maturityDate <= startDate)) {
+      errors.push(`Dòng ${sourceRowNumber}: ngày mở và ngày đáo hạn phải hợp lệ, ngày đáo hạn phải sau ngày mở.`);
+      continue;
+    }
 
     // Nếu không có cột Kỳ hạn nhưng có Ngày gửi và Ngày đáo hạn -> Tự động suy ra số tháng kỳ hạn
     if ((!termMonths || termMonths <= 0) && maturityDate && maturityDate > startDate) {
@@ -309,7 +379,15 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
       termMonths = Math.max(1, Math.round(days / 30.4375));
     }
     if (!termMonths || termMonths <= 0) {
+      if (strictSchema) {
+        errors.push(`Dòng ${sourceRowNumber}: kỳ hạn không hợp lệ và không thể suy ra từ hai ngày.`);
+        continue;
+      }
       termMonths = 12;
+    }
+    if (strictSchema && !Number.isInteger(termMonths)) {
+      errors.push(`Dòng ${sourceRowNumber}: kỳ hạn phải là số tháng nguyên.`);
+      continue;
     }
 
     // Tự động tính Ngày đáo hạn nếu file không có cột Ngày đáo hạn nhưng có Kỳ hạn
@@ -414,6 +492,9 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
   }
 
   if (books.length === 0) {
+    if (strictSchema && errors.length > 0) {
+      return { success: false, books: [], errors, warnings, totalPrincipal: 0 };
+    }
     if (headerRowIdx >= 0) {
       return { success: true, books: [], errors: [], warnings, totalPrincipal: 0 };
     }
@@ -424,6 +505,10 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
       warnings,
       totalPrincipal: 0,
     };
+  }
+
+  if (strictSchema && errors.length > 0) {
+    return { success: false, books: [], errors, warnings, totalPrincipal: 0 };
   }
 
   const totalPrincipal = books.reduce((s, b) => s + b.principal, 0);
@@ -712,7 +797,10 @@ export function extractHistoricalTablesFromMatrix(
 /**
  * Parses an Excel Workbook object (from raw ArrayBuffer, string, or workbook object)
  */
-export async function parseWorkbook(workbookOrBuffer: any): Promise<ParseExcelResult> {
+export async function parseWorkbook(
+  workbookOrBuffer: any,
+  options: { strictSchema?: boolean } = {}
+): Promise<ParseExcelResult> {
   const XLSX = await getXLSX();
   let workbook: any = workbookOrBuffer;
 
@@ -725,6 +813,7 @@ export async function parseWorkbook(workbookOrBuffer: any): Promise<ParseExcelRe
   const errors: string[] = [];
   const warnings: string[] = [];
   let bestResult: ParseExcelResult | null = null;
+  let strictFailure: ParseExcelResult | null = null;
 
   if (!workbook || !workbook.SheetNames || workbook.SheetNames.length === 0) {
     return { success: false, books: [], errors: ['Không tìm thấy trang tính (sheet) nào trong file.'], warnings, totalPrincipal: 0 };
@@ -739,13 +828,17 @@ export async function parseWorkbook(workbookOrBuffer: any): Promise<ParseExcelRe
     const matrix: any[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
     if (!matrix || matrix.length === 0) continue;
 
-    const res = parseMatrixData(matrix);
+    const res = parseMatrixData(matrix, options);
+    if (!res.success && res.errors.length > 0 && !strictFailure) {
+      strictFailure = res;
+    }
     if (res.success && res.books.length > (bestResult?.books?.length || 0)) {
       bestResult = res;
     }
   }
 
   if (!bestResult || bestResult.books.length === 0) {
+    if (options.strictSchema && strictFailure) return strictFailure;
     return {
       success: true,
       books: [],

@@ -6,6 +6,17 @@ import { SecureStoragePlugin } from 'capacitor-secure-storage-plugin';
  * Check if the app is running as a native app (iOS/Android)
  */
 const isNative = Capacitor.isNativePlatform();
+const webStorage = new Map<string, string>();
+const credentialKeys = new Set([
+  'google_drive_access_token_v4',
+  'google_drive_token_expires_at',
+  'google_drive_refresh_token_v4',
+  'google_drive_id_token_v4',
+]);
+
+function isCredentialKey(key: string): boolean {
+  return credentialKeys.has(key);
+}
 
 const TOKEN_KEY = 'google_drive_access_token_v4';
 const TOKEN_EXPIRES_AT_KEY = 'google_drive_token_expires_at';
@@ -22,16 +33,19 @@ export async function setSecureItem(key: string, value: string): Promise<void> {
       await SecureStoragePlugin.set({ key, value });
       return;
     } catch (err) {
-      console.warn(`[SecureStorage] Failed to set native secure storage for key: ${key}. Falling back to Preferences...`, err);
+      if (isCredentialKey(key)) {
+        throw new Error(`[SecureStorage] Secure storage could not save "${key}".`, { cause: err });
+      }
+      console.warn(`[SecureStorage] Native secure storage unavailable for non-credential "${key}", using app preferences.`, err);
     }
   }
 
-  try {
-    await Preferences.set({ key, value });
-    localStorage.setItem(key, value);
-  } catch (err) {
-    console.error(`[SecureStorage] Failed fallback storage for key: ${key}`, err);
+  if (isCredentialKey(key)) {
+    webStorage.set(key, value);
+    return;
   }
+  await Preferences.set({ key, value });
+  if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
 }
 
 /**
@@ -41,24 +55,21 @@ export async function getSecureItem(key: string): Promise<string | null> {
   if (isNative) {
     try {
       const result = await SecureStoragePlugin.get({ key });
-      if (result && result.value) {
-        return result.value;
-      }
+      return result?.value || null;
     } catch (err) {
-      console.info(`[SecureStorage] Key "${key}" not found or failed to read from native secure storage. Trying Preferences fallback...`);
+      const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+      if (message.includes('not found') || message.includes('no value') || message.includes('does not exist')) {
+        if (isCredentialKey(key)) return null;
+      } else if (isCredentialKey(key)) {
+        throw new Error(`[SecureStorage] Secure storage could not read "${key}".`, { cause: err });
+      }
+      console.warn(`[SecureStorage] Native secure storage unavailable for non-credential "${key}", trying app preferences.`, err);
     }
   }
 
-  try {
-    const prefResult = await Preferences.get({ key });
-    if (prefResult && prefResult.value) {
-      return prefResult.value;
-    }
-    return localStorage.getItem(key) || null;
-  } catch (err) {
-    console.error(`[SecureStorage] Failed fallback retrieval for key: ${key}`, err);
-    return null;
-  }
+  if (isCredentialKey(key)) return webStorage.get(key) || null;
+  const prefResult = await Preferences.get({ key });
+  return prefResult.value || (typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null);
 }
 
 /**
@@ -70,15 +81,20 @@ export async function removeSecureItem(key: string): Promise<void> {
       await SecureStoragePlugin.remove({ key });
       return;
     } catch (err) {
-      console.warn(`[SecureStorage] Failed to remove key from native secure storage: ${key}. Trying Preferences fallback...`, err);
+      const message = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+      if (!message.includes('not found') && !message.includes('no value') && !message.includes('does not exist')) {
+        if (isCredentialKey(key)) {
+          throw new Error(`[SecureStorage] Secure storage could not remove "${key}".`, { cause: err });
+        }
+        console.warn(`[SecureStorage] Native secure storage unavailable for non-credential "${key}", using app preferences.`, err);
+      }
     }
   }
 
-  try {
+  webStorage.delete(key);
+  if (!isCredentialKey(key)) {
     await Preferences.remove({ key });
-    localStorage.removeItem(key);
-  } catch (err) {
-    console.error(`[SecureStorage] Failed fallback removal for key: ${key}`, err);
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(key);
   }
 }
 
@@ -156,6 +172,12 @@ export async function enforceFreshInstallCleanState(): Promise<boolean> {
  * Nuclear cleanup of all application data across all storage layers.
  */
 export async function clearAppStorageExceptTokens(): Promise<void> {
+  const LEGACY_PLAINTEXT_TOKEN_KEYS = [
+    TOKEN_KEY,
+    TOKEN_EXPIRES_AT_KEY,
+    REFRESH_TOKEN_KEY,
+    ID_TOKEN_KEY,
+  ];
   const AUTH_KEYS_TO_KEEP = [
     TOKEN_KEY,
     TOKEN_EXPIRES_AT_KEY,
@@ -174,7 +196,7 @@ export async function clearAppStorageExceptTokens(): Promise<void> {
     if (typeof window !== 'undefined' && window.localStorage) {
       const allKeys = Object.keys(localStorage);
       allKeys.forEach(key => {
-        if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key)) {
+        if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key) || LEGACY_PLAINTEXT_TOKEN_KEYS.includes(key)) {
           localStorage.removeItem(key);
         }
       });
@@ -190,7 +212,11 @@ export async function clearAppStorageExceptTokens(): Promise<void> {
     const { keys } = await Preferences.keys();
     await Promise.all(
       keys.map(async (key) => {
-        if (isManualLogout || !AUTH_KEYS_TO_KEEP.includes(key)) {
+        if (
+          isManualLogout ||
+          !AUTH_KEYS_TO_KEEP.includes(key) ||
+          LEGACY_PLAINTEXT_TOKEN_KEYS.includes(key)
+        ) {
           await Preferences.remove({ key }).catch(() => {});
         }
       })

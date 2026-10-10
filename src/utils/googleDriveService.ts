@@ -29,7 +29,7 @@ import {
 } from '../data/historicalGrowth';
 import { recordSyncAuditLog, getSyncAuditLogs, SyncAuditLogEntry } from './syncAuditLog';
 import { getBankShortCode, getAllBanks, updateBanksFromRemote } from '../data/banks';
-import { CANONICAL_COLUMNS } from './dataSchema';
+import { CANONICAL_COLUMNS, CURRENT_SHEET_DATA_SCHEMA_VERSION } from './dataSchema';
 
 
 // Initialize Firebase App
@@ -68,13 +68,11 @@ const ID_TOKEN_KEY = 'google_drive_id_token_v4';
 const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
 const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
 
-let cachedAccessToken: string | null = (() => {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || null;
-  } catch {
-    return null;
-  }
-})();
+let cachedAccessToken: string | null = null;
+let cachedAccessTokenExpiresAt: number | null = null;
+let cachedRefreshToken: string | null = null;
+let cachedIdToken: string | null = null;
+let cachedUserProfile: { email?: string; name?: string; photoUrl?: string } | null = null;
 let isSigningIn = false;
 
 export const STK_APP_ID = 'com.tietkiemgiadinh.app';
@@ -87,48 +85,31 @@ function createDriveFileUnavailableError(): Error {
 }
 
 /**
- * Get current access token (reads from memory or localStorage)
+ * Access tokens are kept in memory on web and restored from native secure storage.
  */
 export function getGoogleAccessToken(): string | null {
-  if (cachedAccessToken) return cachedAccessToken;
-  try {
-    const saved = localStorage.getItem(TOKEN_KEY);
-    if (saved) {
-      cachedAccessToken = saved;
-      return saved;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
+  return cachedAccessToken;
 }
 
 /**
  * Get current refresh token
  */
 export function getGoogleRefreshToken(): string | null {
-  try {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return cachedRefreshToken;
 }
 
 /**
  * Get current ID token
  */
 export function getGoogleIdToken(): string | null {
-  try {
-    return localStorage.getItem(ID_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return cachedIdToken;
 }
 
 /**
  * Get current user profile
  */
 export function getGoogleUserProfile(): any | null {
+  if (cachedUserProfile) return cachedUserProfile;
   try {
     const saved = localStorage.getItem(USER_PROFILE_KEY);
     return saved ? JSON.parse(saved) : null;
@@ -143,69 +124,41 @@ export function getGoogleUserProfile(): any | null {
 export function isGoogleTokenValid(): boolean {
   const token = getGoogleAccessToken();
   if (!token) return false;
-  try {
-    const expiresAtStr = localStorage.getItem(TOKEN_EXPIRES_AT_KEY);
-    if (!expiresAtStr) {
-      // Nếu có token nhưng chưa lưu timestamp hết hạn (hoặc phiên cũ), gán mặc định 60 phút
-      const defaultExpires = Date.now() + 3500 * 1000;
-      localStorage.setItem(TOKEN_EXPIRES_AT_KEY, defaultExpires.toString());
-      return true;
-    }
-    const expiresAt = parseInt(expiresAtStr, 10);
-    if (isNaN(expiresAt)) return true;
-    // Token hợp lệ đến đúng thời điểm hết hạn (trừ 10 giây dự phòng)
-    return Date.now() < (expiresAt - 10000);
-  } catch {
-    return true;
-  }
+  return cachedAccessTokenExpiresAt === null || Date.now() < cachedAccessTokenExpiresAt - 10000;
 }
 
 /**
- * Set in-memory and localStorage access token
+ * Set or clear the in-memory access token. Persistence is handled by saveGoogleAuthSession.
  */
 export function setGoogleAccessToken(token: string | null, expiresAtMs?: number) {
   cachedAccessToken = token;
-  try {
-    if (token) {
-      const expiresAt = expiresAtMs 
-        ? expiresAtMs.toString() 
-        : (Date.now() + 3500 * 1000).toString();
-      localStorage.setItem(TOKEN_KEY, token);
-      localStorage.setItem(TOKEN_EXPIRES_AT_KEY, expiresAt);
-      localStorage.setItem('google_drive_ever_logged_in', 'true');
-      Preferences.set({ key: TOKEN_KEY, value: token }).catch(() => {});
-      Preferences.set({ key: TOKEN_EXPIRES_AT_KEY, value: expiresAt }).catch(() => {});
-      Preferences.set({ key: 'google_drive_ever_logged_in', value: 'true' }).catch(() => {});
+  cachedAccessTokenExpiresAt = token ? expiresAtMs || Date.now() + 3500 * 1000 : null;
 
-      // Secure storage backup
-      setSecureItem(TOKEN_KEY, token).catch(() => {});
-      setSecureItem(TOKEN_EXPIRES_AT_KEY, expiresAt).catch(() => {});
-    } else {
-      // CLEAR ALL AUTH KEYS
-      const allAuthKeys = [
-        TOKEN_KEY,
-        TOKEN_EXPIRES_AT_KEY,
-        REFRESH_TOKEN_KEY,
-        ID_TOKEN_KEY,
-        USER_PROFILE_KEY,
-        'google_drive_ever_logged_in',
-        'drive_scope_migrated_v2'
-      ];
-      allAuthKeys.forEach(k => {
-        localStorage.removeItem(k);
-        Preferences.remove({ key: k }).catch(() => {});
-        removeSecureItem(k).catch(() => {});
-      });
-    }
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
   } catch {
-    // ignore
+    // Storage can be disabled in private browsing; the token remains memory-only.
+  }
+
+  if (!token) {
+    cachedRefreshToken = null;
+    cachedIdToken = null;
+    cachedUserProfile = null;
+    const authKeys = [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY, USER_PROFILE_KEY];
+    void Promise.all(authKeys.map((key) => removeSecureItem(key))).catch((err) => {
+      console.error('[SecureStorage] Failed to clear Google credentials.', err);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('stk:auth-storage-error', { detail: 'Không thể xóa an toàn thông tin đăng nhập Google.' }));
+      }
+    });
   }
 }
 
 /**
  * Centralized saver for Google OAuth session parameters
  */
-export function saveGoogleAuthSession(session: {
+export async function saveGoogleAuthSession(session: {
   accessToken: string;
   idToken?: string;
   refreshToken?: string;
@@ -215,29 +168,49 @@ export function saveGoogleAuthSession(session: {
     name?: string;
     photoUrl?: string;
   }
-}) {
+}): Promise<void> {
+  if (!session.accessToken) return;
+  const expiresAt = session.expiresAt || Date.now() + 3500 * 1000;
+  const credentials: Array<[string, string]> = [
+    [TOKEN_KEY, session.accessToken],
+    [TOKEN_EXPIRES_AT_KEY, String(expiresAt)],
+  ];
+  if (session.idToken) credentials.push([ID_TOKEN_KEY, session.idToken]);
+  if (session.refreshToken) credentials.push([REFRESH_TOKEN_KEY, session.refreshToken]);
+  if (session.userProfile) credentials.push([USER_PROFILE_KEY, JSON.stringify(session.userProfile)]);
+
+  const writeResults = await Promise.allSettled(
+    credentials.map(([key, value]) => setSecureItem(key, value))
+  );
+  const failedWrite = writeResults.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected'
+  );
+  if (failedWrite) {
+    const cleanupResults = await Promise.allSettled(credentials.map(([key]) => removeSecureItem(key)));
+    cleanupResults.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`[SecureStorage] Failed to clear partially saved credential "${credentials[index][0]}".`, result.reason);
+      }
+    });
+    setGoogleAccessToken(null);
+    throw new Error('Không thể lưu thông tin đăng nhập trong vùng lưu trữ an toàn. Vui lòng thử lại.', {
+      cause: failedWrite.reason,
+    });
+  }
+
+  cachedRefreshToken = session.refreshToken ?? cachedRefreshToken;
+  cachedIdToken = session.idToken ?? cachedIdToken;
+  cachedUserProfile = session.userProfile ?? cachedUserProfile;
+  setGoogleAccessToken(session.accessToken, expiresAt);
+
   try {
-    if (session.accessToken) {
-      setGoogleAccessToken(session.accessToken, session.expiresAt);
-    }
-    if (session.idToken) {
-      localStorage.setItem(ID_TOKEN_KEY, session.idToken);
-      Preferences.set({ key: ID_TOKEN_KEY, value: session.idToken }).catch(() => {});
-      setSecureItem(ID_TOKEN_KEY, session.idToken).catch(() => {});
-    }
-    if (session.refreshToken) {
-      localStorage.setItem(REFRESH_TOKEN_KEY, session.refreshToken);
-      Preferences.set({ key: REFRESH_TOKEN_KEY, value: session.refreshToken }).catch(() => {});
-      setSecureItem(REFRESH_TOKEN_KEY, session.refreshToken).catch(() => {});
-    }
-    if (session.userProfile) {
-      const json = JSON.stringify(session.userProfile);
-      localStorage.setItem(USER_PROFILE_KEY, json);
-      Preferences.set({ key: USER_PROFILE_KEY, value: json }).catch(() => {});
-      setSecureItem(USER_PROFILE_KEY, json).catch(() => {});
-    }
-  } catch (err) {
-    console.warn('Error saving Google Auth Session:', err);
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
+    localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(ID_TOKEN_KEY);
+    if (session.userProfile) localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(session.userProfile));
+  } catch {
+    // User profile is non-secret; OAuth credentials are never persisted to localStorage.
   }
 }
 
@@ -246,6 +219,13 @@ export function saveGoogleAuthSession(session: {
  */
 export async function restoreGoogleAuthSession(): Promise<boolean> {
   try {
+    for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
+      localStorage.removeItem(key);
+      await Preferences.remove({ key }).catch((err) => {
+        console.error(`[SecureStorage] Could not remove legacy plaintext credential "${key}".`, err);
+      });
+    }
+
     const token = await getSecureItem(TOKEN_KEY);
     const expiresAt = await getSecureItem(TOKEN_EXPIRES_AT_KEY);
     const refreshToken = await getSecureItem(REFRESH_TOKEN_KEY);
@@ -254,17 +234,19 @@ export async function restoreGoogleAuthSession(): Promise<boolean> {
 
     if (token) {
       cachedAccessToken = token;
-      localStorage.setItem(TOKEN_KEY, token);
-      if (expiresAt) localStorage.setItem(TOKEN_EXPIRES_AT_KEY, expiresAt);
-      if (refreshToken) localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-      if (idToken) localStorage.setItem(ID_TOKEN_KEY, idToken);
-      if (userProfile) localStorage.setItem(USER_PROFILE_KEY, userProfile);
+      cachedAccessTokenExpiresAt = expiresAt ? Number(expiresAt) : null;
+      cachedRefreshToken = refreshToken;
+      cachedIdToken = idToken;
+      cachedUserProfile = userProfile ? JSON.parse(userProfile) : null;
       localStorage.setItem('google_drive_ever_logged_in', 'true');
       console.info('[SecureStorage] Successfully restored Google OAuth credentials from native secure storage.');
       return true;
     }
   } catch (err) {
-    console.warn('[SecureStorage] Failed to restore session from secure storage:', err);
+    console.error('[SecureStorage] Failed to restore session from secure storage:', err);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('stk:auth-storage-error', { detail: 'Không thể đọc thông tin đăng nhập từ vùng lưu trữ an toàn. Vui lòng đăng nhập lại.' }));
+    }
   }
   return false;
 }
@@ -326,7 +308,7 @@ export async function trySilentRefresh(): Promise<string | null> {
         if (refreshResult && refreshResult.accessToken) {
           console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.refresh()');
           const expiresAt = Date.now() + 3500 * 1000;
-          saveGoogleAuthSession({
+          await saveGoogleAuthSession({
             accessToken: refreshResult.accessToken,
             idToken: refreshResult.idToken || undefined,
             expiresAt,
@@ -427,7 +409,7 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
       const credential = GoogleAuthProvider.credentialFromResult(result);
       if (credential?.accessToken) {
         const expiresAt = Date.now() + 3500 * 1000;
-        saveGoogleAuthSession({
+        await saveGoogleAuthSession({
           accessToken: credential.accessToken,
           idToken: credential.idToken || undefined,
           expiresAt,
@@ -533,7 +515,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       }
 
       const expiresAt = Date.now() + 3500 * 1000;
-      saveGoogleAuthSession({
+      await saveGoogleAuthSession({
         accessToken,
         idToken: idToken || undefined,
         refreshToken: refreshToken || undefined,
@@ -580,7 +562,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
     }
 
     const expiresAt = Date.now() + 3500 * 1000;
-    saveGoogleAuthSession({
+    await saveGoogleAuthSession({
       accessToken: credential.accessToken,
       idToken: credential.idToken || undefined,
       expiresAt,
@@ -1035,6 +1017,15 @@ export async function downloadRealGoogleDriveFile(
     if (metaCheck?.isDeleted) {
       throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc chuyển vào thùng rác trên Google Drive.');
     }
+    const masterState = await getMasterSyncStateFromDrive(accessToken, fileId);
+    if (
+      masterState?.dataSchemaVersion &&
+      masterState.dataSchemaVersion > CURRENT_SHEET_DATA_SCHEMA_VERSION
+    ) {
+      throw new Error(
+        `SHEET_SCHEMA_UNSUPPORTED: File dùng cấu trúc dữ liệu phiên bản ${masterState.dataSchemaVersion}, ứng dụng hiện hỗ trợ đến phiên bản ${CURRENT_SHEET_DATA_SCHEMA_VERSION}. Không thay đổi dữ liệu trên file.`
+      );
+    }
 
     let resolvedMime = mimeType || metaCheck?.mimeType;
     
@@ -1075,10 +1066,7 @@ export async function downloadRealGoogleDriveFile(
         if (liveSheetsRes.ok) {
           const liveData = await liveSheetsRes.json();
           if (liveData?.values && Array.isArray(liveData.values) && liveData.values.length > 0) {
-            const matrixResult = parseMatrixData(liveData.values);
-            if (matrixResult.success && (matrixResult.books.length > 0 || (matrixResult.settlements && matrixResult.settlements.length > 0))) {
-              return matrixResult;
-            }
+            return parseMatrixData(liveData.values, { strictSchema: true });
           }
         } else if (liveSheetsRes.status === 401) {
           setGoogleAccessToken(null);
@@ -1151,7 +1139,7 @@ export async function downloadRealGoogleDriveFile(
     }
 
     const arrayBuffer = await res.arrayBuffer();
-    const parsedBinary = await parseWorkbook(arrayBuffer);
+    const parsedBinary = await parseWorkbook(arrayBuffer, { strictSchema: true });
     return parsedBinary;
   } catch (error: any) {
     if (error?.message?.includes('hết hạn') || error?.message?.includes('invalid authentication credentials')) {
@@ -1178,6 +1166,19 @@ export async function updateRealGoogleDriveFile(
     const metaCheck = await getRealGoogleDriveFileMetadata(accessToken, fileId);
     if (metaCheck?.isDeleted) {
       throw new Error('FILE_NOT_FOUND: File liên kết đã bị xóa hoặc chuyển vào thùng rác trên Google Drive.');
+    }
+    const schemaCheck = await downloadRealGoogleDriveFile(accessToken, fileId, metaCheck?.mimeType);
+    if (!schemaCheck.success) {
+      throw new Error(
+        `SHEET_SCHEMA_INVALID: Không ghi đè vì dữ liệu hiện tại không hợp lệ. ${schemaCheck.errors.join(' ')}`
+      );
+    }
+    const confirmedMeta = await getRealGoogleDriveFileMetadata(accessToken, fileId);
+    if (
+      (metaCheck?.modifiedTime && !confirmedMeta?.modifiedTime) ||
+      (metaCheck?.modifiedTime && confirmedMeta?.modifiedTime !== metaCheck.modifiedTime)
+    ) {
+      throw new Error('SYNC_CONFLICT: Google Drive đã thay đổi trong lúc xác thực cấu trúc. Hãy đồng bộ lại trước khi ghi.');
     }
     // Tự động đảm bảo gán nhãn metadata com.tietkiemgiadinh.app (Self-healing khi đồng bộ)
     stampGoogleDriveFileWithAppLabel(accessToken, fileId).catch(() => {});
@@ -2271,6 +2272,7 @@ export async function readMasterSyncStateFromGoogleSheet(
           linkedAccountEmail: metadataParsed.linkedAccountEmail || kvMap.get('linked account') || '',
           adminEmail: metadataParsed.adminEmail || kvMap.get('admin email') || '',
           schemaVersion: metadataParsed.schemaVersion || 2,
+          dataSchemaVersion: metadataParsed.dataSchemaVersion,
           updatedAt: metadataParsed.updatedAt || kvMap.get('updated at') || '',
           updatedAtVi: metadataParsed.updatedAtVi || '',
           members: membersList,
@@ -2331,6 +2333,7 @@ export async function saveMasterSyncStateToGoogleSheet(
     const nowVi = state.updatedAtVi || formatIsoToVietnamTime(nowIso);
     const coreMetadataPayload = JSON.stringify({
       schemaVersion: 2,
+      dataSchemaVersion: CURRENT_SHEET_DATA_SCHEMA_VERSION,
       status: state.status || 'active',
       lastAction: state.lastAction || 'link',
       activeFileId: state.activeFileId || fileId,
@@ -2607,6 +2610,7 @@ export async function saveMasterSyncStateOnDrive(
       ...existingLocal,
       ...state,
       schemaVersion: 2,
+      dataSchemaVersion: CURRENT_SHEET_DATA_SCHEMA_VERSION,
       adminEmail: mergedAdminEmail,
       members: mergedMembers,
       banksConfig: mergedBanksConfig,
@@ -3419,6 +3423,7 @@ export async function stampAppLabelToSheetConfig(
         '__METADATA_JSON__',
         JSON.stringify({
           schemaVersion: 2,
+          dataSchemaVersion: CURRENT_SHEET_DATA_SCHEMA_VERSION,
           appId: STK_APP_ID,
           appLabel: STK_APP_ID,
           updatedAt: new Date().toISOString(),
@@ -3676,4 +3681,3 @@ export async function formatCreatedSpreadsheetColumns(
     return false;
   }
 }
-

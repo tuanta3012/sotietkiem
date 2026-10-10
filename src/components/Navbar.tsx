@@ -131,7 +131,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       s.toLowerCase().includes('lỗi') ||
       s.toLowerCase().includes('thất bại') ||
       s.toLowerCase().includes('hết hạn') ||
-      s.toLowerCase().includes('không thể');
+      s.toLowerCase().includes('không thể') ||
+      s.toLowerCase().includes('xung đột');
 
     let text = 'Đã đồng bộ';
     let type: 'success' | 'error' = 'success';
@@ -140,6 +141,8 @@ export const Navbar: React.FC<NavbarProps> = ({
       type = 'error';
       if (s.toLowerCase().includes('hết hạn')) {
         text = 'Hết hạn phiên';
+      } else if (s.toLowerCase().includes('xung đột')) {
+        text = 'Xung đột dữ liệu';
       } else {
         text = 'Lỗi đồng bộ';
       }

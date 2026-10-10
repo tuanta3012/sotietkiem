@@ -155,6 +155,7 @@ export interface WorkspaceMember {
 
 export interface MasterSyncState {
   schemaVersion?: number;
+  dataSchemaVersion?: number;
   status?: 'active' | 'unlinked';
   lastAction?: 'link' | 'switch' | 'unlink' | 'create_and_link';
   activeFileId?: string;
@@ -234,4 +235,3 @@ export function canChangeDriveFile(role?: string | null): boolean {
   const normalized = String(role).toUpperCase();
   return normalized === 'ADMIN';
 }
-

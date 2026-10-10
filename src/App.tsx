@@ -18,6 +18,7 @@ import { AppUpdateModal } from './components/AppUpdateModal';
 import { BookListView } from './components/BookListView';
 import { AppModals } from './components/AppModals';
 import { LoginConflictResolveModal } from './components/LoginConflictResolveModal';
+import { SyncConflictModal } from './components/SyncConflictModal';
 import {
   downloadRealGoogleDriveFile,
   updateRealGoogleDriveFile,
@@ -72,6 +73,15 @@ const CURRENT_DATE = new Date().toISOString().split('T')[0];
 
 export default function App() {
   const { showToast } = useToast();
+  useEffect(() => {
+    const handleSecureStorageError = (event: Event) => {
+      const message = (event as CustomEvent<string>).detail;
+      showToast(message || 'Không thể truy cập vùng lưu trữ an toàn. Vui lòng đăng nhập lại.', 'error', 6000);
+    };
+    window.addEventListener('stk:auth-storage-error', handleSecureStorageError);
+    return () => window.removeEventListener('stk:auth-storage-error', handleSecureStorageError);
+  }, [showToast]);
+
   const [isPendingAuth, setIsPendingAuth] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem('pending_google_redirect_auth') === 'true';
@@ -549,6 +559,8 @@ export default function App() {
     renewTokenAndSync,
     syncBooksFromDrive,
     pushBooksToDrive,
+    syncConflict,
+    resolveSyncConflict,
     detectedDesyncHub,
     markAsRemoteUpdate,
     startFileSwitch,
@@ -1442,6 +1454,14 @@ export default function App() {
           setSettings={setSettings}
           currentUser={currentUser}
           currentDateStr={CURRENT_DATE}
+        />
+
+        <SyncConflictModal
+          conflict={syncConflict}
+          isResolving={isSyncingDrive}
+          status={syncDriveStatus}
+          onChooseRemote={() => { void resolveSyncConflict('remote'); }}
+          onChooseLocal={() => { void resolveSyncConflict('local'); }}
         />
 
         {/* Footer */}
