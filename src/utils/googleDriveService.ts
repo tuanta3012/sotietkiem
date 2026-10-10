@@ -2641,9 +2641,9 @@ export async function saveMasterSyncStateOnDrive(
         : getAllBanks();
 
     const mergedAuditLogs =
-      state.auditLogs !== undefined && Array.isArray(state.auditLogs) && state.auditLogs.length > 0
+      state.auditLogs !== undefined && Array.isArray(state.auditLogs)
         ? state.auditLogs
-        : existingLocal?.auditLogs && existingLocal.auditLogs.length > 0
+        : existingLocal?.auditLogs !== undefined && Array.isArray(existingLocal.auditLogs)
         ? existingLocal.auditLogs
         : getSyncAuditLogs();
 

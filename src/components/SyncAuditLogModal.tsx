@@ -22,6 +22,8 @@ import {
 import {
   getSyncAuditLogs,
   clearSyncAuditLogs,
+  clearCloudSyncAuditLogs,
+  hasActiveLinkedFile,
   formatAuditLogsAsText,
   SyncAuditLogEntry,
 } from '../utils/syncAuditLog';
@@ -55,10 +57,13 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
   const [localLogs, setLocalLogs] = useState<SyncAuditLogEntry[]>([]);
   const [cloudLogs, setCloudLogs] = useState<SyncAuditLogEntry[]>([]);
   const [isLoadingCloud, setIsLoadingCloud] = useState<boolean>(false);
+  const [isClearingCloud, setIsClearingCloud] = useState<boolean>(false);
   const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
   const [masterState, setMasterState] = useState<MasterSyncState | null>(null);
+
+  const isLinked = Boolean(settings?.googleSheetUrl || masterState?.activeFileId || hasActiveLinkedFile());
 
   const loadLocalLogs = () => {
     setLocalLogs(getSyncAuditLogs());
@@ -192,6 +197,30 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
     }
   };
 
+  const handleClearCloud = async () => {
+    if (!window.confirm('Bạn có chắc muốn xóa sạch toàn bộ nhật ký kiểm toán trên Cloud cho file này? Toàn bộ nhật ký sẽ được làm sạch để theo dõi mới.')) {
+      return;
+    }
+    const token =
+      localStorage.getItem('google_drive_access_token_v4') ||
+      localStorage.getItem('google_access_token') ||
+      sessionStorage.getItem('google_access_token');
+    if (!token) {
+      alert('Chưa có token Google Drive để cập nhật.');
+      return;
+    }
+    setIsClearingCloud(true);
+    try {
+      const success = await clearCloudSyncAuditLogs(token, masterState?.activeFileId);
+      if (success) {
+        setCloudLogs([]);
+        loadLocalLogs();
+      }
+    } finally {
+      setIsClearingCloud(false);
+    }
+  };
+
   const errorCount = activeLogs.filter((l) => l.status === 'error').length;
   const warnCount = activeLogs.filter((l) => l.status === 'warning').length;
   const successCount = activeLogs.filter((l) => l.status === 'success').length;
@@ -261,16 +290,23 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
             </button>
           </div>
 
-          {/* Active File Link (Compact) */}
-          {masterState?.activeFileName && (
-            <div className="flex items-center justify-between text-[11px] bg-slate-50 border border-slate-200/80 px-2.5 py-1 rounded-lg text-slate-700">
+          {/* Active File Link / Status Indicator */}
+          {isLinked ? (
+            <div className="flex items-center justify-between text-[11px] bg-emerald-50/80 border border-emerald-200/90 px-2.5 py-1.5 rounded-lg text-slate-700">
               <div className="flex items-center gap-1.5 truncate">
-                <Database className="w-3 h-3 text-blue-600 shrink-0" />
-                <span className="truncate">File: <strong>{masterState.activeFileName}</strong></span>
+                <Database className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span className="truncate">File: <strong>{masterState?.activeFileName || settings?.googleSheetName || 'Bảng tính Google Drive'}</strong></span>
               </div>
-              <span className="shrink-0 text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.2 rounded">
-                Đang hoạt động
+              <span className="shrink-0 text-[10px] font-bold text-emerald-700 bg-emerald-100/90 px-1.5 py-0.5 rounded">
+                Đang theo dõi kiểm toán
               </span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between text-[11px] bg-amber-50 border border-amber-200 px-2.5 py-1.5 rounded-lg text-amber-800">
+              <div className="flex items-center gap-1.5 truncate">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span className="truncate">Chưa liên kết file. Nhật ký sẽ tự động bắt đầu ghi khi liên kết file.</span>
+              </div>
             </div>
           )}
         </div>
@@ -362,7 +398,16 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
           ) : filteredLogs.length === 0 ? (
             <div className="py-12 text-center text-slate-400 space-y-2">
               <FileText className="w-8 h-8 mx-auto text-slate-300" />
-              <p className="text-xs">Chưa có bản ghi nhật ký kiểm toán nào phù hợp.</p>
+              <p className="text-xs font-semibold text-slate-600">
+                {isLinked
+                  ? 'Chưa có hoạt động mới kể từ khi liên kết file.'
+                  : 'Chưa có nhật ký kiểm toán.'}
+              </p>
+              <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                {isLinked
+                  ? 'Nhật ký cũ đã được xóa sạch. Toàn bộ thao tác Đọc / Ghi với Google Drive tiếp theo sẽ được lưu vết chi tiết tại đây.'
+                  : 'Hệ thống chỉ bắt đầu ghi nhật ký khi đã liên kết file để tránh nhiễu và dễ điều tra hơn.'}
+              </p>
             </div>
           ) : (
             filteredLogs.map((log) => {
@@ -519,18 +564,33 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
           )}
         </div>
 
-        {/* Footer (Clear local logs if on local tab) */}
-        {activeTab === 'local' && localLogs.length > 0 && (
-          <div className="p-2 bg-slate-50 border-t border-slate-100 flex justify-end">
-            <button
-              onClick={handleClearLocal}
-              className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 transition-colors"
-            >
-              <Trash2 className="w-3 h-3" />
-              <span>Xóa nhật ký cục bộ</span>
-            </button>
+        {/* Footer */}
+        <div className="p-2.5 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+          <span className="text-[10px] text-slate-500 truncate max-w-[50%]">
+            {isLinked ? 'Tự động làm sạch log cũ khi liên kết file mới' : 'Chưa liên kết file'}
+          </span>
+          <div className="flex items-center gap-2">
+            {activeTab === 'local' && localLogs.length > 0 && (
+              <button
+                onClick={handleClearLocal}
+                className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 transition-colors cursor-pointer font-medium"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>Xóa nhật ký trên máy</span>
+              </button>
+            )}
+            {activeTab === 'cloud' && cloudLogs.length > 0 && (
+              <button
+                onClick={handleClearCloud}
+                disabled={isClearingCloud}
+                className="text-[11px] text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 transition-colors cursor-pointer font-medium disabled:opacity-50"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>{isClearingCloud ? 'Đang xóa...' : 'Xóa nhật ký Cloud'}</span>
+              </button>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

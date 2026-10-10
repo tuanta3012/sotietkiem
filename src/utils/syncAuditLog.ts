@@ -42,6 +42,51 @@ const STORAGE_KEY = 'savings_sync_audit_log_v1';
 const MAX_LOG_ENTRIES = 15;
 
 /**
+ * Kiểm tra xem ứng dụng đã liên kết với file Google Drive/Sheets hay chưa.
+ * Chỉ khi đã liên kết file thì hệ thống mới bắt đầu kích hoạt ghi nhật ký kiểm toán (Audit Log).
+ * Khi chưa liên kết (hoặc đã hủy liên kết), hệ thống không ghi nhận để tránh nhiễu dữ liệu.
+ */
+export function hasActiveLinkedFile(): boolean {
+  try {
+    if (typeof localStorage === 'undefined') return false;
+
+    // 1. Kiểm tra con trỏ file ID gần nhất
+    const pointerFileId =
+      localStorage.getItem('last_linked_file_id_v2') ||
+      localStorage.getItem('master_pointer_file_id_v2');
+    if (pointerFileId && pointerFileId.trim() && pointerFileId !== 'unlinked') {
+      return true;
+    }
+
+    // 2. Kiểm tra AppSettings đã có googleSheetUrl chưa
+    const rawSettings = localStorage.getItem('savings_settings_v3');
+    if (rawSettings) {
+      const parsed = JSON.parse(rawSettings);
+      if (
+        parsed?.googleSheetUrl &&
+        typeof parsed.googleSheetUrl === 'string' &&
+        parsed.googleSheetUrl.trim().length > 5
+      ) {
+        return true;
+      }
+    }
+
+    // 3. Kiểm tra MasterSyncState
+    const rawMaster = localStorage.getItem('savings_master_sync_state_v2');
+    if (rawMaster) {
+      const master = JSON.parse(rawMaster);
+      if (master?.status === 'active' && master?.activeFileId) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Đọc toàn bộ danh sách nhật ký kiểm toán từ localStorage
  */
 export function getSyncAuditLogs(): SyncAuditLogEntry[] {
@@ -58,11 +103,25 @@ export function getSyncAuditLogs(): SyncAuditLogEntry[] {
 }
 
 /**
- * Thêm một mục nhật ký kiểm toán mới
+ * Thêm một mục nhật ký kiểm toán mới.
+ * CHỈ GHI KHI: File đã được liên kết hoặc mục log chỉ rõ fileId đang xử lý.
  */
 export function recordSyncAuditLog(
   entry: Omit<SyncAuditLogEntry, 'id' | 'timestamp' | 'timeStr'>
 ): SyncAuditLogEntry {
+  const isLinked = hasActiveLinkedFile();
+  // Nếu chưa liên kết file và entry không chỉ định fileId cụ thể:
+  // KHÔNG lưu vào storage để tránh nhiễu và rác hệ thống trước khi liên kết
+  if (!isLinked && !entry.fileId) {
+    console.debug('[SYNC AUDIT SKIP - Chưa liên kết file]', entry.title, entry.summary);
+    return {
+      ...entry,
+      id: `unlinked_skip_${Date.now()}`,
+      timestamp: Date.now(),
+      timeStr: new Date().toLocaleTimeString('vi-VN'),
+    };
+  }
+
   const now = new Date();
   const timeStr = now.toLocaleString('vi-VN', {
     day: '2-digit',
@@ -94,10 +153,17 @@ export function recordSyncAuditLog(
   // Đồng bộ không đồng bộ lên Tab __CONFIG__ của Google Sheet liên kết
   try {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('google_drive_access_token_v4') || localStorage.getItem('google_access_token') || sessionStorage.getItem('google_access_token');
+      const token =
+        localStorage.getItem('google_drive_access_token_v4') ||
+        localStorage.getItem('google_access_token') ||
+        sessionStorage.getItem('google_access_token');
       if (token) {
         import('./googleDriveService').then(({ saveMasterSyncStateOnDrive }) => {
-          saveMasterSyncStateOnDrive(token, { status: 'active', auditLogs: updatedLogs }).catch(() => {});
+          saveMasterSyncStateOnDrive(token, {
+            status: 'active',
+            activeFileId: entry.fileId || undefined,
+            auditLogs: updatedLogs,
+          }).catch(() => {});
         });
       }
     }
@@ -117,7 +183,7 @@ export function recordSyncAuditLog(
 }
 
 /**
- * Xóa sạch toàn bộ nhật ký kiểm toán
+ * Xóa sạch toàn bộ nhật ký kiểm toán cục bộ
  */
 export function clearSyncAuditLogs(): void {
   try {
@@ -126,6 +192,74 @@ export function clearSyncAuditLogs(): void {
     }
   } catch (err) {
     console.warn('Lỗi xóa audit log:', err);
+  }
+}
+
+/**
+ * Khởi tạo phiên audit log mới khi liên kết với file Google Drive:
+ * 1. Xóa sạch toàn bộ log cũ khỏi storage (và đồng bộ reset lên Google Drive nếu có token)
+ * 2. Ghi 1 bản ghi mốc khởi đầu sạch sẽ xác nhận bắt đầu theo dõi file mới
+ */
+export function initAuditLogForLinkedFile(
+  fileId: string,
+  fileName?: string,
+  userEmail?: string,
+  token?: string
+): SyncAuditLogEntry {
+  // 1. Xóa sạch toàn bộ log cũ để tránh nhiễu
+  clearSyncAuditLogs();
+
+  // 2. Ghi bản ghi mốc khởi đầu
+  const initialEntry = recordSyncAuditLog({
+    type: 'INFO',
+    title: 'Bắt đầu theo dõi kiểm toán file mới',
+    status: 'info',
+    fileId,
+    sheetName: fileName,
+    userEmail,
+    summary: `Đã liên kết file "${fileName || fileId}". Đã xóa sạch nhật ký kiểm toán cũ để bắt đầu theo dõi mới từ mốc này.`,
+    details: {
+      action: 'FILE_LINKED_INIT',
+      fileId,
+      fileName,
+      userEmail,
+      linkedAt: new Date().toISOString(),
+    },
+  });
+
+  // 3. Nếu có token, đồng bộ ngay mốc khởi đầu lên Drive để dọn sạch log cũ trên sheet
+  if (token) {
+    try {
+      import('./googleDriveService').then(({ saveMasterSyncStateOnDrive }) => {
+        saveMasterSyncStateOnDrive(token, {
+          status: 'active',
+          activeFileId: fileId,
+          activeFileName: fileName,
+          auditLogs: [initialEntry],
+        }).catch(() => {});
+      });
+    } catch {}
+  }
+
+  return initialEntry;
+}
+
+/**
+ * Xóa sạch toàn bộ nhật ký kiểm toán trên Cloud của file Google Drive đang liên kết
+ */
+export async function clearCloudSyncAuditLogs(token: string, fileId?: string): Promise<boolean> {
+  try {
+    clearSyncAuditLogs();
+    const { saveMasterSyncStateOnDrive } = await import('./googleDriveService');
+    await saveMasterSyncStateOnDrive(token, {
+      status: 'active',
+      activeFileId: fileId,
+      auditLogs: [],
+    });
+    return true;
+  } catch (err) {
+    console.warn('Lỗi xóa audit log trên Cloud:', err);
+    return false;
   }
 }
 

@@ -104,8 +104,7 @@ Nghiệp vụ, lưu trữ và tích hợp
   Preferences, dọn dẹp lúc khởi động và kiểm tra cài đặt mới.
 - src/utils/notificationService.ts: quyền và lịch thông báo đáo hạn trên web/
   Capacitor.
-- src/utils/syncAuditLog.ts: nhật ký kiểm toán local và cố gắng đẩy lên cấu hình
-  Google Sheet đang liên kết.
+- src/utils/syncAuditLog.ts: Nhật ký kiểm toán. CHỈ GHI KHI đã liên kết file. Tự động xóa log cũ khi liên kết file mới, chuyển file hoặc hủy liên kết. Có các hàm hỗ trợ dọn dẹp log trên máy và Cloud.
 - src/utils/roleHelper.ts: xác định vai trò.
 - src/data/banks.ts: danh sách ngân hàng mặc định và cấu hình ngân hàng tùy chỉnh.
 - src/data/historicalGrowth.ts: dữ liệu lịch sử lãi và tăng trưởng số dư tính
@@ -355,6 +354,8 @@ tranh chấp nhiều người, thông báo hoặc sinh trắc học Android.
   cleanup/tải muộn, rời workspace và Picker/đồng bộ. Luôn chạy
   `git status --short` và xem diff trước khi sửa hoặc gán nguồn các thay đổi.
   Không ghi đè lên thay đổi của người khác.
+- Khi Admin xóa thành viên, ứng dụng tự động revoke quyền Drive và cập nhật master state.
+- Audit log cục bộ được làm sạch tự động khi liên kết/hủy liên kết file.
 
 10. DANH SÁCH KIỂM TRA AN TOÀN KHI TIẾP NHẬN
 

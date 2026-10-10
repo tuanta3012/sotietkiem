@@ -67,6 +67,7 @@ import {
 } from '../utils/googleDriveService';
 import { openGooglePicker, PickedGoogleSheetFile } from '../utils/googlePickerService';
 import { resolveUserRole } from '../utils/roleHelper';
+import { initAuditLogForLinkedFile, clearSyncAuditLogs } from '../utils/syncAuditLog';
 
 interface DataSyncModalProps {
   isOpen: boolean;
@@ -671,6 +672,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           } else {
             onMarkAsRemoteUpdate?.(parsedBooks, parsedSettlements, link, fileModTime);
             onImportBooks(parsedBooks, 'replace');
+            initAuditLogForLinkedFile(file.id, file.name, currentUser?.email || appUser?.email, token);
             onUpdateSettings({
               googleSheetUrl: link,
               googleSheetName: file.name,
@@ -690,6 +692,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
               fileModTime
             );
           } else {
+            initAuditLogForLinkedFile(file.id, file.name, currentUser?.email || appUser?.email, token);
             onUpdateSettings({
               googleSheetUrl: link,
               googleSheetName: file.name,
@@ -1029,6 +1032,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         setSelectedFileId('');
         setSelectedFileName('');
         onUpdateSettings({ googleSheetUrl: '', googleSheetName: '' });
+        clearSyncAuditLogs();
         setExplicitlyUnlinked(true);
         onDriveFileNotFound?.();
         setSyncErrorMessage('File liên kết trên Google Drive đã bị xóa hoặc không còn tồn tại. Đã tự động hủy liên kết.');
@@ -1085,6 +1089,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       // ignore
     }
 
+    clearSyncAuditLogs();
     if (onFinishFileSwitch) {
       onFinishFileSwitch([], [], '', '', '', '');
     }

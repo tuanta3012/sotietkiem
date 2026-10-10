@@ -23,78 +23,68 @@ export function LoginConflictResolveModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="bg-slate-900 border border-slate-800/80 rounded-3xl max-w-md w-full overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-        {/* Header section with WARNING look */}
-        <div className="p-6 pb-4 bg-gradient-to-r from-amber-500/10 to-transparent border-b border-slate-800/60 flex items-start space-x-3.5">
-          <div className="p-3 bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-2xl shrink-0 animate-pulse">
-            <AlertTriangle className="w-6 h-6" />
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl sm:rounded-3xl max-w-sm sm:max-w-md w-full overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
+        {/* Header section with compact warning look */}
+        <div className="px-4 py-3 sm:px-5 sm:py-4 bg-gradient-to-r from-amber-500/10 to-transparent border-b border-slate-800 flex items-center space-x-3">
+          <div className="p-2 bg-amber-500/20 border border-amber-500/30 text-amber-400 rounded-xl shrink-0">
+            <AlertTriangle className="w-5 h-5" />
           </div>
-          <div>
-            <h2 className="text-lg font-black text-white tracking-tight leading-snug">
-              Phát hiện dữ liệu cũ trên Google Drive
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base sm:text-lg font-black text-white tracking-tight leading-tight">
+              Phát hiện file trên Drive
             </h2>
-            <p className="text-xs text-amber-300 font-medium mt-1">
-              Bạn đang có cả dữ liệu ngoại tuyến và tệp sao lưu trên Drive
+            <p className="text-xs text-amber-300/90 truncate mt-0.5 font-medium">
+              File: {fileName}
             </p>
           </div>
         </div>
 
-        {/* Content detail */}
-        <div className="p-6 space-y-4">
-          <div className="text-slate-300 text-sm leading-relaxed space-y-2.5">
-            <p>
-              Hệ thống phát hiện tài khoản Google của bạn đang liên kết với tệp cũ:
-            </p>
-            <div className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-2xl font-semibold text-slate-200 text-xs flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
-              <span className="truncate">{fileName}</span>
-            </div>
-            <p>
-              Trong khi đó, bạn vừa tạo mới <strong className="text-emerald-400">{localBooksCount} sổ tiết kiệm ngoại tuyến</strong> trên thiết bị này.
-            </p>
-            <p className="text-xs text-slate-400 italic">
-              Để tránh ghi đè làm mất dữ liệu của bạn, vui lòng lựa chọn cách xử lý bên dưới:
-            </p>
-          </div>
+        {/* Content detail - compact for phone */}
+        <div className="p-4 sm:p-5 space-y-3">
+          <p className="text-xs sm:text-sm text-slate-300">
+            Máy đang có <strong className="text-emerald-400">{localBooksCount} sổ</strong> chưa đồng bộ. Vui lòng chọn cách xử lý:
+          </p>
 
           {/* Action options buttons */}
-          <div className="space-y-3 pt-2">
+          <div className="space-y-2">
             {/* Option 1: Merge (Recommended) */}
             <button
               onClick={onResolveMerge}
-              className="w-full text-left p-3.5 rounded-2xl bg-gradient-to-r from-emerald-600/20 to-emerald-500/10 hover:from-emerald-600/30 hover:to-emerald-500/20 text-white border border-emerald-500/30 transition-all flex items-start space-x-3 cursor-pointer group active:scale-98"
+              className="w-full text-left p-3 rounded-xl bg-emerald-950/30 hover:bg-emerald-950/50 text-white border border-emerald-500/40 transition-all flex items-center justify-between gap-2.5 cursor-pointer active:scale-98"
             >
-              <div className="p-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl group-hover:scale-105 transition-transform shrink-0">
-                <Merge className="w-5 h-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-emerald-300 flex items-center space-x-1.5">
-                  <span>Gộp dữ liệu (Khuyên dùng)</span>
-                  <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded-md border border-emerald-500/20">
-                    An toàn
-                  </span>
+              <div className="flex items-center space-x-2.5 min-w-0">
+                <div className="p-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-lg shrink-0">
+                  <Merge className="w-4 h-4" />
                 </div>
-                <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                  Hợp nhất toàn bộ sổ ngoại tuyến mới vào tệp trên Drive. Bảo toàn tuyệt đối mọi dữ liệu.
+                <div className="min-w-0">
+                  <div className="text-xs sm:text-sm font-bold text-emerald-300">
+                    Gộp chung dữ liệu
+                  </div>
+                  <div className="text-[11px] text-slate-400 truncate">
+                    Ghép {localBooksCount} sổ vào Drive, không mất sổ nào
+                  </div>
                 </div>
               </div>
+              <span className="text-[10px] font-extrabold uppercase px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 rounded border border-emerald-500/30 shrink-0">
+                Khuyên dùng
+              </span>
             </button>
 
             {/* Option 2: Overwrite (Discard local, download remote) */}
             <button
               onClick={onResolveOverwriteLocal}
-              className="w-full text-left p-3.5 rounded-2xl bg-slate-950/40 hover:bg-slate-950/80 text-white border border-slate-800 transition-all flex items-start space-x-3 cursor-pointer group active:scale-98"
+              className="w-full text-left p-3 rounded-xl bg-slate-950/40 hover:bg-slate-950/80 text-white border border-slate-800 transition-all flex items-center space-x-2.5 cursor-pointer active:scale-98"
             >
-              <div className="p-2 bg-slate-800 text-slate-400 border border-slate-700/60 rounded-xl group-hover:scale-105 transition-transform shrink-0">
-                <HardDriveDownload className="w-5 h-5" />
+              <div className="p-2 bg-slate-800 text-slate-400 border border-slate-700/60 rounded-lg shrink-0">
+                <HardDriveDownload className="w-4 h-4" />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-slate-300">
-                  Lấy dữ liệu từ Google Drive
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-bold text-slate-300">
+                  Lấy dữ liệu từ Drive
                 </div>
-                <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                  Xóa bỏ các sổ ngoại tuyến hiện tại và đồng bộ tải về toàn bộ sổ cũ từ Google Drive.
+                <div className="text-[11px] text-slate-400 truncate">
+                  Bỏ {localBooksCount} sổ trên máy, tải toàn bộ từ Drive
                 </div>
               </div>
             </button>
@@ -102,17 +92,17 @@ export function LoginConflictResolveModal({
             {/* Option 3: Create New File */}
             <button
               onClick={onResolveCreateNewFile}
-              className="w-full text-left p-3.5 rounded-2xl bg-slate-950/40 hover:bg-slate-950/80 text-white border border-slate-800 transition-all flex items-start space-x-3 cursor-pointer group active:scale-98"
+              className="w-full text-left p-3 rounded-xl bg-slate-950/40 hover:bg-slate-950/80 text-white border border-slate-800 transition-all flex items-center space-x-2.5 cursor-pointer active:scale-98"
             >
-              <div className="p-2 bg-slate-800 text-slate-400 border border-slate-700/60 rounded-xl group-hover:scale-105 transition-transform shrink-0">
-                <PlusCircle className="w-5 h-5" />
+              <div className="p-2 bg-slate-800 text-slate-400 border border-slate-700/60 rounded-lg shrink-0">
+                <PlusCircle className="w-4 h-4" />
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-bold text-slate-300">
-                  Tạo tệp sao lưu mới hoàn toàn
+              <div className="min-w-0">
+                <div className="text-xs sm:text-sm font-bold text-slate-300">
+                  Tạo file mới riêng
                 </div>
-                <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">
-                  Tạo tệp Google Sheet mới tinh trên Drive từ các sổ ngoại tuyến hiện tại.
+                <div className="text-[11px] text-slate-400 truncate">
+                  Tạo file Sheet mới tinh trên Drive cho các sổ này
                 </div>
               </div>
             </button>
@@ -120,13 +110,13 @@ export function LoginConflictResolveModal({
         </div>
 
         {/* Footer with stay offline option */}
-        <div className="p-4 bg-slate-950/40 border-t border-slate-800/60 flex items-center justify-between">
+        <div className="px-4 py-2.5 sm:px-5 sm:py-3 bg-slate-950/50 border-t border-slate-800 flex items-center justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer"
+            className="px-3 py-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-semibold transition-all flex items-center space-x-1.5 cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Hủy &amp; Tiếp tục ngoại tuyến</span>
+            <span>Để sau / Ngoại tuyến</span>
           </button>
         </div>
       </div>

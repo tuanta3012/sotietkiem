@@ -19,7 +19,11 @@ import {
   isExplicitlyUnlinked,
   setExplicitlyUnlinked,
 } from '../utils/googleDriveService';
-import { recordSyncAuditLog } from '../utils/syncAuditLog';
+import {
+  recordSyncAuditLog,
+  initAuditLogForLinkedFile,
+  clearSyncAuditLogs,
+} from '../utils/syncAuditLog';
 import { resolveUserRole } from '../utils/roleHelper';
 import { getAdjustedMaturityDate } from '../utils/calculator';
 
@@ -267,9 +271,10 @@ export function useDriveSync({
     }
   }, [settings.googleSheetUrl]);
 
-  // Lắng nghe các lỗi runtime toàn cục để tự động ghi log vào Firestore trung tâm
+  // Lắng nghe các lỗi runtime toàn cục để tự động ghi log vào Google Drive khi đã liên kết file
   useEffect(() => {
     const handleGlobalError = (event: ErrorEvent) => {
+      if (!settingsRef.current?.googleSheetUrl) return;
       if (event.error) {
         recordSyncAuditLog({
           type: 'SYNC_ERROR',
@@ -290,6 +295,7 @@ export function useDriveSync({
     };
 
     const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      if (!settingsRef.current?.googleSheetUrl) return;
       recordSyncAuditLog({
         type: 'SYNC_ERROR',
         title: 'Lỗi Promise Rejection chưa bắt',
@@ -367,6 +373,16 @@ export function useDriveSync({
           books: normalizedBooks,
           settlements: adjsToKeep,
         });
+        // Khi liên kết hoặc chuyển đổi sang file mới: Xóa sạch toàn bộ log cũ và bắt đầu ghi log mới từ mốc này
+        initAuditLogForLinkedFile(
+          effectiveFileId,
+          newFileName || settings.googleSheetName,
+          currentUser?.email,
+          getGoogleAccessToken() || undefined
+        );
+      } else {
+        // Hủy liên kết: Xóa sạch toàn bộ nhật ký kiểm toán cũ để tránh nhiễu
+        clearSyncAuditLogs();
       }
 
       // 3. Cập nhật state nội bộ và bộ nhớ lưu trữ
@@ -1261,6 +1277,7 @@ export function useDriveSync({
                     lastLocalLinkTimestamp: masterState.linkedTimestamp || new Date().toISOString(),
                     autoSync: true,
                   }));
+                  initAuditLogForLinkedFile(hub.id, fileName, currentUser?.email, token);
                   setSyncDriveStatus(`⚡ Đã tự động kết nối & đồng bộ file trung tâm "${fileName}"`);
                 }
               } catch (dlErr: any) {
@@ -1733,6 +1750,7 @@ export function useDriveSync({
                   googleSheetUrl: sheetUrl,
                   googleSheetName: hub.name || 'Bảng tính tiết kiệm',
                 }));
+                initAuditLogForLinkedFile(hub.id, hub.name || 'Bảng tính tiết kiệm', currentUser.email, token);
                 setExplicitlyUnlinked(false);
                 console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ master workspace...');
                 await syncBooksFromDriveRef.current(false, token);
@@ -1755,6 +1773,7 @@ export function useDriveSync({
                   members: [],
                   lastSyncTime: undefined,
                 }));
+                clearSyncAuditLogs();
               }
             }
           } catch (hubErr) {
@@ -1837,6 +1856,7 @@ export function useDriveSync({
           const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
           if (hubUrl !== settingsRef.current.googleSheetUrl) {
             console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
+            initAuditLogForLinkedFile(hub.id, hub.name, currentUser?.email, token);
             setSettings((prev) => ({
               ...prev,
               googleSheetUrl: hubUrl,
