@@ -777,6 +777,19 @@ export interface DriveAppFile {
   isCentralHub?: boolean;
 }
 
+interface DriveSpreadsheetCandidate extends DriveAppFile {
+  createdTime?: string;
+  appProperties?: Record<string, string>;
+  properties?: Record<string, string>;
+  description?: string;
+}
+
+const SUPPORTED_DRIVE_SPREADSHEET_MIME_TYPES = new Set([
+  'application/vnd.google-apps.spreadsheet',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+]);
+
 /**
  * Kiểm tra xem một file Google Drive có gắn nhãn metadata của ứng dụng com.tietkiemgiadinh.app hay không
  */
@@ -816,32 +829,50 @@ export function hasAppMetadataLabel(file: {
 export async function listAppCreatedDriveFiles(accessToken: string): Promise<DriveAppFile[]> {
   try {
     const baseUrl = 'https://www.googleapis.com/drive/v3/files';
-    const query = "trashed=false and (mimeType='application/vnd.google-apps.spreadsheet' or mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel')";
-    const queryParams = [
-      `q=${encodeURIComponent(query)}`,
-      `spaces=drive`,
-      `fields=${encodeURIComponent('files(id, name, mimeType, createdTime, modifiedTime, webViewLink, appProperties, properties, description)')}`,
-      `pageSize=100`,
-      `orderBy=${encodeURIComponent('modifiedTime desc')}`,
-    ].join('&');
+    const query = `trashed=false and (${Array.from(SUPPORTED_DRIVE_SPREADSHEET_MIME_TYPES)
+      .map((mimeType) => `mimeType='${mimeType}'`)
+      .join(' or ')})`;
+    const allFiles: DriveSpreadsheetCandidate[] = [];
+    let pageToken: string | undefined;
 
-    const res = await fetchWithRetry(`${baseUrl}?${queryParams}`, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
+    do {
+      const queryParams = new URLSearchParams({
+        q: query,
+        spaces: 'drive',
+        fields:
+          'nextPageToken,files(id,name,mimeType,createdTime,modifiedTime,webViewLink,appProperties,properties,description)',
+        pageSize: '100',
+        orderBy: 'modifiedTime desc',
+        includeItemsFromAllDrives: 'true',
+        supportsAllDrives: 'true',
+      });
+      if (pageToken) queryParams.set('pageToken', pageToken);
 
-    if (!res.ok) {
-      if (res.status === 401) {
-        setGoogleAccessToken(null);
-        throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng đăng nhập lại.');
+      const res = await fetchWithRetry(`${baseUrl}?${queryParams.toString()}`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        if (res.status === 401) {
+          setGoogleAccessToken(null);
+          throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng đăng nhập lại.');
+        }
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error?.message || `Lỗi tải danh sách file (Mã ${res.status})`);
       }
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err?.error?.message || `Lỗi tải danh sách file (Mã ${res.status})`);
-    }
 
-    const data = await res.json();
-    const rawFiles: any[] = data.files || [];
+      const data = await res.json();
+      allFiles.push(...(Array.isArray(data.files) ? data.files : []));
+      pageToken = data.nextPageToken || undefined;
+    } while (pageToken);
+
+    allFiles.sort((left, right) => {
+      const leftTime = Date.parse(left.modifiedTime || left.createdTime || '') || 0;
+      const rightTime = Date.parse(right.modifiedTime || right.createdTime || '') || 0;
+      return rightTime - leftTime;
+    });
 
     // Lấy ID file trung tâm đang hoạt động nếu có
     const masterState = await getMasterSyncStateFromDrive(accessToken).catch(() => null);
@@ -849,7 +880,8 @@ export async function listAppCreatedDriveFiles(accessToken: string): Promise<Dri
 
     // Lọc file có gắn nhãn hoặc có master sync active trên Drive (hỗ trợ cross-device tự động nhận diện file đã liên kết)
     const spreadsheetFiles: any[] = [];
-    for (const f of rawFiles) {
+    for (const f of allFiles) {
+      if (!f.mimeType || !SUPPORTED_DRIVE_SPREADSHEET_MIME_TYPES.has(f.mimeType)) continue;
       if (f.name === 'so_tiet_kiem_backup.json' || f.name?.endsWith('.json')) continue;
       if (hasAppMetadataLabel(f)) {
         spreadsheetFiles.push(f);
@@ -2907,6 +2939,16 @@ export async function autoDiscoverLatestCentralHub(
 ): Promise<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string } | null> {
   if (isExplicitlyUnlinked()) return null;
 
+  const isWorkspaceUser = (state: MasterSyncState): boolean => {
+    if (!userEmail) return true;
+    const normalizedEmail = userEmail.trim().toLowerCase();
+    return (
+      state.adminEmail?.trim().toLowerCase() === normalizedEmail ||
+      (Array.isArray(state.members) &&
+        state.members.some((member) => member.email?.trim().toLowerCase() === normalizedEmail))
+    );
+  };
+
   try {
     const targetFileId = getLocalMasterPointerFileId();
     if (targetFileId) {
@@ -2914,7 +2956,12 @@ export async function autoDiscoverLatestCentralHub(
       const meta = await getRealGoogleDriveFileMetadata(accessToken, targetFileId);
       if (meta && !meta.isDeleted) {
         const masterState = await getMasterSyncStateFromDrive(accessToken, targetFileId).catch(() => null);
-        if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
+        if (
+          masterState &&
+          masterState.status === 'active' &&
+          masterState.lastAction !== 'unlink' &&
+          isWorkspaceUser(masterState)
+        ) {
           setExplicitlyUnlinked(false);
           saveLocalMasterPointerFileId(targetFileId);
           saveLocalMasterPointerState(masterState);
@@ -2935,12 +2982,12 @@ export async function autoDiscoverLatestCentralHub(
       for (const file of files) {
         if (!file.id) continue;
         const driveMaster = await getMasterSyncStateFromDrive(accessToken, file.id).catch(() => null);
-        if (driveMaster && driveMaster.status === 'active' && driveMaster.lastAction !== 'unlink') {
-          if (userEmail && driveMaster.adminEmail && driveMaster.adminEmail.toLowerCase() !== userEmail.toLowerCase()) {
-            const isMember = Array.isArray(driveMaster.members) && driveMaster.members.some((m: any) => m.email?.toLowerCase() === userEmail.toLowerCase());
-            if (!isMember) continue;
-          }
-
+        if (
+          driveMaster &&
+          driveMaster.status === 'active' &&
+          driveMaster.lastAction !== 'unlink' &&
+          isWorkspaceUser(driveMaster)
+        ) {
           setExplicitlyUnlinked(false);
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(driveMaster);

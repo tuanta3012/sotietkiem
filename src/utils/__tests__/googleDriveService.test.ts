@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import { STANDARDIZED_SHEET_HEADERS } from '../dataSchema';
-import { autoDiscoverLatestCentralHub, downloadRealGoogleDriveFile } from '../googleDriveService';
+import {
+  autoDiscoverLatestCentralHub,
+  downloadRealGoogleDriveFile,
+  listAppCreatedDriveFiles,
+} from '../googleDriveService';
 
 function makeValues() {
   const row: Array<string | number> = Array(STANDARDIZED_SHEET_HEADERS.length).fill('');
@@ -123,6 +127,131 @@ describe('shared Drive file access', () => {
 
     await expect(autoDiscoverLatestCentralHub('member-access-token', 'member@example.com')).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('scans all spreadsheet pages, keeps app-labeled files, and returns newest first', async () => {
+    const firstPageFiles = [
+      {
+        id: 'older-sheet',
+        name: 'Family savings',
+        mimeType: 'application/vnd.google-apps.spreadsheet',
+        modifiedTime: '2026-01-01T00:00:00.000Z',
+        appProperties: { STK_APP_ID: 'com.tietkiemgiadinh.app' },
+      },
+      {
+        id: 'not-labeled',
+        name: 'Unrelated workbook',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        modifiedTime: '2026-03-01T00:00:00.000Z',
+      },
+    ];
+    const secondPageFiles = [
+      {
+        id: 'newer-excel',
+        name: 'Portfolio copy',
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        modifiedTime: '2026-09-01T00:00:00.000Z',
+        description: 'Created by com.tietkiemgiadinh.app',
+      },
+      {
+        id: 'unsupported-file',
+        name: 'Labeled document',
+        mimeType: 'application/pdf',
+        modifiedTime: '2026-10-01T00:00:00.000Z',
+        appProperties: { STK_APP_ID: 'com.tietkiemgiadinh.app' },
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/drive/v3/files') && url.searchParams.has('q')) {
+        const pageToken = url.searchParams.get('pageToken');
+        return Response.json(
+          pageToken
+            ? { files: secondPageFiles }
+            : { files: firstPageFiles, nextPageToken: 'next-page' }
+        );
+      }
+      return Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('localStorage', { getItem: () => null });
+    vi.stubGlobal('sessionStorage', { getItem: () => null });
+
+    const files = await listAppCreatedDriveFiles('member-access-token');
+    const listRequests = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter((url) => url.pathname.endsWith('/drive/v3/files') && url.searchParams.has('q'));
+
+    expect(listRequests).toHaveLength(2);
+    expect(listRequests[0].searchParams.get('orderBy')).toBe('modifiedTime desc');
+    expect(listRequests[0].searchParams.get('q')).toContain("mimeType='application/vnd.google-apps.spreadsheet'");
+    expect(listRequests[0].searchParams.get('q')).toContain(
+      "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'"
+    );
+    expect(listRequests[0].searchParams.get('q')).toContain("mimeType='application/vnd.ms-excel'");
+    expect(listRequests[1].searchParams.get('pageToken')).toBe('next-page');
+    expect(files.map((file) => file.id)).toEqual(['newer-excel', 'older-sheet']);
+  });
+
+  it('auto-links the newest active labeled sheet when the signed-in email is a configured member', async () => {
+    const masterState = {
+      status: 'active',
+      lastAction: 'link',
+      activeFileId: 'shared-hub',
+      activeFileName: 'Family portfolio 2026',
+      activeFileUrl: 'https://docs.google.com/spreadsheets/d/shared-hub/edit',
+      adminEmail: 'admin@example.com',
+      members: [{ id: 'member-1', email: 'member@example.com', role: 'EDITOR' }],
+      linkedTimestamp: '2026-10-01T00:00:00.000Z',
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/drive/v3/files') && url.searchParams.has('q')) {
+        return Response.json({
+          files: [
+            {
+              id: 'shared-hub',
+              name: 'Family portfolio 2026',
+              mimeType: 'application/vnd.google-apps.spreadsheet',
+              modifiedTime: '2026-10-09T00:00:00.000Z',
+              webViewLink: masterState.activeFileUrl,
+              appProperties: {
+                STK_APP_ID: 'com.tietkiemgiadinh.app',
+                STK_MASTER_STATE_JSON: JSON.stringify(masterState),
+              },
+            },
+          ],
+        });
+      }
+      if (url.hostname === 'sheets.googleapis.com') {
+        return Response.json({}, { status: 404 });
+      }
+      if (url.pathname.endsWith('/drive/v3/files/shared-hub')) {
+        return Response.json({
+          id: 'shared-hub',
+          name: masterState.activeFileName,
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          webViewLink: masterState.activeFileUrl,
+          modifiedTime: '2026-10-09T00:00:00.000Z',
+          appProperties: {
+            STK_APP_ID: 'com.tietkiemgiadinh.app',
+            STK_MASTER_STATE_JSON: JSON.stringify(masterState),
+          },
+        });
+      }
+      return Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('localStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+    vi.stubGlobal('sessionStorage', { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
+
+    await expect(
+      autoDiscoverLatestCentralHub('member-access-token', 'MEMBER@example.com')
+    ).resolves.toMatchObject({
+      id: 'shared-hub',
+      name: 'Family portfolio 2026',
+      linkedTimestamp: masterState.linkedTimestamp,
+    });
   });
 
   it('does not describe an inaccessible or 404 file as definitely deleted', async () => {

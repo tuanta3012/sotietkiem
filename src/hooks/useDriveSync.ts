@@ -1230,17 +1230,6 @@ export function useDriveSync({
             const masterState = await getMasterSyncStateFromDrive(token, hub.id);
             if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
               
-              // GIẢM THIỂU NHẦM LẪN: Chỉ tự động kết nối nếu email người dùng khớp với Admin của file
-              // hoặc tên file cực kỳ khớp với ứng dụng.
-              const isOwner = masterState.adminEmail === currentUser?.email;
-              const isKnownName = (hub.name || '').toLowerCase().includes('so tiet kiem') || (hub.name || '').toLowerCase().includes('so_tiet_kiem');
-              
-              if (!isOwner && !isKnownName) {
-                console.info('[Central Hub Sync] Phát hiện file trung tâm nhưng không tự động kết nối do không khớp email Admin và tên file lạ.');
-                isAutoConnectingRef.current = false;
-                return;
-              }
-
               applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
               const link = hub.webViewLink || masterState.activeFileUrl || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
               const fileName = hub.name || masterState.activeFileName || 'Sổ tiết kiệm';
