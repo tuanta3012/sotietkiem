@@ -715,7 +715,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     } catch (err: any) {
       onCancelFileSwitch?.();
       setSyncErrorMessage(
-        err?.message?.includes('FILE_UNAVAILABLE')
+        err?.message?.includes('PICKER_ACCESS_NOT_GRANTED')
+          ? err.message.replace('PICKER_ACCESS_NOT_GRANTED: ', '')
+          : err?.message?.includes('FILE_UNAVAILABLE')
           ? err.message.replace('FILE_UNAVAILABLE: ', '')
           : `Lỗi đọc file Google Drive: ${err.message || 'Không thể đọc nội dung file.'}`
       );

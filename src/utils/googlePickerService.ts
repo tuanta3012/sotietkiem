@@ -7,16 +7,14 @@
  */
 
 import { STK_APP_ID } from './googleDriveService';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 // Cấu hình biến môi trường
 export const GOOGLE_API_KEY =
   (import.meta as any).env?.VITE_GOOGLE_API_KEY || 'AIzaSyC52c1CvjuL2Cna8x1U9_p6lc_xwEHFlqk';
 
-export const GOOGLE_CLIENT_ID =
-  (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || '864440372329-fgoo89lqp196nvcptmfc7pquofuj8agt.apps.googleusercontent.com';
-
-export const GOOGLE_APP_ID =
-  (import.meta as any).env?.VITE_GOOGLE_APP_ID || '864440372329';
+export const GOOGLE_CLIENT_ID = firebaseConfig.oAuthClientId;
+export const GOOGLE_APP_ID = firebaseConfig.appId.split(':')[1];
 
 export interface PickedGoogleSheetFile {
   id: string;
@@ -153,6 +151,13 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
 
   if (!accessToken) {
     const err = new Error('Không tìm thấy Google Access Token. Vui lòng đăng nhập Google trước khi chọn file.');
+    onError?.(err);
+    throw err;
+  }
+  if (!GOOGLE_APP_ID || appId !== GOOGLE_CLIENT_ID.split('-')[0]) {
+    const err = new Error(
+      'Cấu hình Google Picker không khớp Google OAuth. App ID phải là mã dự án Google Cloud của OAuth client.'
+    );
     onError?.(err);
     throw err;
   }
@@ -295,9 +300,7 @@ export async function openGooglePicker(options: GooglePickerOptions): Promise<vo
     }
 
     // Gán App ID nếu có
-    if (appId) {
-      builder.setAppId(appId);
-    }
+    builder.setAppId(appId);
 
     // Điều chỉnh kích thước hiển thị thân thiện trên Mobile & Desktop
     if (typeof window !== 'undefined') {

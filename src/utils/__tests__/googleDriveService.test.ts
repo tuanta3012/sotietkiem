@@ -81,6 +81,39 @@ describe('shared Drive file access', () => {
     );
   });
 
+  it('explains when Google has not granted this app access to the picked file', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/drive/v3/files/shared-sheet?')) {
+        return Response.json({
+          id: 'shared-sheet',
+          name: 'Shared savings',
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+          modifiedTime: '2026-10-10T00:00:00.000Z',
+        });
+      }
+      if (url.includes('fields=sheets(properties(title,sheetId))') || url.includes('/values/')) {
+        return Response.json({}, { status: 404 });
+      }
+      if (url.includes('/export?mimeType=')) {
+        return Response.json(
+          {
+            error: {
+              message: 'The user has not granted the app 864440372329 read access to the file shared-sheet.',
+            },
+          },
+          { status: 403 }
+        );
+      }
+      return Response.json({}, { status: 404 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(downloadRealGoogleDriveFile('member-access-token', 'shared-sheet')).rejects.toThrow(
+      'PICKER_ACCESS_NOT_GRANTED:'
+    );
+  });
+
   it('does not describe an inaccessible or 404 file as definitely deleted', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => Response.json({}, { status: 404 })));
 

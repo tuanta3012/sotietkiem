@@ -1124,6 +1124,14 @@ export async function downloadRealGoogleDriveFile(
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       if (
+        res.status === 403 &&
+        /has not granted the app .* read access to the file/i.test(err?.error?.message || '')
+      ) {
+        throw new Error(
+          'PICKER_ACCESS_NOT_GRANTED: Google chưa cấp quyền cho ứng dụng đọc file đã chọn. Hãy kiểm tra API key của Google Picker và OAuth client có cùng thuộc một Google Cloud project hay không, sau đó chọn lại file bằng đúng tài khoản Google.'
+        );
+      }
+      if (
         res.status === 401 ||
         err?.error?.status === 'UNAUTHENTICATED' ||
         err?.error?.code === 401 ||
