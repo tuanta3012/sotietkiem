@@ -28,13 +28,16 @@ import { resolveUserRole } from '../utils/roleHelper';
 import { getAdjustedMaturityDate } from '../utils/calculator';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
-import { mergeBooksAndSettlements } from '../utils/conflictResolver';
+import { BookConflict, mergeBooksAndSettlements } from '../utils/conflictResolver';
 import {
   getOutboxData,
+  SyncOutboxData,
   acknowledgeSyncedMutations,
   acknowledgeDeletedBooks,
+  acknowledgeDeletedSettlements,
 } from '../utils/syncOutbox';
 import { saveSavingsBooksToFile, saveSettlementsToFile } from '../utils/fileStorage';
+import { getBookIdentityKeys } from '../utils/bookIdentity';
 
 function isActuallyUnlinked(masterState: any, localLinkTimestamp?: string): boolean {
   if (!masterState || (masterState.status !== 'unlinked' && masterState.lastAction !== 'unlink')) {
@@ -47,6 +50,52 @@ function isActuallyUnlinked(masterState: any, localLinkTimestamp?: string): bool
     : 0;
   const localMs = localLinkTimestamp ? new Date(localLinkTimestamp).getTime() : 0;
   return unlinkMs > localMs && unlinkMs > 0;
+}
+
+async function getOutboxWithDriveTombstones(
+  accessToken: string,
+  fileId: string
+): Promise<SyncOutboxData> {
+  const [outbox, master] = await Promise.all([
+    getOutboxData(),
+    getMasterSyncStateFromDrive(accessToken, fileId),
+  ]);
+  const tombstones = new Map<string, SyncOutboxData['deletedBooks'][number]>();
+  const driveState = master?.activeFileId === fileId ? master : null;
+  for (const tombstone of [...(driveState?.deletedBooks || []), ...outbox.deletedBooks]) {
+    const key = tombstone.identityKeys[0] || tombstone.bookId;
+    const previous = tombstones.get(key);
+    if (!previous || tombstone.timestamp > previous.timestamp) tombstones.set(key, tombstone);
+  }
+  return {
+    ...outbox,
+    deletedBooks: Array.from(tombstones.values()),
+    deletedBookIds: Array.from(new Set([
+      ...outbox.deletedBookIds,
+      ...Array.from(tombstones.values(), (tombstone) => tombstone.bookId),
+    ])),
+    deletedSettlementIds: Array.from(new Set([
+      ...outbox.deletedSettlementIds,
+      ...(driveState?.deletedSettlementIds || []),
+    ])),
+  };
+}
+
+async function persistOutboxTombstones(
+  accessToken: string,
+  fileId: string,
+  outbox: SyncOutboxData
+): Promise<void> {
+  if (outbox.deletedBooks.length === 0 && outbox.deletedSettlementIds.length === 0) return;
+  const fetchedMaster = await getMasterSyncStateFromDrive(accessToken, fileId);
+  const master = fetchedMaster?.activeFileId === fileId ? fetchedMaster : null;
+  const saved = await saveMasterSyncStateOnDrive(accessToken, {
+    ...master,
+    activeFileId: fileId,
+    deletedBooks: outbox.deletedBooks,
+    deletedSettlementIds: outbox.deletedSettlementIds,
+  });
+  if (!saved) throw new Error('Không thể lưu dấu xóa đồng bộ lên cấu hình Google Drive.');
 }
 
 
@@ -69,6 +118,7 @@ export interface SyncConflictState {
   localSettlements: SettlementAdjustment[];
   remoteBooks: SavingsBook[];
   remoteSettlements: SettlementAdjustment[];
+  bookConflicts?: BookConflict[];
 }
 
 const SYNC_CONFLICT_STORAGE_KEY = 'savings_sync_conflict_v1';
@@ -191,10 +241,36 @@ export function useDriveSync({
 }: UseDriveSyncProps) {
   const [isSyncingDrive, setIsSyncingDrive] = useState<boolean>(false);
   const [syncDriveStatus, setSyncDriveStatus] = useState<string | null>(null);
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isDeviceOnline, setIsDeviceOnline] = useState(
+    () => typeof navigator === 'undefined' || navigator.onLine
+  );
   const [syncConflict, setSyncConflict] = useState<SyncConflictState | null>(readSavedSyncConflict);
   const [initialSyncBaseline] = useState<SyncBaseline | null>(() => readSavedSyncBaseline(settings.googleSheetUrl));
   const [detectedDesyncHub, setDetectedDesyncHub] = useState<{ id: string; name: string; webViewLink?: string; linkedTimestamp?: string } | null>(null);
   const [isDriveTokenExpired, setIsDriveTokenExpired] = useState<boolean>(false);
+
+  useEffect(() => {
+    const refreshPendingCount = async () => {
+      const outbox = await getOutboxData();
+      setPendingSyncCount(outbox.pendingMutations.length);
+    };
+    const handleOutboxUpdated = () => {
+      refreshPendingCount().catch((err) => {
+        console.error('[Drive Sync] Could not refresh pending outbox count.', err);
+      });
+    };
+    const handleOnlineState = () => setIsDeviceOnline(navigator.onLine);
+    handleOutboxUpdated();
+    window.addEventListener('savings-outbox-updated', handleOutboxUpdated);
+    window.addEventListener('online', handleOnlineState);
+    window.addEventListener('offline', handleOnlineState);
+    return () => {
+      window.removeEventListener('savings-outbox-updated', handleOutboxUpdated);
+      window.removeEventListener('online', handleOnlineState);
+      window.removeEventListener('offline', handleOnlineState);
+    };
+  }, []);
 
   // Đảm bảo ở chế độ offline (hoặc người dùng ngoại tuyến), tuyệt đối không mở cảnh báo hết hạn token Drive
   useEffect(() => {
@@ -653,15 +729,39 @@ export function useDriveSync({
 
           if (localHasChanges && remoteHasChanges) {
             try {
-              const outbox = await getOutboxData();
+              const outbox = await getOutboxWithDriveTombstones(token, fileId);
               const mergeResult = mergeBooksAndSettlements({
                 localBooks,
                 remoteBooks,
                 localSettlements,
                 remoteSettlements,
                 deletedBookIds: outbox.deletedBookIds,
+                deletedBooks: outbox.deletedBooks,
+                deletedSettlementIds: outbox.deletedSettlementIds,
                 pendingMutations: outbox.pendingMutations,
+                baselineBooks,
+                baselineSettlements,
               });
+
+              if (mergeResult.conflicts.length > 0) {
+                const meta = await getRealGoogleDriveFileMetadata(token, fileId);
+                const conflict: SyncConflictState = {
+                  fileId,
+                  fileName: meta?.name || settingsRef.current?.googleSheetName || 'Google Sheets',
+                  remoteModifiedTime: meta?.modifiedTime || '',
+                  localBooks,
+                  localSettlements,
+                  remoteBooks,
+                  remoteSettlements,
+                  bookConflicts: mergeResult.conflicts,
+                };
+                hasUnresolvedSyncConflictRef.current = true;
+                setSyncConflict(conflict);
+                localStorage.setItem(SYNC_CONFLICT_STORAGE_KEY, JSON.stringify(conflict));
+                isInitialSyncDoneRef.current = true;
+                setSyncDriveStatus('⚠️ Có sổ được chỉnh sửa đồng thời. Vui lòng chọn dữ liệu cần giữ.');
+                return;
+              }
 
               isRemoteUpdateRef.current = true;
               remoteSyncCooldownUntilRef.current = Date.now() + 5000;
@@ -676,11 +776,17 @@ export function useDriveSync({
               lastSyncedBooksRef.current = mergeResult.mergedBooks;
               lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
 
-              if (mergeResult.hasChangesToPush && canPushToDrive(settingsRef.current?.currentRole || settings.currentRole)) {
-                await updateRealGoogleDriveFile(token, fileId, mergeResult.mergedBooks, mergeResult.mergedSettlements);
-                await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
-                await acknowledgeDeletedBooks(outbox.deletedBookIds);
+              const canWriteMergedData = canPushToDrive(settingsRef.current?.currentRole || settings.currentRole);
+              if (mergeResult.hasChangesToPush && canWriteMergedData) {
+                const pushSucceeded = await updateRealGoogleDriveFile(token, fileId, mergeResult.mergedBooks, mergeResult.mergedSettlements);
+                if (!pushSucceeded) throw new Error('Google Drive không xác nhận đã lưu bản hợp nhất.');
+              } else if (mergeResult.hasChangesToPush) {
+                throw new Error('Tài khoản chỉ có quyền xem; giữ nguyên thay đổi trong outbox.');
               }
+              await persistOutboxTombstones(token, fileId, outbox);
+              await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
+              await acknowledgeDeletedBooks(outbox.deletedBooks);
+              await acknowledgeDeletedSettlements(outbox.deletedSettlementIds);
 
               const meta = await getRealGoogleDriveFileMetadata(token, fileId);
               lastCheckedModifiedTimeRef.current = meta?.modifiedTime || null;
@@ -938,7 +1044,6 @@ export function useDriveSync({
         console.info('[Smart Sync] Thành viên với vai trò VIEWER (Chỉ xem) không thực hiện đẩy dữ liệu lên Google Drive.');
         return;
       }
-
       const match =
         settings.googleSheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/) ||
         settings.googleSheetUrl.match(/id=([a-zA-Z0-9-_]+)/);
@@ -948,7 +1053,6 @@ export function useDriveSync({
         ? settings.googleSheetUrl
         : null;
       if (!fileId) return;
-
       if (hasUnresolvedSyncConflictRef.current) {
         if (syncConflict?.fileId === fileId) {
           const refreshedConflict = {
@@ -990,6 +1094,7 @@ export function useDriveSync({
           return;
         }
       }
+      const outboxSnapshot = await getOutboxWithDriveTombstones(token, fileId);
 
       isPushingRef.current = true;
       try {
@@ -1063,17 +1168,26 @@ export function useDriveSync({
             !settlementsHaveSameSheetData(remoteSettlements, baselineSettlements);
 
           if (dataChangedRemotely) {
+            let detectedBookConflicts: BookConflict[] = [];
             try {
-              const outbox = await getOutboxData();
+              const outbox = await getOutboxWithDriveTombstones(token, fileId);
               const mergeResult = mergeBooksAndSettlements({
                 localBooks: updatedBooks,
                 remoteBooks,
                 localSettlements: currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [],
                 remoteSettlements,
                 deletedBookIds: outbox.deletedBookIds,
+                deletedBooks: outbox.deletedBooks,
+                deletedSettlementIds: outbox.deletedSettlementIds,
                 pendingMutations: outbox.pendingMutations,
+                baselineBooks,
+                baselineSettlements,
               });
+              detectedBookConflicts = mergeResult.conflicts;
 
+              if (mergeResult.conflicts.length > 0) {
+                throw new Error('Cần chọn bản giữ cho các trường đã sửa đồng thời.');
+              }
               const pushSuccess = await updateRealGoogleDriveFile(
                 token,
                 fileId,
@@ -1090,8 +1204,10 @@ export function useDriveSync({
                 applyMasterSettlements(mergeResult.mergedSettlements);
                 saveSavingsBooksToFile(mergeResult.mergedBooks).catch(() => {});
                 saveSettlementsToFile(mergeResult.mergedSettlements).catch(() => {});
+                await persistOutboxTombstones(token, fileId, outbox);
                 await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
-                await acknowledgeDeletedBooks(outbox.deletedBookIds);
+                await acknowledgeDeletedBooks(outbox.deletedBooks);
+                await acknowledgeDeletedSettlements(outbox.deletedSettlementIds);
 
                 lastSyncedBooksRef.current = mergeResult.mergedBooks;
                 lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
@@ -1132,6 +1248,7 @@ export function useDriveSync({
               localSettlements: currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [],
               remoteBooks,
               remoteSettlements,
+              bookConflicts: detectedBookConflicts,
             };
             hasUnresolvedSyncConflictRef.current = true;
             needsPushRef.current = false;
@@ -1158,17 +1275,35 @@ export function useDriveSync({
           });
         }
 
+        const deletedBookIds = new Set(outboxSnapshot.deletedBookIds);
+        const deletedBookIdentities = new Set(outboxSnapshot.deletedBooks.flatMap((item) => item.identityKeys));
+        const booksToPush = updatedBooks.filter(
+          (book) =>
+            !deletedBookIds.has(book.id) &&
+            !getBookIdentityKeys(book).some((key) => deletedBookIdentities.has(key))
+        );
         const adjs = currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [];
-        const success = await updateRealGoogleDriveFile(token, fileId, updatedBooks, adjs);
+        const settlementsToPush = adjs.filter(
+          (adjustment) => !outboxSnapshot.deletedSettlementIds.includes(adjustment.id)
+        );
+        const success = await updateRealGoogleDriveFile(token, fileId, booksToPush, settlementsToPush);
         if (success) {
+          await persistOutboxTombstones(token, fileId, outboxSnapshot);
+          await acknowledgeSyncedMutations(outboxSnapshot.pendingMutations.map((mutation) => mutation.id));
+          await acknowledgeDeletedBooks(outboxSnapshot.deletedBooks);
+          await acknowledgeDeletedSettlements(outboxSnapshot.deletedSettlementIds);
           lastLocalPushTimeRef.current = Date.now();
+          setBooks(booksToPush);
+          if (setSettlementAdjustments && settlementsToPush.length !== adjs.length) {
+            setSettlementAdjustments(settlementsToPush);
+          }
           lastSyncedBooksRef.current = sortAndReindexBooks(
-            updatedBooks.filter((book) => book.status !== 'settled').map((book) => ({
+            booksToPush.filter((book) => book.status !== 'settled').map((book) => ({
               ...book,
               status: 'active' as BookStatus,
             }))
           );
-          lastSyncedSettlementsRef.current = deduplicateSettlementAdjustments(adjs);
+          lastSyncedSettlementsRef.current = deduplicateSettlementAdjustments(settlementsToPush);
           const nowStr = new Date().toLocaleString('vi-VN');
           setSettings((prev) => ({ ...prev, lastSyncTime: nowStr }));
           try {
@@ -2018,7 +2153,10 @@ export function useDriveSync({
   }, [currentUser, setSettings, clearExpiredNoticeTimer]);
 
   const resolveSyncConflict = useCallback(
-    async (choice: 'remote' | 'local' | 'merge') => {
+    async (
+      choice: 'remote' | 'local' | 'merge',
+      conflictChoices: Record<string, 'local' | 'remote'> = {}
+    ) => {
       if (isResolvingSyncConflictRef.current || isSyncingRef.current || isPushingRef.current) return;
       isResolvingSyncConflictRef.current = true;
       setIsSyncingDrive(true);
@@ -2060,15 +2198,24 @@ export function useDriveSync({
       }
 
       if (choice === 'merge') {
-        const outbox = await getOutboxData();
+        const outbox = await getOutboxWithDriveTombstones(token, conflict.fileId);
         const mergeResult = mergeBooksAndSettlements({
           localBooks: conflict.localBooks,
           remoteBooks: conflict.remoteBooks,
           localSettlements: conflict.localSettlements,
           remoteSettlements: conflict.remoteSettlements,
           deletedBookIds: outbox.deletedBookIds,
+          deletedBooks: outbox.deletedBooks,
+          deletedSettlementIds: outbox.deletedSettlementIds,
           pendingMutations: outbox.pendingMutations,
+          baselineBooks: lastSyncedBooksRef.current,
+          baselineSettlements: lastSyncedSettlementsRef.current,
+          conflictChoices,
         });
+        if (mergeResult.conflicts.length > 0) {
+          setSyncDriveStatus('⚠️ Hãy chọn bản cần giữ cho từng sổ bị sửa đồng thời.');
+          return;
+        }
 
         const success = await updateRealGoogleDriveFile(
           token,
@@ -2088,8 +2235,10 @@ export function useDriveSync({
         applyMasterSettlements(mergeResult.mergedSettlements);
         saveSavingsBooksToFile(mergeResult.mergedBooks).catch(() => {});
         saveSettlementsToFile(mergeResult.mergedSettlements).catch(() => {});
+        await persistOutboxTombstones(token, conflict.fileId, outbox);
         await acknowledgeSyncedMutations(outbox.pendingMutations.map((m) => m.id));
-        await acknowledgeDeletedBooks(outbox.deletedBookIds);
+        await acknowledgeDeletedBooks(outbox.deletedBooks);
+        await acknowledgeDeletedSettlements(outbox.deletedSettlementIds);
 
         lastSyncedBooksRef.current = mergeResult.mergedBooks;
         lastSyncedSettlementsRef.current = mergeResult.mergedSettlements;
@@ -2327,6 +2476,8 @@ export function useDriveSync({
     setIsSyncingDrive,
     isDriveTokenExpired,
     setIsDriveTokenExpired,
+    pendingSyncCount,
+    isDeviceOnline,
     renewTokenAndSync,
     syncBooksFromDrive,
     pushBooksToDrive,

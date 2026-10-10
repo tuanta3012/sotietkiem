@@ -129,6 +129,7 @@ export default function App() {
   });
 
   const [showSplash, setShowSplash] = useState<boolean>(true);
+  const [splashMinimumElapsed, setSplashMinimumElapsed] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
   const [isLogoutWarningModalOpen, setIsLogoutWarningModalOpen] = useState<boolean>(false);
   const [showFileDeletedRecovery, setShowFileDeletedRecovery] = useState<boolean>(false);
@@ -266,8 +267,8 @@ export default function App() {
   // Timer hiển thị Splash Screen thương hiệu lướt nhanh (~1.1 giây) rồi vào thẳng màn hình chính
   useEffect(() => {
     const splashTimer = setTimeout(() => {
-      setShowSplash(false);
-    }, 1500);
+      setSplashMinimumElapsed(true);
+    }, 1100);
     return () => clearTimeout(splashTimer);
   }, []);
 
@@ -553,11 +554,16 @@ export default function App() {
     handleImportBooks,
     handleDeleteSettlementAdjustment,
     handleDeleteAllAppData,
+    isLoadingStorage,
   } = useSavingsBooks({
     currentRole: settings.currentRole,
     onPushToDrive: (b, a) => pushBooksToDriveRef.current?.(b, a),
     onShowSyncStatus: (msg) => showSyncStatusRef.current?.(msg),
   });
+
+  useEffect(() => {
+    if (splashMinimumElapsed && !isLoadingStorage) setShowSplash(false);
+  }, [splashMinimumElapsed, isLoadingStorage]);
 
   // Google Drive 2-way sync hook
   const {
@@ -567,6 +573,8 @@ export default function App() {
     setIsSyncingDrive,
     isDriveTokenExpired,
     setIsDriveTokenExpired,
+    pendingSyncCount,
+    isDeviceOnline,
     renewTokenAndSync,
     syncBooksFromDrive,
     pushBooksToDrive,
@@ -1231,6 +1239,8 @@ export default function App() {
           currentUser={currentUser}
           isSyncingDrive={isSyncingDrive}
           syncDriveStatus={syncDriveStatus}
+          pendingSyncCount={pendingSyncCount}
+          isDeviceOnline={isDeviceOnline}
           onLoginGoogle={handleLoginGoogle}
           isLoggingInGoogle={isLoggingInGoogle}
           onLogout={handleRequestLogout}
@@ -1285,6 +1295,8 @@ export default function App() {
                       sortedBanksInfo={sortedBanksInfo}
                       isSyncingDrive={isSyncingDrive}
                       syncDriveStatus={syncDriveStatus}
+                      pendingSyncCount={pendingSyncCount}
+                      isDeviceOnline={isDeviceOnline}
                       onOpenSyncModal={() => setIsSyncModalOpen(true)}
                       onOpenAddModal={() => {
                         setBookToEdit(null);
@@ -1354,6 +1366,8 @@ export default function App() {
                   sortedBanksInfo={sortedBanksInfo}
                   isSyncingDrive={isSyncingDrive}
                   syncDriveStatus={syncDriveStatus}
+                  pendingSyncCount={pendingSyncCount}
+                  isDeviceOnline={isDeviceOnline}
                   onOpenSyncModal={() => setIsSyncModalOpen(true)}
                   onOpenAddModal={() => {
                     setBookToEdit(null);
@@ -1461,6 +1475,7 @@ export default function App() {
           status={syncDriveStatus}
           onChooseRemote={() => { void resolveSyncConflict('remote'); }}
           onChooseLocal={() => { void resolveSyncConflict('local'); }}
+          onChooseMerge={(choices) => { void resolveSyncConflict('merge', choices); }}
         />
 
         {/* Footer */}

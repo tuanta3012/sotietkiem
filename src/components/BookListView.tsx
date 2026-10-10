@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Check,
   AlertCircle,
+  WifiOff,
 } from 'lucide-react';
 
 interface BookListViewProps {
@@ -42,6 +43,8 @@ interface BookListViewProps {
   };
   isSyncingDrive: boolean;
   syncDriveStatus?: string | null;
+  pendingSyncCount: number;
+  isDeviceOnline: boolean;
   onOpenSyncModal: () => void;
   onOpenAddModal: () => void;
   onOpenManageBanks: () => void;
@@ -78,6 +81,8 @@ export const BookListView: React.FC<BookListViewProps> = ({
   sortedBanksInfo,
   isSyncingDrive,
   syncDriveStatus,
+  pendingSyncCount,
+  isDeviceOnline,
   onOpenSyncModal,
   onOpenAddModal,
   onOpenManageBanks,
@@ -185,17 +190,28 @@ export const BookListView: React.FC<BookListViewProps> = ({
             className={`flex-1 sm:flex-none flex items-center justify-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap border shadow-2xs ${
               isSyncingDrive || briefStatus?.type === 'syncing'
                 ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 ring-2 ring-amber-300/40 animate-pulse'
-                : briefStatus?.type === 'success'
+                : briefStatus?.type === 'success' && pendingSyncCount === 0 && isDeviceOnline
                 ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-xs'
                 : briefStatus?.type === 'error'
                 ? 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-300 ring-1 ring-rose-300/40'
                 : 'bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 text-emerald-800 border-emerald-300'
             }`}
             title={
-              briefStatus
+              !isDeviceOnline
+                ? `Ngoại tuyến${pendingSyncCount > 0 ? ` · ${pendingSyncCount} thao tác chờ đồng bộ` : ''}`
+                : pendingSyncCount > 0
+                ? `${pendingSyncCount} thao tác chờ đồng bộ`
+                : briefStatus
                 ? `Trạng thái: ${briefStatus.text}`
                 : settings.googleSheetName
                 ? `File: ${settings.googleSheetName}`
+                : 'Đồng bộ Google Drive'
+            }
+            aria-label={
+              !isDeviceOnline
+                ? `Ngoại tuyến, ${pendingSyncCount} thao tác chờ đồng bộ`
+                : pendingSyncCount > 0
+                ? `${pendingSyncCount} thao tác chờ đồng bộ`
                 : 'Đồng bộ Google Drive'
             }
           >
@@ -204,7 +220,7 @@ export const BookListView: React.FC<BookListViewProps> = ({
                 <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />
                 <span>Đang đồng bộ...</span>
               </>
-            ) : briefStatus?.type === 'success' ? (
+            ) : briefStatus?.type === 'success' && pendingSyncCount === 0 && isDeviceOnline ? (
               <>
                 <Check className="w-3.5 h-3.5 text-white shrink-0" />
                 <span>{briefStatus.text}</span>
@@ -213,6 +229,21 @@ export const BookListView: React.FC<BookListViewProps> = ({
               <>
                 <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
                 <span>{briefStatus.text}</span>
+              </>
+            ) : !isDeviceOnline ? (
+              <>
+                <WifiOff className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Ngoại tuyến</span>
+                {pendingSyncCount > 0 && (
+                  <span className="shrink-0 rounded-full bg-amber-200 px-1.5 text-[10px]">
+                    {pendingSyncCount}
+                  </span>
+                )}
+              </>
+            ) : pendingSyncCount > 0 ? (
+              <>
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{pendingSyncCount} chờ đồng bộ</span>
               </>
             ) : (
               <>

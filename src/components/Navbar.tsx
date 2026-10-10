@@ -75,6 +75,8 @@ interface NavbarProps {
   isLoggingInGoogle?: boolean;
   isSyncingDrive?: boolean;
   syncDriveStatus?: string | null;
+  pendingSyncCount: number;
+  isDeviceOnline: boolean;
   onTriggerManualCheckUpdate?: () => void;
   currentVersion?: string;
 }
@@ -102,6 +104,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   isLoggingInGoogle = false,
   isSyncingDrive,
   syncDriveStatus,
+  pendingSyncCount,
+  isDeviceOnline,
   onTriggerManualCheckUpdate,
   currentVersion = '1.0.0',
 }) => {
@@ -287,10 +291,12 @@ export const Navbar: React.FC<NavbarProps> = ({
                 className={`hidden md:flex items-center space-x-1.5 px-3 py-1.5 sm:py-2 rounded-xl text-xs font-semibold border shadow-xs transition-all cursor-pointer ${
                   isSyncingDrive || navBriefStatus?.type === 'syncing'
                     ? 'bg-amber-950/60 border-amber-500/60 text-amber-300 ring-1 ring-amber-400/40 animate-pulse'
-                    : navBriefStatus?.type === 'success'
+                    : navBriefStatus?.type === 'success' && pendingSyncCount === 0 && isDeviceOnline
                     ? 'bg-emerald-600 border-emerald-500 text-white font-bold'
                     : navBriefStatus?.type === 'error'
                     ? 'bg-rose-950/60 border-rose-500/60 text-rose-300'
+                    : !isDeviceOnline || pendingSyncCount > 0
+                    ? 'bg-amber-950/60 border-amber-500/60 text-amber-300'
                     : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                 }`}
               >
@@ -299,7 +305,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     <RefreshCw className="w-3.5 h-3.5 text-amber-400 animate-spin" />
                     <span className="text-amber-300">Đang đồng bộ...</span>
                   </>
-                ) : navBriefStatus?.type === 'success' ? (
+                ) : navBriefStatus?.type === 'success' && pendingSyncCount === 0 && isDeviceOnline ? (
                   <>
                     <Check className="w-3.5 h-3.5 text-white" />
                     <span>{navBriefStatus.text}</span>
@@ -308,6 +314,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <>
                     <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
                     <span>{navBriefStatus.text}</span>
+                  </>
+                ) : !isDeviceOnline ? (
+                  <>
+                    <WifiOff className="w-3.5 h-3.5 text-amber-300" />
+                    <span>Ngoại tuyến{pendingSyncCount > 0 ? ` · ${pendingSyncCount} chờ` : ''}</span>
+                  </>
+                ) : pendingSyncCount > 0 ? (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-300" />
+                    <span>{pendingSyncCount} chờ</span>
                   </>
                 ) : (
                   <>
@@ -438,17 +454,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                               (Đang đồng bộ...)
                             </span>
                           )}
-                          {!isSyncingDrive && navBriefStatus && (
+                          {!isSyncingDrive && navBriefStatus?.type === 'error' && (
                             <span className={`text-[10px] font-normal ${navBriefStatus.type === 'error' ? 'text-rose-400' : 'text-emerald-400'}`}>
                               ({navBriefStatus.text})
                             </span>
                           )}
+                          {!isSyncingDrive && navBriefStatus?.type !== 'error' && !isDeviceOnline && (
+                            <span className="text-[10px] font-normal text-amber-300">Ngoại tuyến</span>
+                          )}
+                          {!isSyncingDrive && navBriefStatus?.type !== 'error' && isDeviceOnline && pendingSyncCount > 0 && (
+                            <span className="text-[10px] font-normal text-amber-300">{pendingSyncCount} chờ</span>
+                          )}
                         </div>
-                        <p className="text-[10px] text-slate-400">
-                          {settings.lastSyncTime
-                            ? `Gần nhất: ${settings.lastSyncTime}`
-                            : 'Gần nhất: Chưa đồng bộ'}
-                        </p>
                       </div>
                     </button>
 

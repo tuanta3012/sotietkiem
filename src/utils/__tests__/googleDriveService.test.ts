@@ -4,6 +4,7 @@ import { STANDARDIZED_SHEET_HEADERS } from '../dataSchema';
 import {
   autoDiscoverLatestCentralHub,
   downloadRealGoogleDriveFile,
+  getNativeTokenExpiresAt,
   listAppCreatedDriveFiles,
 } from '../googleDriveService';
 
@@ -22,6 +23,24 @@ function makeValues() {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe('native Google token expiry', () => {
+  it('uses the native absolute expiry when it is present', () => {
+    expect(getNativeTokenExpiresAt({ expires: 1_900_000_000 })).toBe(1_900_000_000_000);
+  });
+
+  it('derives expiry from the native remaining lifetime', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+
+    expect(getNativeTokenExpiresAt({ expires_in: 3600 })).toBe(1_800_003_600_000);
+    nowSpy.mockRestore();
+  });
+
+  it('rejects missing or invalid native expiry values', () => {
+    expect(getNativeTokenExpiresAt({})).toBeNull();
+    expect(getNativeTokenExpiresAt({ expires: 'invalid', expiresIn: -1 })).toBeNull();
+  });
 });
 
 describe('shared Drive file access', () => {

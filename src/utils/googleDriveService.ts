@@ -67,6 +67,7 @@ const REFRESH_TOKEN_KEY = 'google_drive_refresh_token_v4';
 const ID_TOKEN_KEY = 'google_drive_id_token_v4';
 const USER_PROFILE_KEY = 'google_drive_user_profile_v4';
 const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
+const TOKEN_EXPIRY_SAFETY_WINDOW_MS = 5 * 60 * 1000;
 
 let cachedAccessToken: string | null = null;
 let cachedAccessTokenExpiresAt: number | null = null;
@@ -77,6 +78,17 @@ let isSigningIn = false;
 
 export const STK_APP_ID = 'com.tietkiemgiadinh.app';
 export const STK_APP_ID_KEY = 'STK_APP_ID';
+
+type NativeGoogleSignInResult = Awaited<ReturnType<typeof GoogleAuth.signIn>> & {
+  authentication: Awaited<ReturnType<typeof GoogleAuth.signIn>>['authentication'] & {
+    expires?: unknown;
+    expires_in?: unknown;
+  };
+  accessToken?: string;
+  idToken?: string;
+  refreshToken?: string;
+  displayName?: string;
+};
 
 function createDriveFileUnavailableError(): Error {
   return new Error(
@@ -124,15 +136,20 @@ export function getGoogleUserProfile(): any | null {
 export function isGoogleTokenValid(): boolean {
   const token = getGoogleAccessToken();
   if (!token) return false;
-  return cachedAccessTokenExpiresAt === null || Date.now() < cachedAccessTokenExpiresAt - 10000;
+  return cachedAccessTokenExpiresAt !== null &&
+    Number.isFinite(cachedAccessTokenExpiresAt) &&
+    Date.now() < cachedAccessTokenExpiresAt - TOKEN_EXPIRY_SAFETY_WINDOW_MS;
 }
 
 /**
  * Set or clear the in-memory access token. Persistence is handled by saveGoogleAuthSession.
  */
 export function setGoogleAccessToken(token: string | null, expiresAtMs?: number) {
+  const nextExpiresAt = token
+    ? expiresAtMs ?? (token === cachedAccessToken ? cachedAccessTokenExpiresAt : null)
+    : null;
   cachedAccessToken = token;
-  cachedAccessTokenExpiresAt = token ? expiresAtMs || Date.now() + 3500 * 1000 : null;
+  cachedAccessTokenExpiresAt = nextExpiresAt;
 
   try {
     localStorage.removeItem(TOKEN_KEY);
@@ -234,7 +251,11 @@ export async function restoreGoogleAuthSession(): Promise<boolean> {
 
     if (token) {
       cachedAccessToken = token;
-      cachedAccessTokenExpiresAt = expiresAt ? Number(expiresAt) : null;
+      const parsedExpiresAt = expiresAt ? Number(expiresAt) : null;
+      cachedAccessTokenExpiresAt =
+        parsedExpiresAt !== null && Number.isFinite(parsedExpiresAt) && parsedExpiresAt > 0
+          ? parsedExpiresAt
+          : null;
       cachedRefreshToken = refreshToken;
       cachedIdToken = idToken;
       cachedUserProfile = userProfile ? JSON.parse(userProfile) : null;
@@ -252,6 +273,27 @@ export async function restoreGoogleAuthSession(): Promise<boolean> {
 }
 
 let isGoogleAuthInitialized = false;
+let silentRefreshInFlight: Promise<string | null> | null = null;
+
+export function getNativeTokenExpiresAt(authentication: {
+  expires?: unknown;
+  expiresIn?: unknown;
+  expires_in?: unknown;
+  accessToken?: string;
+  idToken?: string;
+}): number | null {
+  const expires = Number(authentication.expires);
+  if (Number.isFinite(expires) && expires > 0) {
+    return expires * 1000;
+  }
+
+  const expiresIn = Number(authentication.expiresIn ?? authentication.expires_in);
+  if (Number.isFinite(expiresIn) && expiresIn > 0) {
+    return Date.now() + expiresIn * 1000;
+  }
+
+  return null;
+}
 
 /**
  * Ensures GoogleAuth native plugin is initialized exactly once on mobile platforms.
@@ -259,9 +301,8 @@ let isGoogleAuthInitialized = false;
 export async function ensureGoogleAuthInitialized(): Promise<void> {
   if (isGoogleAuthInitialized || !Capacitor.isNativePlatform()) return;
   try {
-    await (GoogleAuth as any).initialize({
+    await GoogleAuth.initialize({
       clientId: firebaseConfig.oAuthClientId,
-      serverClientId: firebaseConfig.oAuthClientId,
       scopes: [
         'email',
         'profile',
@@ -286,40 +327,61 @@ export async function trySilentRefresh(): Promise<string | null> {
     return getGoogleAccessToken();
   }
 
+  return refreshNativeGoogleAccessToken();
+}
+
+/**
+ * Refresh the native access token even if the cached token has not expired yet.
+ */
+export async function refreshNativeGoogleAccessToken(): Promise<string | null> {
   // Prevent overlapping auth requests
   if (isSigningIn) {
     console.info('[Silent Auth] Tiến trình đăng nhập khác đang chạy, bỏ qua silent refresh.');
     return null;
   }
 
+  if (silentRefreshInFlight) return silentRefreshInFlight;
+
   // 1. Silent Refresh on Native Platforms (Android/iOS)
   if (Capacitor.isNativePlatform()) {
-    console.info('[Silent Auth] Đang gia hạn phiên làm việc ngầm trên Native...');
-    try {
-      await ensureGoogleAuthInitialized();
-
-      // Try silent refresh using offline refresh token with a strict 8-second timeout to prevent native hangs
+    silentRefreshInFlight = (async () => {
+      console.info('[Silent Auth] Đang gia hạn phiên làm việc ngầm trên Native...');
       try {
+        await ensureGoogleAuthInitialized();
         const refreshPromise = GoogleAuth.refresh();
-        const timeoutPromise = new Promise<any>((_, reject) =>
-          setTimeout(() => reject(new Error('TIMEOUT_REFRESH: Quá thời gian gia hạn phiên Google (8 giây).')), 8000)
-        );
-        const refreshResult = await Promise.race([refreshPromise, timeoutPromise]);
-        if (refreshResult && refreshResult.accessToken) {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(
+              () => reject(new Error('TIMEOUT_REFRESH: Quá thời gian gia hạn phiên Google (8 giây).')),
+              8000
+            );
+          });
+          const refreshResult = await Promise.race([refreshPromise, timeoutPromise]);
+          const expiresAt = getNativeTokenExpiresAt(refreshResult);
+          if (!refreshResult.accessToken || expiresAt === null) {
+            console.warn('[Silent Auth] Native refresh omitted its access token or expiry.');
+            return null;
+          }
           console.info('[Silent Auth] Gia hạn thành công bằng GoogleAuth.refresh()');
-          const expiresAt = Date.now() + 3500 * 1000;
           await saveGoogleAuthSession({
             accessToken: refreshResult.accessToken,
             idToken: refreshResult.idToken || undefined,
             expiresAt,
           });
           return refreshResult.accessToken;
+        } finally {
+          if (timeoutId) clearTimeout(timeoutId);
         }
       } catch (refreshErr) {
         console.warn('[Silent Auth] GoogleAuth.refresh() failed or timed out:', refreshErr);
+        return null;
       }
-    } catch (nativeErr) {
-      console.warn('[Silent Auth] Native silent refresh failed:', nativeErr);
+    })();
+    try {
+      return await silentRefreshInFlight;
+    } finally {
+      silentRefreshInFlight = null;
     }
   }
 
@@ -464,7 +526,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
       console.info('[Google Sign-In] Khởi chạy GoogleAuth trên thiết bị Native App...');
       await ensureGoogleAuthInitialized();
 
-      let nativeResult: any;
+      let nativeResult: NativeGoogleSignInResult;
       try {
         // DO NOT call GoogleAuth.signOut() here!
         // Calling signOut() synchronously right before signIn() interrupts native GoogleSignInClient state on Android,
@@ -481,7 +543,7 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
             25000
           )
         );
-        nativeResult = await Promise.race([signInPromise, timeoutPromise]);
+        nativeResult = (await Promise.race([signInPromise, timeoutPromise])) as NativeGoogleSignInResult;
       } catch (signInErr: any) {
         console.error('[Google Sign-In Native Error]', signInErr);
         const rawMsg = String(signInErr?.message || signInErr || '');
@@ -501,20 +563,22 @@ export const signInWithGoogle = async (autoFallbackToRedirect = false): Promise<
         throw new Error(rawMsg || 'Đăng nhập Google trên thiết bị Android không thành công.');
       }
 
-      const idToken = nativeResult.authentication?.idToken || (nativeResult as any).idToken;
-      let accessToken = nativeResult.authentication?.accessToken || (nativeResult as any).accessToken;
-      const refreshToken = nativeResult.authentication?.refreshToken || (nativeResult as any).refreshToken;
+      const authentication = nativeResult.authentication;
+      const idToken = authentication.idToken || nativeResult.idToken;
+      const accessToken = authentication.accessToken || nativeResult.accessToken;
+      const refreshToken = authentication.refreshToken || nativeResult.refreshToken;
 
-      if (!idToken && !accessToken) {
-        throw new Error('Không nhận được ID Token / Access Token từ Google Authentication gốc.');
+      if (!idToken) {
+        throw new Error('Google không trả về ID Token hợp lệ. Vui lòng thử đăng nhập lại.');
+      }
+      if (!accessToken || accessToken === idToken) {
+        throw new Error('Google không cấp Access Token riêng cho Google Drive. Vui lòng đăng nhập lại và cấp quyền Drive.');
       }
 
-      // Nếu native Google Client không trả về accessToken riêng biệt, sử dụng idToken làm token truy cập
-      if (!accessToken) {
-        accessToken = idToken;
+      const expiresAt = getNativeTokenExpiresAt(authentication);
+      if (expiresAt === null) {
+        throw new Error('Google không trả về thời hạn Access Token. Vui lòng cập nhật ứng dụng và đăng nhập lại.');
       }
-
-      const expiresAt = Date.now() + 3500 * 1000;
       await saveGoogleAuthSession({
         accessToken,
         idToken: idToken || undefined,
@@ -709,7 +773,7 @@ export async function signOutGoogle(): Promise<void> {
   if (Capacitor.isNativePlatform()) {
     try {
       await ensureGoogleAuthInitialized();
-      await (GoogleAuth as any).signOut();
+      await GoogleAuth.signOut();
     } catch (err) {
       console.warn('[GoogleAuth] Native signOut safe warning:', err);
     }
@@ -720,7 +784,13 @@ export async function signOutGoogle(): Promise<void> {
  * A highly robust fetch wrapper that handles transient network dropouts with exponential backoff retries.
  * It also translates CORS/Adblock/Shield-blocked requests into crystal clear troubleshooting steps.
  */
-async function fetchWithRetry(url: string | URL, options?: RequestInit, retries = 3, delay = 1000): Promise<Response> {
+async function fetchWithRetry(
+  url: string | URL,
+  options?: RequestInit,
+  retries = 3,
+  delay = 1000,
+  authRetry = true
+): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   const mergedOptions: RequestInit = {
@@ -731,6 +801,28 @@ async function fetchWithRetry(url: string | URL, options?: RequestInit, retries 
   try {
     const response = await fetch(url.toString(), mergedOptions);
     clearTimeout(timeoutId);
+    const headers = new Headers(options?.headers);
+    const authorization = headers.get('Authorization');
+    const requestToken = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (
+      response.status === 401 &&
+      authRetry &&
+      requestToken &&
+      requestToken === getGoogleAccessToken() &&
+      !(typeof ReadableStream !== 'undefined' && options?.body instanceof ReadableStream)
+    ) {
+      const refreshedToken = await refreshNativeGoogleAccessToken();
+      if (refreshedToken) {
+        headers.set('Authorization', `Bearer ${refreshedToken}`);
+        return fetchWithRetry(
+          url,
+          { ...options, headers },
+          retries,
+          delay,
+          false
+        );
+      }
+    }
     return response;
   } catch (error: any) {
     clearTimeout(timeoutId);
@@ -746,7 +838,7 @@ async function fetchWithRetry(url: string | URL, options?: RequestInit, retries 
       if (retries > 0) {
         console.warn(`Fetch failed for ${url}. Retrying in ${delay}ms... (${retries} retries left). Error: ${error?.message}`);
         await new Promise((resolve) => setTimeout(resolve, delay));
-        return fetchWithRetry(url, options, retries - 1, delay * 2);
+        return fetchWithRetry(url, options, retries - 1, delay * 2, authRetry);
       }
       
       // If it fails after all retries, analyze if it is likely blocked by an Adblocker or sandbox iframe
@@ -2318,6 +2410,10 @@ export async function readMasterSyncStateFromGoogleSheet(
           updatedAtVi: metadataParsed.updatedAtVi || '',
           members: membersList,
           settlements: [],
+          deletedBooks: Array.isArray(metadataParsed.deletedBooks) ? metadataParsed.deletedBooks : [],
+          deletedSettlementIds: Array.isArray(metadataParsed.deletedSettlementIds)
+            ? metadataParsed.deletedSettlementIds
+            : [],
           banksConfig: banksConfigList || getAllBanks(),
           auditLogs: auditLogsList || getSyncAuditLogs(),
         };
@@ -2384,6 +2480,8 @@ export async function saveMasterSyncStateToGoogleSheet(
       linkedAccountEmail: state.linkedAccountEmail || '',
       linkedTimestamp: state.linkedTimestamp || '',
       linkedLocalTimeVi: state.linkedLocalTimeVi || '',
+      deletedBooks: state.deletedBooks || [],
+      deletedSettlementIds: state.deletedSettlementIds || [],
       updatedAt: nowIso,
       updatedAtVi: nowVi,
       appId: STK_APP_ID,
@@ -2611,10 +2709,13 @@ export async function saveMasterSyncStateOnDrive(
     // AN TOÀN TUYỆT ĐỐI: Trước khi ghi đè, đọc danh sách thành viên hiện tại trên remote Google Sheet (nếu có)
     // để tránh việc thiết bị phụ (chưa tải đủ member list) ghi đè danh sách thành viên thành rỗng [].
     let remoteMembers: WorkspaceMember[] = [];
+    let remoteMaster: MasterSyncState | null = null;
     if (accessToken && state.activeFileId) {
       try {
-        const remoteMaster = await readMasterSyncStateFromGoogleSheet(accessToken, state.activeFileId);
-        if (remoteMaster?.members && remoteMaster.members.length > 0) {
+        remoteMaster = await getMasterSyncStateFromDrive(accessToken, state.activeFileId);
+        if (remoteMaster?.activeFileId !== state.activeFileId) {
+          remoteMaster = null;
+        } else if (remoteMaster.members && remoteMaster.members.length > 0) {
           remoteMembers = remoteMaster.members;
         }
       } catch {}
@@ -2647,6 +2748,15 @@ export async function saveMasterSyncStateOnDrive(
         ? existingLocal.auditLogs
         : getSyncAuditLogs();
 
+    const deletedBooksByIdentity = new Map<string, NonNullable<MasterSyncState['deletedBooks']>[number]>();
+    for (const tombstone of [...(remoteMaster?.deletedBooks || []), ...(state.deletedBooks || [])]) {
+      const key = tombstone.identityKeys[0] || tombstone.bookId;
+      const previous = deletedBooksByIdentity.get(key);
+      if (!previous || tombstone.timestamp > previous.timestamp) {
+        deletedBooksByIdentity.set(key, tombstone);
+      }
+    }
+
     const preparedState: MasterSyncState = {
       ...existingLocal,
       ...state,
@@ -2654,6 +2764,11 @@ export async function saveMasterSyncStateOnDrive(
       dataSchemaVersion: CURRENT_SHEET_DATA_SCHEMA_VERSION,
       adminEmail: mergedAdminEmail,
       members: mergedMembers,
+      deletedBooks: Array.from(deletedBooksByIdentity.values()),
+      deletedSettlementIds: Array.from(new Set([
+        ...(remoteMaster?.deletedSettlementIds || []),
+        ...(state.deletedSettlementIds || []),
+      ])),
       banksConfig: mergedBanksConfig,
       auditLogs: mergedAuditLogs,
       linkedTimestamp: linkedIso,
@@ -2696,7 +2811,12 @@ export async function saveMasterSyncStateOnDrive(
       }
 
       // 3. Ghi trực tiếp vào tab __CONFIG__ của Google Sheet
-      await saveMasterSyncStateToGoogleSheet(accessToken, preparedState.activeFileId, preparedState);
+      const configSaved = await saveMasterSyncStateToGoogleSheet(
+        accessToken,
+        preparedState.activeFileId,
+        preparedState
+      );
+      if (!configSaved) return null;
 
       // 4. Đồng bộ quyền truy cập Google Drive cho danh sách thành viên
       await synchronizeDrivePermissionsWithJsonMembers(

@@ -85,14 +85,16 @@
 ### 3.3. Quản lý Phiên đăng nhập & Tự động Gia hạn Token Ngầm
 - **Khởi động ứng dụng**:
   - Đọc thông tin người dùng từ bộ nhớ an toàn (`restoreGoogleAuthSession()`).
-  - Kiểm tra tính hợp lệ của token (`isGoogleTokenValid()`).
-  - Nếu token hết hạn hoặc sắp hết hạn (trong vòng 5 phút):
-    - Trên Android Native: Gọi `GoogleAuth.refresh()` ngầm trong nền.
-    - Trên Web: Gọi Firebase Auth silent renewal.
+  - Chỉ coi token còn hợp lệ khi có hạn dùng hợp lệ và còn ít nhất 5 phút.
+  - Trên Android Native, `GoogleAuth.refresh()` xin access token mới qua tài khoản Google trên thiết bị; đây **không phải OAuth refresh token dài hạn**.
+  - Trên Web, Firebase có thể duy trì phiên Firebase nhưng không tự gia hạn Google Drive access token; khi token Drive hết hạn, ứng dụng cần người dùng cấp quyền lại.
 - **Nếu làm mới token thất bại do mất mạng**:
   - Không đăng xuất người dùng!
   - Ứng dụng vẫn duy trì phiên làm việc bình thường ở trạng thái: *"Chế độ Ngoại tuyến (Đang chờ kết nối lại Drive)"*.
   - Người dùng xem và sử dụng bình thường.
+- **Khi Drive trả HTTP 401**:
+  - Android thử làm mới access token một lần và chỉ gửi lại request một lần.
+  - Lỗi 403 quyền/scope không bị coi là token hết hạn; request dạng stream không được tự gửi lại.
 - **Lắng nghe sự kiện khôi phục kết nối (Auto-Reconnect Listener)**:
   - Lắng nghe sự kiện `online` của thiết bị (`window.addEventListener('online')` và `@capacitor/network`).
   - Khi có mạng trở lại: Tự động chạy tiến trình làm mới token ngầm -> Quét và xả toàn bộ hàng đợi `sync_outbox.json` lên Google Drive.
@@ -143,3 +145,26 @@
 6. **Bước 6: Kiểm thử tự động & Biên dịch ứng dụng (`compile_applet`)**
    - Viết test kiểm tra tính đúng đắn của thuật toán hợp nhất bản ghi và vùng đệm Outbox.
    - Biên dịch và xác thực hệ thống hoạt động trơn tru.
+
+## 5. Trạng thái triển khai P0–P5
+
+- **P0 — Xác nhận ghi an toàn:** Đã chỉ xác nhận mutation sau khi Drive trả kết quả ghi thành công; các mutation được chụp theo ID để thao tác mới phát sinh trong lúc push không bị xóa khỏi Outbox. Tombstone chỉ được xác nhận sau khi ghi dữ liệu và metadata xóa thành công.
+- **P1 — Định danh và tombstone:** Đã bổ sung khóa nhận diện nghiệp vụ, giữ cấu trúc cột dữ liệu hiện tại và lưu dấu xóa sổ/tất toán trong metadata của tab `__CONFIG__` trên Drive. Khi đồng bộ, dấu xóa từ Drive được hợp nhất với Outbox cục bộ để tránh hồi sinh dữ liệu ở thiết bị không có baseline.
+- **P2 — Outbox bền vững:** Thao tác nghiệp vụ ghi Outbox trước khi cập nhật state; khởi động phát lại mutation chưa xác nhận; lỗi ghi Outbox được báo rõ và không áp dụng thao tác.
+- **P3 — Hợp nhất xung đột:** Đã có merge ba phía theo baseline/local/remote; thay đổi trường không giao nhau được gộp, còn chỉnh sửa đồng thời cùng trường tài chính yêu cầu chọn phiên bản trong modal.
+- **P4 — Tất toán và trạng thái đồng bộ:** Xóa settlement có mutation/tombstone; trạng thái offline và số thao tác đang chờ được hiển thị ở thanh điều hướng và màn hình sổ. Splash chỉ kết thúc sau thời gian tối thiểu và khi local storage đã nạp xong.
+- **P5 — Kiểm tra:** Đã chạy `npm run lint`, toàn bộ test (7 file/26 test) và `npm run build`; tất cả đạt. Build còn cảnh báo Vite hiện hữu về module `googleDriveService.ts` vừa static import vừa dynamic import.
+
+### Giới hạn cần lưu ý
+
+- Không có stable ID kỹ thuật trong các cột Sheet hiện tại; khóa nghiệp vụ vẫn có thể nhập nhằng nếu nhiều sổ trùng các thuộc tính nhận diện hoặc người dùng sửa những thuộc tính nằm trong khóa.
+- Tombstone Drive hiện được giữ lâu dài để tránh thiết bị offline lâu ngày làm sống lại bản ghi đã xóa. Cần thiết kế cơ chế thu gom có xác nhận toàn bộ thiết bị trước khi giới hạn tuổi thọ; nếu không, tab metadata có thể tăng kích thước theo thời gian.
+- Tự động đồng bộ phụ thuộc app đang chạy/được hệ điều hành đánh thức, mạng khả dụng và token Google hợp lệ; đây không phải worker chạy nền liên tục khi ứng dụng bị hệ điều hành đóng.
+
+## 6. Cải tiến đăng nhập Google cho Android APK/AAB
+
+- Access token native được yêu cầu với các scope đã cấu hình, gồm `drive.file`; plugin từ chối kết quả nếu Google không xác nhận đã cấp scope này.
+- Bản vá Android được quản lý trong `scripts/patch-google-auth.js` và tự áp dụng sau cài dependency. Bản vá bỏ log token thô, trả hạn dùng thực tế và áp dụng scope cấu hình khi lấy/làm mới access token.
+- ID token chỉ dùng xác thực danh tính/Firebase, không còn được chấp nhận thay access token Drive. Token và hạn dùng tiếp tục được lưu trong secure storage native; token thiếu hạn dùng được xem là hết hạn.
+- Plugin hiện không cấp OAuth refresh token dài hạn cho ứng dụng. Không bật `forceCodeForRefreshToken` nếu chưa có backend an toàn để đổi `serverAuthCode`; không nhúng client secret vào APK.
+- Trước khi phát hành cần xác nhận trong Google Cloud/Firebase Console: Android OAuth client dùng đúng application ID, SHA-1/SHA-256 cho debug và upload key, cùng fingerprint của Play App Signing. Repository hiện không có Gradle build files nên chưa xác minh được application ID cuối cùng hoặc build APK/AAB tại đây.

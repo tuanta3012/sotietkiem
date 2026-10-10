@@ -1,7 +1,12 @@
 import { SavingsBook, SettlementAdjustment } from '../types';
 import { readCustomJsonFile, writeCustomJsonFile, FILE_NAMES } from './fileStorage';
+import { getBookIdentityKeys } from './bookIdentity';
 
-export type MutationType = 'ADD_OR_UPDATE_BOOK' | 'DELETE_BOOK' | 'SETTLE_BOOK';
+export type MutationType =
+  | 'ADD_OR_UPDATE_BOOK'
+  | 'DELETE_BOOK'
+  | 'SETTLE_BOOK'
+  | 'DELETE_SETTLEMENT';
 
 export interface OutboxMutation {
   id: string;
@@ -9,175 +14,238 @@ export interface OutboxMutation {
   bookId: string;
   bookData?: SavingsBook;
   settlementData?: SettlementAdjustment;
+  settlementId?: string;
+  timestamp: number;
+}
+
+export interface BookTombstone {
+  bookId: string;
+  identityKeys: string[];
   timestamp: number;
 }
 
 export interface SyncOutboxData {
   pendingMutations: OutboxMutation[];
   deletedBookIds: string[];
+  deletedBooks: BookTombstone[];
+  deletedSettlementIds: string[];
   lastLocalModified: number;
 }
 
 const DEFAULT_OUTBOX: SyncOutboxData = {
   pendingMutations: [],
   deletedBookIds: [],
+  deletedBooks: [],
+  deletedSettlementIds: [],
   lastLocalModified: 0,
 };
 
 let inMemoryOutboxCache: SyncOutboxData | null = null;
+let writeQueue: Promise<void> = Promise.resolve();
 
-/**
- * Lấy toàn bộ dữ liệu vùng đệm Outbox từ Filesystem
- */
+function newMutationId(): string {
+  return globalThis.crypto?.randomUUID?.() ||
+    `mut_${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
+}
+
 export async function getOutboxData(): Promise<SyncOutboxData> {
-  if (inMemoryOutboxCache) {
-    return inMemoryOutboxCache;
-  }
-  const data = await readCustomJsonFile<SyncOutboxData>(FILE_NAMES.SYNC_OUTBOX, DEFAULT_OUTBOX);
+  if (inMemoryOutboxCache) return inMemoryOutboxCache;
+  const data = await readCustomJsonFile<Partial<SyncOutboxData>>(FILE_NAMES.SYNC_OUTBOX, {});
+  const legacyDeletedIds = Array.isArray(data.deletedBookIds) ? data.deletedBookIds : [];
   inMemoryOutboxCache = {
     pendingMutations: Array.isArray(data.pendingMutations) ? data.pendingMutations : [],
-    deletedBookIds: Array.isArray(data.deletedBookIds) ? data.deletedBookIds : [],
+    deletedBookIds: legacyDeletedIds,
+    deletedBooks: Array.isArray(data.deletedBooks)
+      ? data.deletedBooks
+      : legacyDeletedIds.map((bookId) => ({ bookId, identityKeys: [], timestamp: 0 })),
+    deletedSettlementIds: Array.isArray(data.deletedSettlementIds) ? data.deletedSettlementIds : [],
     lastLocalModified: typeof data.lastLocalModified === 'number' ? data.lastLocalModified : 0,
   };
   return inMemoryOutboxCache;
 }
 
-/**
- * Lưu dữ liệu vùng đệm Outbox xuống Filesystem
- */
-async function saveOutboxData(data: SyncOutboxData): Promise<void> {
-  inMemoryOutboxCache = data;
-  await writeCustomJsonFile(FILE_NAMES.SYNC_OUTBOX, data);
+async function updateOutboxData(
+  update: (outbox: SyncOutboxData) => SyncOutboxData
+): Promise<void> {
+  const write = writeQueue.then(async () => {
+    const current = await getOutboxData();
+    const data = update(current);
+    const success = await writeCustomJsonFile(FILE_NAMES.SYNC_OUTBOX, data);
+    if (!success) throw new Error('Không thể lưu hàng đợi đồng bộ vào bộ nhớ thiết bị.');
+    inMemoryOutboxCache = data;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('savings-outbox-updated'));
+    }
+  });
+  writeQueue = write.catch(() => {});
+  await write;
 }
 
-/**
- * Ghi nhận hành động thêm hoặc sửa sổ tiết kiệm vào Outbox
- */
 export async function recordBookUpsert(book: SavingsBook): Promise<void> {
-  const outbox = await getOutboxData();
   const now = Date.now();
+  const identityKeys = new Set(getBookIdentityKeys(book));
+  const mutation: OutboxMutation = {
+    id: newMutationId(), type: 'ADD_OR_UPDATE_BOOK', bookId: book.id, bookData: book, timestamp: now,
+  };
+  await updateOutboxData((outbox) => ({
+    ...outbox,
+    pendingMutations: [...outbox.pendingMutations.filter((item) => item.bookId !== book.id), mutation],
+    deletedBookIds: outbox.deletedBookIds.filter((id) => id !== book.id),
+    deletedBooks: outbox.deletedBooks.filter(
+      (item) => item.bookId !== book.id && !item.identityKeys.some((key) => identityKeys.has(key))
+    ),
+    lastLocalModified: now,
+  }));
+}
 
-  // Nếu cuốn sổ này từng nằm trong danh sách xóa, gỡ nó ra khỏi deletedBookIds
-  const nextDeleted = outbox.deletedBookIds.filter((id) => id !== book.id);
-
-  // Cập nhật mutation: Nếu đã có mutation cho bookId này, thay thế bằng bản mới nhất
-  const filteredMutations = outbox.pendingMutations.filter((m) => m.bookId !== book.id);
-  const newMutation: OutboxMutation = {
-    id: `mut_${now}_${Math.random().toString(36).substring(2, 7)}`,
-    type: 'ADD_OR_UPDATE_BOOK',
+export async function recordBookDelete(book: SavingsBook): Promise<void> {
+  const now = Date.now();
+  const tombstone: BookTombstone = {
     bookId: book.id,
-    bookData: book,
+    identityKeys: getBookIdentityKeys(book),
     timestamp: now,
   };
-
-  await saveOutboxData({
-    pendingMutations: [...filteredMutations, newMutation],
-    deletedBookIds: nextDeleted,
-    lastLocalModified: now,
-  });
-}
-
-/**
- * Ghi nhận hành động xóa sổ tiết kiệm vào Outbox
- * Quan trọng: Lưu bookId vào deletedBookIds để ngăn Google Sheets "hồi sinh" cuốn sổ này khi merge!
- */
-export async function recordBookDelete(bookId: string): Promise<void> {
-  const outbox = await getOutboxData();
-  const now = Date.now();
-
-  // Bổ sung bookId vào deletedBookIds nếu chưa có
-  const nextDeleted = outbox.deletedBookIds.includes(bookId)
-    ? outbox.deletedBookIds
-    : [...outbox.deletedBookIds, bookId];
-
-  // Xóa các mutation thêm/sửa trước đó của bookId này
-  const filteredMutations = outbox.pendingMutations.filter((m) => m.bookId !== bookId);
-  const newMutation: OutboxMutation = {
-    id: `mut_${now}_${Math.random().toString(36).substring(2, 7)}`,
-    type: 'DELETE_BOOK',
-    bookId,
-    timestamp: now,
+  const mutation: OutboxMutation = {
+    id: newMutationId(), type: 'DELETE_BOOK', bookId: book.id, bookData: book, timestamp: now,
   };
-
-  await saveOutboxData({
-    pendingMutations: [...filteredMutations, newMutation],
-    deletedBookIds: nextDeleted,
+  await updateOutboxData((outbox) => ({
+    ...outbox,
+    pendingMutations: [
+      ...outbox.pendingMutations.filter((item) => item.bookId !== book.id),
+      mutation,
+    ],
+    deletedBookIds: [...new Set([...outbox.deletedBookIds, book.id])],
+    deletedBooks: [...outbox.deletedBooks.filter((item) => item.bookId !== book.id), tombstone],
     lastLocalModified: now,
-  });
+  }));
 }
 
-/**
- * Ghi nhận hành động tất toán sổ tiết kiệm vào Outbox
- */
 export async function recordBookSettle(
   bookId: string,
+  settlement: SettlementAdjustment,
+  book?: SavingsBook
+): Promise<void> {
+  const now = Date.now();
+  const tombstone: BookTombstone | null = book
+    ? { bookId, identityKeys: getBookIdentityKeys(book), timestamp: now }
+    : null;
+  const mutation: OutboxMutation = {
+    id: newMutationId(), type: 'SETTLE_BOOK', bookId, settlementData: settlement, bookData: book, timestamp: now,
+  };
+  await updateOutboxData((outbox) => ({
+    ...outbox,
+    pendingMutations: [
+      ...outbox.pendingMutations.filter((item) => item.bookId !== bookId),
+      mutation,
+    ],
+    deletedBookIds: [...new Set([...outbox.deletedBookIds, bookId])],
+    deletedBooks: tombstone
+      ? [...outbox.deletedBooks.filter((item) => item.bookId !== bookId), tombstone]
+      : outbox.deletedBooks,
+    lastLocalModified: now,
+  }));
+}
+
+export async function recordBookRollover(
+  oldBook: SavingsBook,
+  newBook: SavingsBook,
   settlement: SettlementAdjustment
 ): Promise<void> {
-  const outbox = await getOutboxData();
   const now = Date.now();
-
-  const nextDeleted = outbox.deletedBookIds.includes(bookId)
-    ? outbox.deletedBookIds
-    : [...outbox.deletedBookIds, bookId];
-
-  const filteredMutations = outbox.pendingMutations.filter((m) => m.bookId !== bookId);
-  const newMutation: OutboxMutation = {
-    id: `mut_${now}_${Math.random().toString(36).substring(2, 7)}`,
+  const settleMutation: OutboxMutation = {
+    id: newMutationId(),
     type: 'SETTLE_BOOK',
-    bookId,
+    bookId: oldBook.id,
+    settlementData: settlement,
+    bookData: oldBook,
+    timestamp: now,
+  };
+  const upsertMutation: OutboxMutation = {
+    id: newMutationId(),
+    type: 'ADD_OR_UPDATE_BOOK',
+    bookId: newBook.id,
+    bookData: newBook,
+    timestamp: now,
+  };
+  const tombstone: BookTombstone = {
+    bookId: oldBook.id,
+    identityKeys: getBookIdentityKeys(oldBook),
+    timestamp: now,
+  };
+  await updateOutboxData((outbox) => ({
+    ...outbox,
+    pendingMutations: [
+      ...outbox.pendingMutations.filter(
+        (item) => item.bookId !== oldBook.id && item.bookId !== newBook.id
+      ),
+      settleMutation,
+      upsertMutation,
+    ],
+    deletedBookIds: [...new Set([...outbox.deletedBookIds, oldBook.id])],
+    deletedBooks: [...outbox.deletedBooks.filter((item) => item.bookId !== oldBook.id), tombstone],
+    lastLocalModified: now,
+  }));
+}
+
+export async function recordSettlementDelete(settlement: SettlementAdjustment): Promise<void> {
+  const now = Date.now();
+  const mutation: OutboxMutation = {
+    id: newMutationId(),
+    type: 'DELETE_SETTLEMENT',
+    bookId: `settlement:${settlement.id}`,
+    settlementId: settlement.id,
     settlementData: settlement,
     timestamp: now,
   };
-
-  await saveOutboxData({
-    pendingMutations: [...filteredMutations, newMutation],
-    deletedBookIds: nextDeleted,
+  await updateOutboxData((outbox) => ({
+    ...outbox,
+    pendingMutations: [
+      ...outbox.pendingMutations.filter((item) => item.settlementId !== settlement.id),
+      mutation,
+    ],
+    deletedSettlementIds: [...new Set([...outbox.deletedSettlementIds, settlement.id])],
     lastLocalModified: now,
-  });
+  }));
 }
 
-/**
- * Xóa danh sách các mutation đã được đồng bộ thành công lên Google Drive
- */
 export async function acknowledgeSyncedMutations(mutationIds: string[]): Promise<void> {
-  const outbox = await getOutboxData();
   const idSet = new Set(mutationIds);
-  const remaining = outbox.pendingMutations.filter((m) => !idSet.has(m.id));
-  await saveOutboxData({
+  await updateOutboxData((outbox) => ({
     ...outbox,
-    pendingMutations: remaining,
+    pendingMutations: outbox.pendingMutations.filter((mutation) => !idSet.has(mutation.id)),
+  }));
+}
+
+export async function acknowledgeDeletedBooks(syncedTombstones: BookTombstone[]): Promise<void> {
+  const syncedKeys = new Set(syncedTombstones.map((item) => `${item.bookId}:${item.timestamp}`));
+  await updateOutboxData((outbox) => {
+    const acknowledgedIds = new Set(
+      outbox.deletedBooks
+        .filter((item) => syncedKeys.has(`${item.bookId}:${item.timestamp}`))
+        .map((item) => item.bookId)
+    );
+    return {
+      ...outbox,
+      deletedBookIds: outbox.deletedBookIds.filter((id) => !acknowledgedIds.has(id)),
+      deletedBooks: outbox.deletedBooks.filter(
+        (item) => !syncedKeys.has(`${item.bookId}:${item.timestamp}`)
+      ),
+    };
   });
 }
 
-/**
- * Xóa các ID sổ đã được xóa thành công trên Google Sheets
- */
-export async function acknowledgeDeletedBooks(deletedIds: string[]): Promise<void> {
-  const outbox = await getOutboxData();
+export async function acknowledgeDeletedSettlements(deletedIds: string[]): Promise<void> {
   const idSet = new Set(deletedIds);
-  const remaining = outbox.deletedBookIds.filter((id) => !idSet.has(id));
-  await saveOutboxData({
+  await updateOutboxData((outbox) => ({
     ...outbox,
-    deletedBookIds: remaining,
-  });
+    deletedSettlementIds: outbox.deletedSettlementIds.filter((id) => !idSet.has(id)),
+  }));
 }
 
-/**
- * Lấy danh sách ID các sổ đã xóa cục bộ
- */
 export async function getDeletedBookIds(): Promise<string[]> {
-  const outbox = await getOutboxData();
-  return outbox.deletedBookIds;
+  return (await getOutboxData()).deletedBookIds;
 }
 
-/**
- * Làm rỗng vùng đệm Outbox khi liên kết file mới hoặc dọn dẹp
- */
 export async function clearOutbox(): Promise<void> {
-  inMemoryOutboxCache = {
-    pendingMutations: [],
-    deletedBookIds: [],
-    lastLocalModified: 0,
-  };
-  await saveOutboxData(inMemoryOutboxCache);
+  await updateOutboxData(() => ({ ...DEFAULT_OUTBOX }));
 }

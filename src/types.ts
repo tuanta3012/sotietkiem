@@ -168,6 +168,8 @@ export interface MasterSyncState {
   adminEmail?: string;
   members?: WorkspaceMember[];
   settlements?: SettlementAdjustment[];
+  deletedBooks?: Array<{ bookId: string; identityKeys: string[]; timestamp: number }>;
+  deletedSettlementIds?: string[];
   banksConfig?: BankInfo[];
   auditLogs?: any[];
   updatedAt?: string;

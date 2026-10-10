@@ -158,9 +158,12 @@ export async function migrateFromLocalStorageIfNeeded(): Promise<boolean> {
     const oldBooksJson = localStorage.getItem(LEGACY_STORAGE_KEYS.SAVINGS_BOOKS);
     const existingBooksFile = await readTextFile(FILE_NAMES.SAVINGS_BOOKS);
     if (oldBooksJson && !existingBooksFile) {
-      const parsedBooks = safeJsonParse<SavingsBook[]>(oldBooksJson, []);
+      const parsedBooks = JSON.parse(oldBooksJson) as SavingsBook[];
+      if (!Array.isArray(parsedBooks)) throw new Error('Dữ liệu sổ cũ không phải danh sách hợp lệ.');
       if (Array.isArray(parsedBooks) && parsedBooks.length > 0) {
-        await writeTextFile(FILE_NAMES.SAVINGS_BOOKS, JSON.stringify(parsedBooks));
+        if (!(await writeTextFile(FILE_NAMES.SAVINGS_BOOKS, JSON.stringify(parsedBooks)))) {
+          throw new Error('Không thể ghi danh sách sổ cũ vào bộ nhớ mới.');
+        }
         console.info(`[FileStorage] Đã chuyển đổi ${parsedBooks.length} cuốn sổ tiết kiệm sang ${FILE_NAMES.SAVINGS_BOOKS}`);
       }
     }
@@ -169,9 +172,12 @@ export async function migrateFromLocalStorageIfNeeded(): Promise<boolean> {
     const oldSettlementsJson = localStorage.getItem(LEGACY_STORAGE_KEYS.SETTLEMENTS);
     const existingSettlementsFile = await readTextFile(FILE_NAMES.SETTLEMENTS);
     if (oldSettlementsJson && !existingSettlementsFile) {
-      const parsedSettlements = safeJsonParse<SettlementAdjustment[]>(oldSettlementsJson, []);
+      const parsedSettlements = JSON.parse(oldSettlementsJson) as SettlementAdjustment[];
+      if (!Array.isArray(parsedSettlements)) throw new Error('Dữ liệu tất toán cũ không phải danh sách hợp lệ.');
       if (Array.isArray(parsedSettlements) && parsedSettlements.length > 0) {
-        await writeTextFile(FILE_NAMES.SETTLEMENTS, JSON.stringify(parsedSettlements));
+        if (!(await writeTextFile(FILE_NAMES.SETTLEMENTS, JSON.stringify(parsedSettlements)))) {
+          throw new Error('Không thể ghi danh sách tất toán cũ vào bộ nhớ mới.');
+        }
         console.info(`[FileStorage] Đã chuyển đổi ${parsedSettlements.length} bản ghi tất toán sang ${FILE_NAMES.SETTLEMENTS}`);
       }
     }
@@ -180,9 +186,14 @@ export async function migrateFromLocalStorageIfNeeded(): Promise<boolean> {
     const oldSettingsJson = localStorage.getItem(LEGACY_STORAGE_KEYS.SETTINGS);
     const existingSettingsFile = await readTextFile(FILE_NAMES.APP_CONFIG);
     if (oldSettingsJson && !existingSettingsFile) {
-      const parsedSettings = safeJsonParse<Partial<AppSettings>>(oldSettingsJson, {});
+      const parsedSettings = JSON.parse(oldSettingsJson) as Partial<AppSettings>;
+      if (!parsedSettings || typeof parsedSettings !== 'object' || Array.isArray(parsedSettings)) {
+        throw new Error('Cấu hình cũ không hợp lệ.');
+      }
       if (parsedSettings && Object.keys(parsedSettings).length > 0) {
-        await writeTextFile(FILE_NAMES.APP_CONFIG, JSON.stringify(parsedSettings));
+        if (!(await writeTextFile(FILE_NAMES.APP_CONFIG, JSON.stringify(parsedSettings)))) {
+          throw new Error('Không thể ghi cấu hình cũ vào bộ nhớ mới.');
+        }
         console.info(`[FileStorage] Đã chuyển đổi cấu hình ứng dụng sang ${FILE_NAMES.APP_CONFIG}`);
       }
     }
