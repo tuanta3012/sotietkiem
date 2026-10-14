@@ -1643,11 +1643,6 @@ export function useDriveSync({
         setIsDriveTokenExpired(false);
       }
       if (!isPassiveBackground && settingsRef.current.googleSheetUrl) {
-        const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-        const explicitlyUnlinked = isExplicitlyUnlinked();
-        if (!dismissedPrompt && !explicitlyUnlinked) {
-          setIsDriveTokenExpired(true);
-        }
         setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
       }
       return;
@@ -1669,13 +1664,8 @@ export function useDriveSync({
           setIsDriveTokenExpired(false);
         } else {
           setGoogleAccessToken(null);
-          setIsDriveTokenExpired(Boolean(settingsRef.current.googleSheetUrl) && !isExplicitlyUnlinked());
           if (!isPassiveBackground) {
-            const dismissedPrompt = sessionStorage.getItem('dismissed_drive_prompt') === 'true';
-            const explicitlyUnlinked = isExplicitlyUnlinked();
-            if (!dismissedPrompt && !explicitlyUnlinked) {
-              setIsDriveTokenExpired(true);
-            }
+            setIsDriveTokenExpired(true);
             setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
           }
         }
