@@ -42,6 +42,11 @@ import {
 } from './syncAuditLog';
 import { getBankShortCode, getAllBanks, updateBanksFromRemote } from '../data/banks';
 import { resolveUserRole } from './roleHelper';
+import {
+  publishWorkspaceFileToMembers,
+  readWorkspaceFileAssignment,
+  removeWorkspaceFileAssignment,
+} from './workspaceShareRelay';
 
 
 // Initialize Firebase App
@@ -56,19 +61,33 @@ const firebasePersistenceReady = setPersistence(auth, browserLocalPersistence).c
 // Provider with requested Drive scope (drive.file non-sensitive scope)
 const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/drive.file');
+provider.addScope('https://www.googleapis.com/auth/spreadsheets');
 
-// Check if user has migrated to drive.file scope
-const isScopeMigrated = (() => {
+// Existing users must consent again after the Sheets scope is added.
+const areGoogleScopesMigrated = (() => {
   try {
-    return localStorage.getItem('drive_scope_migrated_v2') === 'true';
+    return (
+      localStorage.getItem('drive_scope_migrated_v2') === 'true' &&
+      localStorage.getItem('google_sheets_scope_migrated_v1') === 'true'
+    );
   } catch {
     return false;
   }
 })();
 
 provider.setCustomParameters({
-  prompt: isScopeMigrated ? 'select_account' : 'consent',
+  prompt: areGoogleScopesMigrated ? 'select_account' : 'consent',
 });
+
+function markGoogleScopesMigrated(): void {
+  try {
+    localStorage.setItem('drive_scope_migrated_v2', 'true');
+    localStorage.setItem('google_sheets_scope_migrated_v1', 'true');
+  } catch {
+    console.warn('[GoogleAuth] Không thể lưu trạng thái đã cấp quyền Google Sheets.');
+  }
+  provider.setCustomParameters({ prompt: 'select_account' });
+}
 
 // Storage Keys for persistent Google OAuth tokens and metadata
 const TOKEN_KEY = 'google_drive_access_token_v4';
@@ -80,6 +99,7 @@ const MASTER_POINTER_FILE_ID_KEY = 'master_pointer_file_id';
 const SAVINGS_APP_ID = 'com.tietkiemgiadinh.app';
 const SAVINGS_APP_PROPERTY_KEY = 'stk_app_id';
 const SAVINGS_APP_LINKED_PROPERTY_KEY = 'stk_linked_app_id';
+const SAVINGS_APP_DISCOVERY_PROPERTY_KEY = 'tietkiemgiadinh_app_id';
 
 const isNativeGoogleAuth = Capacitor.isNativePlatform();
 
@@ -340,6 +360,7 @@ export async function ensureGoogleAuthInitialized(): Promise<void> {
           'profile',
           'openid',
           'https://www.googleapis.com/auth/drive.file',
+          'https://www.googleapis.com/auth/spreadsheets',
         ],
         grantOfflineAccess: false,
       })
@@ -539,8 +560,7 @@ export const checkRedirectResult = async (): Promise<{ user: User; accessToken: 
             photoUrl: result.user.photoURL || undefined,
           }
         });
-        localStorage.setItem('drive_scope_migrated_v2', 'true');
-        provider.setCustomParameters({ prompt: 'select_account' });
+        markGoogleScopesMigrated();
         return {
           user: result.user,
           accessToken: credential.accessToken,
@@ -658,7 +678,7 @@ const performGoogleSignIn = async (autoFallbackToRedirect = false): Promise<{ us
       });
       const user = firebaseUserCredential.user;
 
-      localStorage.setItem('drive_scope_migrated_v2', 'true');
+      markGoogleScopesMigrated();
 
       return {
         user,
@@ -689,8 +709,7 @@ const performGoogleSignIn = async (autoFallbackToRedirect = false): Promise<{ us
         photoUrl: result.user.photoURL || undefined,
       }
     });
-    localStorage.setItem('drive_scope_migrated_v2', 'true');
-    provider.setCustomParameters({ prompt: 'select_account' });
+    markGoogleScopesMigrated();
 
     return {
       user: result.user,
@@ -1028,7 +1047,8 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
   const query =
     `trashed = false and (${mimeQuery}) and ` +
     `((appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }) or ` +
-    `(appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }))`;
+    `(appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }) or ` +
+    `(appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }))`;
   const files: Array<{
     id: string;
     name: string;
@@ -1082,11 +1102,14 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
       (file) =>
         mimeTypes.includes(file.mimeType) &&
         (file.appProperties?.[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID ||
-          file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID)
+          file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID ||
+          file.appProperties?.[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] === SAVINGS_APP_ID)
     )
     .map((file) => {
       const isCreatedByApp = file.appProperties?.[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID;
-      const isManagedByApp = file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID;
+      const isManagedByApp =
+        file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID ||
+        file.appProperties?.[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] === SAVINGS_APP_ID;
       const isCentralHub = activeFileId === file.id;
       return {
         id: file.id,
@@ -2628,7 +2651,7 @@ async function markDriveFileAsManagedByApp(accessToken: string, fileId: string):
   }
   const metadata = await metadataResponse.json();
   const patchUrl = new URL(`https://www.googleapis.com/drive/v3/files/${fileId}`);
-  patchUrl.searchParams.set('fields', 'id');
+  patchUrl.searchParams.set('fields', 'appProperties');
   const patchResponse = await fetchWithRetry(patchUrl, {
     method: 'PATCH',
     headers: {
@@ -2638,6 +2661,7 @@ async function markDriveFileAsManagedByApp(accessToken: string, fileId: string):
     body: JSON.stringify({
       appProperties: {
         ...(metadata.appProperties || {}),
+        [SAVINGS_APP_DISCOVERY_PROPERTY_KEY]: SAVINGS_APP_ID,
         [SAVINGS_APP_LINKED_PROPERTY_KEY]: SAVINGS_APP_ID,
       },
     }),
@@ -2645,6 +2669,13 @@ async function markDriveFileAsManagedByApp(accessToken: string, fileId: string):
   if (!patchResponse.ok) {
     const errorData = await patchResponse.json().catch(() => ({}));
     throw new Error(errorData?.error?.message || `Không thể đánh dấu file đã liên kết (Mã ${patchResponse.status}).`);
+  }
+  const updatedMetadata = await patchResponse.json();
+  if (
+    updatedMetadata.appProperties?.[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] !== SAVINGS_APP_ID ||
+    updatedMetadata.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] !== SAVINGS_APP_ID
+  ) {
+    throw new Error('Google Drive chưa xác nhận được nhãn ứng dụng trên file.');
   }
 }
 
@@ -3767,6 +3798,14 @@ export async function setMasterSyncLinked(
       if (currentMaster && currentMaster.members) {
         for (const member of currentMaster.members) {
           if (member.role !== 'ADMIN' && member.email) {
+            try {
+              await removeWorkspaceFileAssignment(member.email);
+            } catch (relayError) {
+              console.error(
+                `[Workspace Relay] Không thể xóa vé Firestore cũ cho ${member.email} khi đổi file.`,
+                relayError
+              );
+            }
             revokeFilePermission(accessToken, previousFileId, member.email).catch(() => {});
           }
         }
@@ -3868,6 +3907,25 @@ export async function setMasterSyncLinked(
     console.warn('Failed to update master sync state on Sheet Config:', saveErr);
     if (!continuingSession) endSyncAuditSession(fileId);
     throw saveErr;
+  }
+
+  const existingMembers = targetMaster?.members || [];
+  if (existingMembers.length > 0) {
+    try {
+      await publishWorkspaceFileToMembers(
+        fileId,
+        resolvedName || targetMaster?.activeFileName || 'Sổ tiết kiệm',
+        targetMaster?.adminEmail || email,
+        existingMembers
+      );
+    } catch (relayError) {
+      console.error('[Workspace Relay] File đã liên kết nhưng không phát hành được vé cho thành viên.', relayError);
+      throw new Error(
+        `File đã được liên kết nhưng không gửi được file ID cho thành viên qua Firestore: ${
+          relayError instanceof Error ? relayError.message : 'Lỗi không xác định.'
+        }`
+      );
+    }
   }
 
   return resolvedLinkedTimestamp;
@@ -3997,6 +4055,14 @@ export async function setMasterSyncUnlinked(
   const permissionFailures: string[] = [];
   for (const member of currentMaster.members || []) {
     if (member.role !== 'ADMIN' && member.email) {
+      try {
+        await removeWorkspaceFileAssignment(member.email);
+      } catch (relayError) {
+        console.error(
+          `[Workspace Relay] Không thể xóa vé Firestore khi hủy liên kết cho ${member.email}.`,
+          relayError
+        );
+      }
       const revoked = await revokeFilePermission(accessToken, targetFileId, member.email);
       if (!revoked) permissionFailures.push(member.email);
     }
@@ -4018,14 +4084,19 @@ async function listGoogleSheetsVisibleToApp(
   do {
     const url = new URL('https://www.googleapis.com/drive/v3/files');
     url.searchParams.set('pageSize', '100');
-    url.searchParams.set('fields', 'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties)');
+    url.searchParams.set(
+      'fields',
+      'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties,sharedWithMe)'
+    );
     url.searchParams.set('orderBy', 'modifiedTime desc');
     url.searchParams.set('spaces', 'drive');
     url.searchParams.set(
       'q',
       `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
         `(appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-        `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' })`
+        `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+        `appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+        `sharedWithMe = true)`
     );
     if (pageToken) url.searchParams.set('pageToken', pageToken);
 
@@ -4063,7 +4134,15 @@ async function listGoogleSheetsVisibleToApp(
 export type CentralHubDiscoveryResult =
   | {
       status: 'found';
-      hub: { id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string };
+      hub: {
+        id: string;
+        name: string;
+        webViewLink?: string;
+        mimeType?: string;
+        linkedTimestamp?: string;
+        role?: UserRole;
+        relayAssignment?: boolean;
+      };
     }
   | { status: 'none' }
   | {
@@ -4086,6 +4165,84 @@ export async function autoDiscoverLatestCentralHub(
   }
 
   try {
+    let assignment: Awaited<ReturnType<typeof readWorkspaceFileAssignment>> = null;
+    let relayReadError = '';
+    try {
+      assignment = await readWorkspaceFileAssignment(cleanUserEmail);
+    } catch (relayError) {
+      console.warn('[Workspace Relay] Không đọc được vé liên kết từ Firestore.', relayError);
+      relayReadError =
+        relayError instanceof Error ? relayError.message : 'Lỗi không xác định khi đọc Firestore.';
+    }
+
+    if (assignment) {
+      const metadata = await getRealGoogleDriveFileMetadata(accessToken, assignment.assignedFileId);
+      if (!metadata || metadata.isDeleted) {
+        throw new Error('File được gán qua Firestore không tồn tại hoặc đã bị đưa vào thùng rác.');
+      }
+      if (metadata.mimeType !== 'application/vnd.google-apps.spreadsheet') {
+        throw new Error('File được gán qua Firestore không phải Google Sheets.');
+      }
+
+      const masterState = await readMasterSyncStateFromGoogleSheet(
+        accessToken,
+        assignment.assignedFileId,
+        { strict: true }
+      );
+      const configuredAdminEmail = (masterState?.adminEmail || '').trim().toLowerCase();
+      const resolvedRole = resolveUserRole(
+        cleanUserEmail,
+        undefined,
+        masterState?.members,
+        configuredAdminEmail
+      );
+      if (
+        !masterState ||
+        masterState.status !== 'active' ||
+        masterState.activeFileId !== assignment.assignedFileId ||
+        masterState.lastAction === 'unlink' ||
+        configuredAdminEmail !== assignment.adminEmail ||
+        !['EDITOR', 'VIEWER'].includes(resolvedRole)
+      ) {
+        throw new Error('File được gán không còn hoạt động hoặc tài khoản không thuộc Nhóm thành viên.');
+      }
+
+      let discoveryTagWritten = false;
+      try {
+        await markDriveFileAsManagedByApp(accessToken, assignment.assignedFileId);
+        discoveryTagWritten = true;
+      } catch (tagError) {
+        console.warn(
+          '[Workspace Relay] Đã xác minh file qua Sheets API nhưng chưa ghi được nhãn Drive; giữ lại vé cho thiết bị khác.',
+          tagError
+        );
+      }
+
+      saveLocalMasterPointerFileId(assignment.assignedFileId);
+      saveLocalMasterPointerState(masterState);
+      setExplicitlyUnlinked(false);
+
+      return {
+        status: 'found',
+        hub: {
+          id: assignment.assignedFileId,
+          name:
+            metadata.name ||
+            masterState.activeFileName ||
+            assignment.assignedFileName ||
+            'Sổ tiết kiệm',
+          mimeType: metadata.mimeType,
+          webViewLink:
+            metadata.webViewLink ||
+            masterState.activeFileUrl ||
+            `https://docs.google.com/spreadsheets/d/${assignment.assignedFileId}/edit`,
+          linkedTimestamp: masterState.linkedTimestamp,
+          role: resolvedRole,
+          relayAssignment: discoveryTagWritten,
+        },
+      };
+    }
+
     const driveFiles = await listGoogleSheetsVisibleToApp(accessToken);
     const activeWorkspaces: Array<{
       file: { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string };
@@ -4200,6 +4357,12 @@ export async function autoDiscoverLatestCentralHub(
     }
 
     if (activeWorkspaces.length === 0) {
+      if (relayReadError) {
+        return {
+          status: 'error',
+          message: `Không thể đọc vé liên kết Firestore và cũng không tìm thấy File liên kết trên Drive: ${relayReadError}`,
+        };
+      }
       return { status: 'none' };
     }
 
@@ -4242,6 +4405,7 @@ export async function autoDiscoverLatestCentralHub(
         id: file.id,
         name: state.activeFileName || file.name || 'Sổ tiết kiệm',
         mimeType: file.mimeType,
+        role: resolveUserRole(cleanUserEmail, undefined, state.members, state.adminEmail),
         webViewLink:
           state.activeFileUrl ||
           file.webViewLink ||

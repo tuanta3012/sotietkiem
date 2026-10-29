@@ -32,6 +32,7 @@ import {
   removeMemberFromDriveMaster,
   setExplicitlyUnlinked,
 } from './utils/googleDriveService';
+import { removeWorkspaceFileAssignment } from './utils/workspaceShareRelay';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
 import {
   getDynamicAnnualInterestHistory,
@@ -575,6 +576,19 @@ export default function App() {
     setSettlementAdjustments,
     setShowFileDeletedRecovery,
   });
+
+  const consumeWorkspaceRelay = useCallback(
+    async (relayAssignment: boolean | undefined, memberEmail: string) => {
+      if (!relayAssignment) return;
+      try {
+        await removeWorkspaceFileAssignment(memberEmail);
+      } catch (error) {
+        console.error('[Workspace Relay] Không thể xóa vé sau khi đồng bộ thành công.', error);
+        showToast('Đã kết nối file nhưng chưa thể xóa vé chuyển tiếp trên Firestore.', 'error');
+      }
+    },
+    [showToast]
+  );
   const [driveAuthServiceReachable, setDriveAuthServiceReachable] = useState(false);
 
   useEffect(() => {
@@ -777,15 +791,25 @@ export default function App() {
               }
             }
             if (hub) {
+              const roleLabel = hub.role === 'VIEWER' ? 'Chỉ xem' : 'Chỉnh sửa';
+              showToast(`✨ Đã tự động kết nối với "${hub.name}" (Quyền ${roleLabel}).`, 'success');
               setSettings((prev) => ({
                 ...prev,
                 googleSheetUrl: hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`,
                 googleSheetName: hub.name,
                 lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
               }));
-              window.setTimeout(() => syncBooksFromDrive(false, res.accessToken), 0);
+              window.setTimeout(async () => {
+                const syncSucceeded = await syncBooksFromDrive(false, res.accessToken);
+                if (syncSucceeded) {
+                  await consumeWorkspaceRelay(hub.relayAssignment, onlineUser.email);
+                }
+              }, 0);
             } else {
               setIsSyncModalOpen(true);
+              if (discovery.status === 'error') {
+                showToast(discovery.message, 'error');
+              }
             }
           } catch (err: any) {
             console.error('Không thể dò File liên kết sau khi đăng nhập:', err);
@@ -1117,6 +1141,7 @@ export default function App() {
         }, conflictBaseMetadata.modifiedTime);
         const nowStr = new Date().toLocaleString('vi-VN');
         setSettings((prev) => ({ ...prev, lastSyncTime: nowStr }));
+        await consumeWorkspaceRelay(conflictHub.relayAssignment, conflictUser.email);
 
         showToast('Gộp dữ liệu thành công! Sổ cũ trên Drive và sổ ngoại tuyến mới đã được đồng bộ đồng nhất.', 'success');
       } else {
@@ -1144,12 +1169,18 @@ export default function App() {
       googleSheetName: conflictHub.name,
       lastLocalLinkTimestamp: conflictHub.linkedTimestamp || new Date().toISOString(),
     }));
+    const relayAssignment = conflictHub.relayAssignment;
+    const memberEmail = conflictUser.email;
+    const accessToken = conflictToken;
     setConflictHub(null);
     setConflictToken(null);
     setConflictUser(null);
     showToast('Đang thiết lập kết nối và tải toàn bộ sổ cũ từ Google Drive về máy...', 'info');
-    setTimeout(() => {
-      syncBooksFromDrive(false, conflictToken);
+    setTimeout(async () => {
+      const syncSucceeded = await syncBooksFromDrive(false, accessToken);
+      if (syncSucceeded) {
+        await consumeWorkspaceRelay(relayAssignment, memberEmail);
+      }
     }, 200);
   };
 
@@ -1296,7 +1327,9 @@ export default function App() {
                       onDeleteBook={handleDeleteBook}
                       onOpenOptimizer={() => setActiveTab('optimizer')}
                       onOpenInterestCalc={() => setActiveTab('interest-calc')}
-                      onSyncDrive={() => syncBooksFromDrive(true, undefined, true)}
+                      onSyncDrive={async () => {
+                        await syncBooksFromDrive(true, undefined, true);
+                      }}
                       onImportBooks={handleImportBooks}
                       onDeleteSettlement={handleDeleteSettlementAdjustment}
                     />
@@ -1369,7 +1402,9 @@ export default function App() {
                   onDeleteBook={handleDeleteBook}
                   onOpenOptimizer={() => setActiveTab('optimizer')}
                   onOpenInterestCalc={() => setActiveTab('interest-calc')}
-                  onSyncDrive={() => syncBooksFromDrive(true, undefined, true)}
+                  onSyncDrive={async () => {
+                    await syncBooksFromDrive(true, undefined, true);
+                  }}
                   onImportBooks={handleImportBooks}
                 />
               )}

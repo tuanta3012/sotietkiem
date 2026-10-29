@@ -700,6 +700,7 @@ export function useDriveSync({
             } catch {}
             setSyncDriveStatus('File Google Drive chưa có sổ tiết kiệm nào.');
           }
+          return true;
         } else if (!res.success && res.errors && res.errors.length > 0) {
           isInitialSyncDoneRef.current = true;
           recordSyncAuditLog({

@@ -33,6 +33,10 @@ import {
 } from '../utils/googleDriveService';
 import { WorkspaceMember } from '../types';
 import { resolveUserRole } from '../utils/roleHelper';
+import {
+  publishWorkspaceFileToMembers,
+  removeWorkspaceFileAssignment,
+} from '../utils/workspaceShareRelay';
 
 // Lazy load modal nặng DataSyncModal (~83KB)
 const DataSyncModal = React.lazy(() =>
@@ -264,14 +268,81 @@ export const AppModals: React.FC<AppModalsProps> = ({
 
     setSettings((prev) => ({ ...prev, members: updatedMembers }));
     try {
-      return await synchronizeDrivePermissionsWithJsonMembers(
+      const permissionSync = await synchronizeDrivePermissionsWithJsonMembers(
         token,
         activeFileId,
         updatedMembers,
         configuredAdminEmail
       );
+
+      const previousMembersByEmail = new Map(
+        (currentMaster.members || []).map((member) => [
+          member.email.trim().toLowerCase(),
+          String(member.role).toUpperCase(),
+        ])
+      );
+      const nextMembersByEmail = new Map(
+        updatedMembers.map((member) => [
+          member.email.trim().toLowerCase(),
+          String(member.role).toUpperCase(),
+        ])
+      );
+      const relayMembers = updatedMembers.filter((member) => {
+        const email = member.email.trim().toLowerCase();
+        const role = String(member.role).toUpperCase();
+        return (
+          email !== configuredAdminEmail.trim().toLowerCase() &&
+          ['EDITOR', 'VIEWER'].includes(role) &&
+          previousMembersByEmail.get(email) !== role
+        );
+      });
+      const failedPermissionEmails = new Set(
+        permissionSync.entries
+          .filter((entry) => entry.action === 'failed')
+          .map((entry) => entry.email.trim().toLowerCase())
+      );
+      const relayMembersWithDriveAccess = relayMembers.filter(
+        (member) => !failedPermissionEmails.has(member.email.trim().toLowerCase())
+      );
+
+      if (relayMembersWithDriveAccess.length > 0) {
+        try {
+          await publishWorkspaceFileToMembers(
+            activeFileId,
+            currentMaster.activeFileName || settings.googleSheetName || 'Sổ tiết kiệm',
+            configuredAdminEmail,
+            relayMembersWithDriveAccess
+          );
+        } catch (relayError) {
+          throw new Error(
+            `Roster đã lưu trên Drive nhưng không gửi được file ID cho thành viên qua Firestore: ${
+              relayError instanceof Error ? relayError.message : 'Lỗi không xác định.'
+            }`
+          );
+        }
+      }
+
+      const removedMembers = (currentMaster.members || []).filter((member) => {
+        const email = member.email.trim().toLowerCase();
+        return email !== configuredAdminEmail.trim().toLowerCase() && !nextMembersByEmail.has(email);
+      });
+      for (const member of removedMembers) {
+        try {
+          await removeWorkspaceFileAssignment(member.email);
+        } catch (relayError) {
+          throw new Error(
+            `Đã cập nhật roster nhưng không thu hồi được vé Firestore của ${member.email}: ${
+              relayError instanceof Error ? relayError.message : 'Lỗi không xác định.'
+            }`
+          );
+        }
+      }
+      return permissionSync;
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Lỗi không xác định khi đọc danh sách quyền.';
+      if (reason.startsWith('Roster đã lưu trên Drive') || reason.startsWith('Đã cập nhật roster')) {
+        throw err;
+      }
       throw new Error(`Roster đã lưu trên Drive nhưng chưa xác minh/đồng bộ được ACL: ${reason}`);
     }
   };
