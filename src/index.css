@@ -24,35 +24,5 @@ html, body {
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
-/* Ép popup Google Picker luôn cân chính giữa màn hình điện thoại và máy tính */
-.picker-dialog {
-  position: fixed !important;
-  top: 50% !important;
-  left: 50% !important;
-  transform: translate(-50%, -50%) !important;
-  margin: 0 !important;
-  max-width: calc(100vw - 16px) !important;
-  max-height: calc(100dvh - 32px) !important;
-  border-radius: 16px !important;
-  overflow: hidden !important;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.45) !important;
-  z-index: 100001 !important;
-}
 
-.picker-dialog-bg {
-  position: fixed !important;
-  inset: 0 !important;
-  width: 100vw !important;
-  height: 100vh !important;
-  z-index: 100000 !important;
-  background-color: rgba(15, 23, 42, 0.75) !important;
-  backdrop-filter: blur(2px) !important;
-}
-
-.picker-dialog iframe,
-.picker-frame {
-  max-width: 100% !important;
-  max-height: calc(100dvh - 32px) !important;
-  border-radius: 16px !important;
-}
 

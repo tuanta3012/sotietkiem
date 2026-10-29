@@ -84,8 +84,28 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isRetryingPermissions, setIsRetryingPermissions] = useState(false);
   const hasLinkedDriveFile = Boolean(settings.googleSheetUrl && settings.googleSheetUrl.trim().length > 0);
+
+  React.useEffect(() => {
+    if (isOpen && hasLinkedDriveFile && isAdmin) {
+      const runBackgroundSync = async () => {
+        try {
+          const result = await onResyncDrivePermissions();
+          if (result) {
+            const failures = result.entries.filter((entry) => entry.action === 'failed');
+            if (failures.length === 0) {
+              setSuccessMsg('Đã tự động đồng bộ quyền Drive thành công.');
+              setTimeout(() => setSuccessMsg(null), 2500);
+            }
+          }
+        } catch (err) {
+          console.log('Background drive permission sync note:', err);
+        }
+      };
+      runBackgroundSync();
+    }
+  }, [isOpen]);
+
   const showPermissionSyncResult = (result: DrivePermissionSyncResult | null) => {
     if (!result) {
       setSuccessMsg('Đã lưu danh sách trên thiết bị; chưa có phiên Google để đồng bộ quyền Drive.');
@@ -94,7 +114,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     const failures = result.entries.filter((entry) => entry.action === 'failed');
     if (failures.length) {
       setErrorMsg(
-        `Roster đã lưu trên Drive nhưng ${failures.length} quyền chưa đồng bộ. Có thể dùng “Đồng bộ lại quyền Drive”. ${failures
+        `Roster đã lưu trên Drive nhưng ${failures.length} quyền chưa đồng bộ. ${failures
           .slice(0, 3)
           .map((entry) => `${entry.email}: ${entry.message}`)
           .join(' ')}`
@@ -102,20 +122,6 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       return;
     }
     setSuccessMsg('Đã lưu thành viên và xác nhận đồng bộ quyền Drive.');
-  };
-
-  const handleResyncDrivePermissions = async () => {
-    setIsRetryingPermissions(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    try {
-      const result = await onResyncDrivePermissions();
-      showPermissionSyncResult(result);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Không thể đồng bộ lại quyền Drive.');
-    } finally {
-      setIsRetryingPermissions(false);
-    }
   };
 
   const handleAddMember = async (e: React.FormEvent) => {
@@ -253,19 +259,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
               <span>{errorMsg}</span>
             </div>
           )}
-          {isSubmitting && (
-            <div className="text-xs text-slate-600" role="status">Đang lưu roster và đồng bộ quyền Drive…</div>
-          )}
-          {isAdmin && hasLinkedDriveFile && (
-            <button
-              type="button"
-              onClick={handleResyncDrivePermissions}
-              disabled={isRetryingPermissions || isSubmitting}
-              className="w-full py-2 px-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-800 hover:bg-blue-100 disabled:opacity-50 text-xs font-semibold"
-            >
-              {isRetryingPermissions ? 'Đang đồng bộ lại quyền Drive…' : 'Đồng bộ lại quyền Drive'}
-            </button>
-          )}
+
 
           {/* Form Thêm Thành Viên (Dành cho ADMIN) */}
           {!hasLinkedDriveFile ? (
@@ -426,7 +420,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             <select
                               value={member.role}
                               onChange={(e) => handleRoleChange(member.id, e.target.value as UserRole)}
-                              disabled={isSubmitting || isRetryingPermissions}
+                              disabled={isSubmitting}
                               className="text-[11px] py-1 px-1.5 bg-slate-100 border border-slate-200 rounded-md font-semibold text-slate-700 outline-none"
                             >
                               <option value="VIEWER">👁️ Xem</option>
@@ -437,7 +431,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                             <button
                               type="button"
                               onClick={() => handleRemoveMember(member.id, member.email)}
-                              disabled={isSubmitting || isRetryingPermissions}
+                              disabled={isSubmitting}
                               className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
                               title="Thu hồi quyền"
                             >

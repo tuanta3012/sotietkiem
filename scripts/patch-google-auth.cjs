@@ -139,105 +139,6 @@ replaceOnce(
     '\n  private JSONObject verifyToken(String authToken) throws IOException, JSONException {',
   '\n  private String getOAuthTokenType() {'
 );
-const safePickDriveFileCode =
-  '  @PluginMethod()\n' +
-  '  public void pickDriveFile(PluginCall call) {\n' +
-  '    AuthorizationRequest.Builder requestBuilder = AuthorizationRequest.builder()\n' +
-  '      .setRequestedScopes(Arrays.asList(new Scope("https://www.googleapis.com/auth/drive.file")))\n' +
-  '      .setOptOutIncludingGrantedScopes(true);\n' +
-  '    try {\n' +
-  '      Class<?> resourceParamClass = Class.forName("com.google.android.gms.auth.api.identity.AuthorizationRequest$ResourceParameter");\n' +
-  '      Object pickerTrigger = null;\n' +
-  '      Object pickerMimeTypes = null;\n' +
-  '      Object[] constants = resourceParamClass.getEnumConstants();\n' +
-  '      if (constants != null) {\n' +
-  '        for (Object c : constants) {\n' +
-  '          String name = c.toString();\n' +
-  '          if ("PICKER_OAUTH_TRIGGER".equals(name)) pickerTrigger = c;\n' +
-  '          if ("PICKER_MIMETYPES".equals(name)) pickerMimeTypes = c;\n' +
-  '        }\n' +
-  '      }\n' +
-  '      if (pickerTrigger != null) {\n' +
-  '        java.lang.reflect.Method addParamMethod = requestBuilder.getClass().getMethod("addResourceParameter", resourceParamClass, String.class);\n' +
-  '        addParamMethod.invoke(requestBuilder, pickerTrigger, "true");\n' +
-  '        if (pickerMimeTypes != null) {\n' +
-  '          addParamMethod.invoke(requestBuilder, pickerMimeTypes, "application/vnd.google-apps.spreadsheet,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");\n' +
-  '        }\n' +
-  '      }\n' +
-  '      if (pickerTrigger == null || pickerMimeTypes == null) throw new IllegalStateException("Google Picker parameters are unavailable.");\n' +
-  '      java.lang.reflect.Method setPromptMethod = requestBuilder.getClass().getMethod("setPrompt", int.class);\n' +
-  '      setPromptMethod.invoke(requestBuilder, 1);\n' +
-  '    } catch (Exception configurationError) {\n' +
-  '      call.reject("Không thể cấu hình Google Picker trên Android.", configurationError);\n' +
-  '      return;\n' +
-  '    }\n' +
-  '    AuthorizationRequest request = requestBuilder.build();\n' +
-  '\n' +
-  '    Identity.getAuthorizationClient(getActivity()).authorize(request)\n' +
-  '      .addOnSuccessListener(getActivity(), authorizationResult -> {\n' +
-  '        if (authorizationResult.hasResolution()) {\n' +
-  '          Intent intent = new Intent(getContext(), DrivePickerActivity.class);\n' +
-  '          intent.putExtra(DrivePickerActivity.EXTRA_PENDING_INTENT, authorizationResult.getPendingIntent());\n' +
-  '          startActivityForResult(call, intent, "pickDriveFileResult");\n' +
-  '        } else {\n' +
-  '          resolveDrivePickerResult(call, authorizationResult);\n' +
-  '        }\n' +
-  '      })\n' +
-  '      .addOnFailureListener(getActivity(), error -> call.reject("Không thể mở Google Picker.", error));\n' +
-  '  }\n' +
-  '\n' +
-  '  @ActivityCallback\n' +
-  '  protected void pickDriveFileResult(PluginCall call, ActivityResult result) {\n' +
-  '    if (call == null) return;\n' +
-  '    Intent data = result.getData();\n' +
-  '    if (result.getResultCode() != Activity.RESULT_OK) {\n' +
-  '      String error = data == null ? null : data.getStringExtra(DrivePickerActivity.EXTRA_ERROR);\n' +
-  '      if (error != null) call.reject(error);\n' +
-  '      else resolveDrivePickerResult(call, null);\n' +
-  '      return;\n' +
-  '    }\n' +
-  '    if (data == null) {\n' +
-  '      call.reject("Không nhận được dữ liệu phản hồi từ Google Picker.");\n' +
-  '      return;\n' +
-  '    }\n' +
-  '    try {\n' +
-  '      AuthorizationResult authorizationResult = Identity.getAuthorizationClient(getActivity())\n' +
-  '        .getAuthorizationResultFromIntent(data);\n' +
-  '      resolveDrivePickerResult(call, authorizationResult);\n' +
-  '    } catch (Exception error) {\n' +
-  '      call.reject("Không thể hoàn tất xác thực Google Picker.", error);\n' +
-  '    }\n' +
-  '  }\n' +
-  '\n' +
-  '  private void resolveDrivePickerResult(PluginCall call, AuthorizationResult authorizationResult) {\n' +
-  '    JSArray fileIds = new JSArray();\n' +
-  '    String accessToken = null;\n' +
-  '    if (authorizationResult != null) {\n' +
-  '      accessToken = authorizationResult.getAccessToken();\n' +
-  '      Bundle tokenParams = null;\n' +
-  '      try {\n' +
-  '        java.lang.reflect.Method getTokenParamsMethod = authorizationResult.getClass().getMethod("getTokenResponseParams");\n' +
-  '        tokenParams = (Bundle) getTokenParamsMethod.invoke(authorizationResult);\n' +
-  '      } catch (Exception paramsError) {\n' +
-  '        call.reject("Không thể đọc kết quả cấp quyền của Google Picker.", paramsError);\n' +
-  '        return;\n' +
-  '      }\n' +
-  '      if (accessToken == null && tokenParams != null) accessToken = tokenParams.getString("access_token");\n' +
-  '      String pickedIds = tokenParams == null ? null : tokenParams.getString("picked_file_ids");\n' +
-  '      if (pickedIds != null) {\n' +
-  '        for (String fileId : pickedIds.split(",")) {\n' +
-  '          String trimmed = fileId.trim();\n' +
-  '          if (!trimmed.isEmpty()) {\n' +
-  '            fileIds.put(trimmed);\n' +
-  '          }\n' +
-  '        }\n' +
-  '      }\n' +
-  '    }\n' +
-  '    JSObject response = new JSObject();\n' +
-  '    response.put("accessToken", accessToken);\n' +
-  '    response.put("fileIds", fileIds);\n' +
-  '    call.resolve(response);\n' +
-  '  }\n\n';
 
 const pickMethodMarker = '  @PluginMethod()\n  public void pickDriveFile(PluginCall call) {';
 const signInMarker = '  @PluginMethod()\n  public void signIn(PluginCall call) {';
@@ -246,16 +147,8 @@ if (source.includes(pickMethodMarker)) {
   const startIndex = source.indexOf(pickMethodMarker);
   const endIndex = source.indexOf(signInMarker);
   if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-    source = source.slice(0, startIndex) + safePickDriveFileCode + source.slice(endIndex);
-  } else {
-    throw new Error('Could not find boundaries of pickDriveFile method');
+    source = source.slice(0, startIndex) + source.slice(endIndex);
   }
-} else {
-  replaceOnce(
-    signInMarker,
-    safePickDriveFileCode + signInMarker,
-    '  public void pickDriveFile(PluginCall call) {'
-  );
 }
 
 const tokenLog = '    Log.d("AuthenticatedBackend", "token: " + authToken + ", verification: " + stringResponse);\n';
@@ -263,23 +156,19 @@ if (source.includes(tokenLog)) source = source.replace(tokenLog, '');
 
 fs.writeFileSync(sourcePath, source);
 
-const activitySource = path.join(__dirname, 'DrivePickerActivity.java');
-const activityTarget = path.join(path.dirname(sourcePath), 'DrivePickerActivity.java');
-fs.copyFileSync(activitySource, activityTarget);
-
 const manifestPath = path.join(packageRoot, 'android', 'src', 'main', 'AndroidManifest.xml');
-let manifest = fs.readFileSync(manifestPath, 'utf8');
-const activityEntry = '    <activity android:name="com.codetrixstudio.capacitor.GoogleAuth.DrivePickerActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />';
-if (!manifest.includes('DrivePickerActivity')) {
-  if (manifest.includes('</application>')) {
-    manifest = manifest.replace('</application>', `${activityEntry}\n  </application>`);
-  } else {
-    manifest = manifest.replace(
-      '</manifest>',
-      `  <application>\n${activityEntry}\n  </application>\n</manifest>`
-    );
+if (fs.existsSync(manifestPath)) {
+  let manifest = fs.readFileSync(manifestPath, 'utf8');
+  const activityEntry = '    <activity android:name="com.codetrixstudio.capacitor.GoogleAuth.DrivePickerActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />\n';
+  if (manifest.includes('DrivePickerActivity')) {
+    manifest = manifest.replace(activityEntry, '').replace('    <activity android:name="com.codetrixstudio.capacitor.GoogleAuth.DrivePickerActivity" android:exported="false" android:theme="@android:style/Theme.Translucent.NoTitleBar" />', '');
+    fs.writeFileSync(manifestPath, manifest);
   }
-  fs.writeFileSync(manifestPath, manifest);
+}
+
+const targetActivity = path.join(path.dirname(sourcePath), 'DrivePickerActivity.java');
+if (fs.existsSync(targetActivity)) {
+  try { fs.unlinkSync(targetActivity); } catch {}
 }
 
 const gradlePath = path.join(packageRoot, 'android', 'build.gradle');

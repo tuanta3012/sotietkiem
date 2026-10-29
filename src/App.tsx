@@ -499,9 +499,33 @@ export default function App() {
     if (!isSessionRestored) return; // Đợi khôi phục xong phiên từ Secure Storage mới lắng nghe Auth
 
     const unsubscribe = initGoogleAuth(
-      (_firebaseUser, token) => {
+      (firebaseUser, token) => {
         if (token) {
           setGoogleAccessToken(token);
+          setIsDriveTokenExpired(false);
+        }
+        if (firebaseUser && firebaseUser.email) {
+          const cleanEmail = firebaseUser.email.trim().toLowerCase();
+          setCurrentUser((prev) => {
+            if (prev && !prev.isOffline && prev.email === cleanEmail) {
+              return prev;
+            }
+            const onlineUser: AuthUser = {
+              email: cleanEmail,
+              name: firebaseUser.displayName || prev?.name || cleanEmail.split('@')[0] || 'Chủ Tài Khoản',
+              photoURL: firebaseUser.photoURL || prev?.photoURL || undefined,
+              role: (settings.currentRole === 'VIEWER' || prev?.role === 'viewer') ? 'viewer' : 'admin',
+              title: (settings.currentRole === 'VIEWER' || prev?.role === 'viewer')
+                ? 'Thành viên (Chỉ xem) - Xem dữ liệu sổ tiết kiệm'
+                : 'Quản trị viên (Admin) - Toàn quyền quản lý & Đồng bộ Google Drive',
+              isOffline: false,
+            };
+            try {
+              localStorage.setItem('savings_auth_user_v3', JSON.stringify(onlineUser));
+              Preferences.set({ key: 'savings_auth_user_v3', value: JSON.stringify(onlineUser) }).catch(() => {});
+            } catch {}
+            return onlineUser;
+          });
         }
       },
       () => {
@@ -511,7 +535,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [isSessionRestored]);
+  }, [isSessionRestored, settings.currentRole]);
 
   // Ref callbacks for useSavingsBooks to push to Google Drive seamlessly
   const pushBooksToDriveRef = useRef<((b: SavingsBook[], a?: SettlementAdjustment[]) => void) | undefined>(undefined);
@@ -568,6 +592,7 @@ export default function App() {
     cancelFileSwitch,
   } = useDriveSync({
     currentUser,
+    setCurrentUser,
     settings,
     setSettings,
     books,
@@ -791,20 +816,30 @@ export default function App() {
               }
             }
             if (hub) {
-              const roleLabel = hub.role === 'VIEWER' ? 'Chỉ xem' : 'Chỉnh sửa';
-              showToast(`✨ Đã tự động kết nối với "${hub.name}" (Quyền ${roleLabel}).`, 'success');
+              const targetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
               setSettings((prev) => ({
                 ...prev,
-                googleSheetUrl: hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`,
+                googleSheetUrl: targetUrl,
                 googleSheetName: hub.name,
                 lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
               }));
               window.setTimeout(async () => {
-                const syncSucceeded = await syncBooksFromDrive(false, res.accessToken);
-                if (syncSucceeded) {
-                  await consumeWorkspaceRelay(hub.relayAssignment, onlineUser.email);
+                let syncSucceeded = false;
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                  try {
+                    syncSucceeded = Boolean(await syncBooksFromDrive(false, res.accessToken, false, targetUrl));
+                    if (syncSucceeded) break;
+                  } catch {
+                    // ignore and retry
+                  }
+                  if (attempt < 3) {
+                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                  }
                 }
-              }, 0);
+                if (syncSucceeded) {
+                  await consumeWorkspaceRelay(hub.relayAssignment ?? true, onlineUser.email);
+                }
+              }, 200);
             } else {
               setIsSyncModalOpen(true);
               if (discovery.status === 'error') {
@@ -1475,7 +1510,7 @@ export default function App() {
           onCancelFileSwitch={cancelFileSwitch}
           isClearDataModalOpen={isClearDataModalOpen}
           setIsClearDataModalOpen={setIsClearDataModalOpen}
-          onClearAllAppData={handleDeleteAllAppData}
+          onClearAllAppData={() => handleDeleteAllAppData(!!currentUser)}
           isDriveTokenExpired={isDriveTokenExpired}
           isOnline={isOnline && driveAuthServiceReachable}
           setIsDriveTokenExpired={setIsDriveTokenExpired}

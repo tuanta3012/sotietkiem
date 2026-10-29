@@ -7,7 +7,7 @@ import { WorkspaceMember } from '../types';
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const databaseId = firebaseConfig.firestoreDatabaseId;
-const db = databaseId ? getFirestore(app, databaseId) : getFirestore(app);
+const db = (!databaseId || databaseId === '(default)') ? getFirestore(app) : getFirestore(app, databaseId);
 const COLLECTION = 'assigned_shares';
 
 export interface AssignedWorkspaceFile {
@@ -24,7 +24,17 @@ export function workspaceRelayDocumentId(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function getAuthenticatedEmail(): string {
+async function getAuthenticatedEmail(): Promise<string> {
+  if (auth.currentUser?.email) {
+    return auth.currentUser.email.trim().toLowerCase();
+  }
+  try {
+    if (typeof (auth as any).authStateReady === 'function') {
+      await (auth as any).authStateReady();
+    }
+  } catch {
+    // ignore
+  }
   const email = auth.currentUser?.email?.trim().toLowerCase();
   if (!email) {
     throw new Error('Cần phiên Firebase đã xác thực để dùng chuyển tiếp liên kết Workspace.');
@@ -42,7 +52,8 @@ export async function publishWorkspaceFileToMembers(
   if (!fileId || !cleanAdminEmail) {
     throw new Error('Thiếu file ID hoặc email Admin để phát hành chuyển tiếp liên kết.');
   }
-  if (getAuthenticatedEmail() !== cleanAdminEmail) {
+  const authedEmail = await getAuthenticatedEmail();
+  if (authedEmail !== cleanAdminEmail) {
     throw new Error('Chỉ Admin đã đăng nhập mới được phát hành chuyển tiếp liên kết.');
   }
 
@@ -78,7 +89,8 @@ export async function readWorkspaceFileAssignment(
 ): Promise<AssignedWorkspaceFile | null> {
   const cleanEmail = memberEmail.trim().toLowerCase();
   if (!cleanEmail) return null;
-  if (getAuthenticatedEmail() !== cleanEmail) {
+  const authedEmail = await getAuthenticatedEmail();
+  if (authedEmail !== cleanEmail) {
     throw new Error('Tài khoản Firebase hiện tại không khớp email thành viên đang đăng nhập.');
   }
 

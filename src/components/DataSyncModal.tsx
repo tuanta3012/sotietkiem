@@ -6,7 +6,6 @@ import {
   CheckCircle2,
   X,
   ExternalLink,
-  Search,
   RefreshCw,
   FileSpreadsheet,
   ShieldCheck,
@@ -50,7 +49,6 @@ import {
   saveLocalMasterPointerState,
   RealDriveFile,
 } from '../utils/googleDriveService';
-import { pickGoogleDriveFile } from '../utils/googleDrivePicker';
 import { resolveUserRole } from '../utils/roleHelper';
 
 interface DataSyncModalProps {
@@ -467,28 +465,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
   };
 
-  const handleOpenDrivePicker = async () => {
-    if (isLoadingFiles || isAuthenticating) return;
-    setSyncErrorMessage(null);
-    const token =
-      Capacitor.getPlatform() === 'android'
-        ? getGoogleAccessToken() || undefined
-        : await validateTokenOrPrompt();
-    if (Capacitor.getPlatform() !== 'android' && !token) return;
-    setIsLoadingFiles(true);
-    try {
-      const selection = await pickGoogleDriveFile(token);
-      if (selection) await handleSelectRealFile(selection.file, selection.accessToken);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Không thể mở Google Picker.';
-      setSyncErrorMessage(message);
-    } finally {
-      setIsLoadingFiles(false);
-    }
-  };
-
-  const handleSelectRealFile = async (file: RealDriveFile, pickerAccessToken?: string) => {
-    const token = pickerAccessToken || (await validateTokenOrPrompt());
+  const handleSelectRealFile = async (file: RealDriveFile) => {
+    const token = await validateTokenOrPrompt();
     if (!token) return;
     const signedInEmail = (currentUser?.email || appUser?.email || '').trim().toLowerCase();
     if (!signedInEmail) {
@@ -536,7 +514,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
     setIsChoosingDifferentFile(false);
     // Kích hoạt khóa chuyển đổi file triệt để để chặn vòng lặp
-    const fileAccessToken = pickerAccessToken || token;
     onStartFileSwitch?.();
     setSelectedFileId(file.id);
     setSelectedFileName(file.name);
@@ -551,7 +528,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
     try {
       const parseResult = await downloadRealGoogleDriveFile(
-        fileAccessToken,
+        token,
         file.id,
         file.mimeType,
         signedInEmail
@@ -595,7 +572,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
         let fileModTime: string | undefined;
         try {
-          const meta = await getRealGoogleDriveFileMetadata(fileAccessToken, file.id);
+          const meta = await getRealGoogleDriveFileMetadata(token, file.id);
           fileModTime = meta?.modifiedTime;
         } catch {}
 
@@ -664,7 +641,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
             setSyncErrorMessage(
               `Tìm thấy ${discovery.hubs.length} File liên kết phù hợp${
                 workspaceNames ? `: ${workspaceNames}` : ''
-              }. Ứng dụng không tự chọn để tránh nhầm dữ liệu; hãy chọn đúng file bằng Google Drive Picker hoặc dán link.`
+              }. Ứng dụng không tự chọn để tránh nhầm dữ liệu; hãy chọn đúng file từ danh sách bảng tính bên dưới.`
             );
             setDiscoveredHub(null);
             return;
@@ -1160,17 +1137,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           <p className="text-[10px] text-slate-400">Bấm nút ở trên để tạo file mới</p>
                         </div>
                       )}
-                      <div className="flex justify-center pt-1">
-                        <button
-                          type="button"
-                          onClick={handleOpenDrivePicker}
-                          disabled={isLoadingFiles || isAuthenticating}
-                          className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-3.5 py-2 text-[11px] font-bold text-emerald-800 transition-colors hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          <Search className="h-3.5 w-3.5" />
-                          <span>Tìm thêm file</span>
-                        </button>
-                      </div>
                     </div>
 
                     {/* Khu vực Chọn file từ máy & Xuất Excel */}
@@ -1223,10 +1189,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                           Tạo file mới
                         </button>
                         <button
-                          onClick={handleOpenDrivePicker}
+                          onClick={() => {
+                            setIsChoosingDifferentFile(true);
+                            setSelectedFileId('');
+                            handleRefreshDriveFiles();
+                          }}
                           className="flex-1 py-1.5 px-2 bg-white border border-slate-200 text-slate-700 rounded-lg font-bold text-xs"
                         >
-                          Chọn file khác
+                          Chọn từ danh sách
                         </button>
                       </div>
                     </div>

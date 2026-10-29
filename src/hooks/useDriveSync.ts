@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, Dispatch, SetStateAction } from 'react';
+import { Preferences } from '@capacitor/preferences';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, BookStatus, canPushToDrive } from '../types';
 import {
   sortAndReindexBooks,
@@ -9,6 +10,7 @@ import {
   getGoogleAccessToken,
   setGoogleAccessToken,
   ensureGoogleAccessToken,
+  signInWithGoogle,
   trySilentRefresh,
   isGoogleTokenValid,
   downloadRealGoogleDriveFile,
@@ -28,10 +30,12 @@ import { resolveUserRole } from '../utils/roleHelper';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import { clearLocalSyncQueue, readLocalSyncQueue } from '../utils/localSyncQueue';
+import { removeWorkspaceFileAssignment } from '../utils/workspaceShareRelay';
 
 
 interface UseDriveSyncProps {
   currentUser: AuthUser | null;
+  setCurrentUser?: Dispatch<SetStateAction<AuthUser | null>>;
   settings: AppSettings;
   setSettings: Dispatch<SetStateAction<AppSettings>>;
   books: SavingsBook[];
@@ -73,6 +77,7 @@ function readLocalSyncStorageSnapshot(): {
 
 export function useDriveSync({
   currentUser,
+  setCurrentUser,
   settings,
   setSettings,
   books,
@@ -338,8 +343,8 @@ export function useDriveSync({
 
   // Intelligent Drive Synchronization
   const syncBooksFromDrive = useCallback(
-    async (forceTokenPrompt = false, explicitToken?: string, _pushAfterSync = false) => {
-      if (currentUser?.isOffline && !settings.googleSheetUrl) return;
+    async (forceTokenPrompt = false, explicitToken?: string, _pushAfterSync = false, explicitFileUrl?: string) => {
+      if (currentUser?.isOffline && !settings.googleSheetUrl && !explicitFileUrl) return;
       if (isSwitchingFileRef.current || isPushingRef.current || isSyncingRef.current) {
         return;
       }
@@ -371,7 +376,7 @@ export function useDriveSync({
       }
       setIsDriveTokenExpired(false);
 
-      const currentUrl = settings.googleSheetUrl;
+      const currentUrl = explicitFileUrl || settings.googleSheetUrl;
       if (!currentUrl) {
         isInitialSyncDoneRef.current = true;
         return;
@@ -503,6 +508,9 @@ export function useDriveSync({
           remoteSyncCooldownUntilRef.current = Date.now() + 5000;
 
           const userEmail = currentUser?.email || 'unknown';
+          if (userEmail && userEmail !== 'unknown') {
+            removeWorkspaceFileAssignment(userEmail).catch(() => {});
+          }
           const role = resolveUserRole(userEmail, settingsRef.current?.currentRole, settingsRef.current?.members, settingsRef.current?.workspaceOwnerEmail);
           const pulledBooks = res.books || [];
           const pulledSettlements = res.settlements || [];
@@ -691,6 +699,7 @@ export function useDriveSync({
 
             lastSyncedUrlRef.current = currentUrl;
             setSyncDriveStatus(`Đã đồng bộ ${restoredBooks.length} sổ từ Google Drive`);
+            setTimeout(() => setSyncDriveStatus(null), 3500);
           } else {
             // File trên Google Drive trống hoặc chưa có sổ
             setBooks([]);
@@ -699,6 +708,7 @@ export function useDriveSync({
               localStorage.setItem('savings_books_cleared', 'true');
             } catch {}
             setSyncDriveStatus('File Google Drive chưa có sổ tiết kiệm nào.');
+            setTimeout(() => setSyncDriveStatus(null), 3500);
           }
           return true;
         } else if (!res.success && res.errors && res.errors.length > 0) {
@@ -1400,7 +1410,7 @@ export function useDriveSync({
           if (timeSinceUrlChange < 10000) {
             // Vừa đổi link cục bộ, chờ Drive index
           } else {
-            // Ensure master state file exists on Drive for current link if not yet created
+            // Kiểm tra trạng thái file liên kết hiện tại qua tab __CONFIG__
             try {
               const currentMaster = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
               if (currentMaster) {
@@ -1430,19 +1440,6 @@ export function useDriveSync({
                   setSyncDriveStatus('⚡ Thiết bị khác đã hủy liên kết. Đã dọn sạch dữ liệu để đảm bảo an toàn.');
                   return;
                 }
-              } else {
-                // Không tìm thấy file master JSON (so_tiet_kiem_backup.json) trên Drive.
-                // Tuyệt đối KHÔNG tự ý sinh file JSON mới từ dữ liệu cục bộ.
-                // Nếu máy này đang lưu link cũ nhưng trên Drive chưa có liên kết -> đặt app về trạng thái chưa liên kết.
-                console.info('[Central Hub Sync] Không có file master JSON trên Drive. Đặt app về trạng thái chưa liên kết.');
-                if (settings.googleSheetUrl) {
-                  setSettings((prev) => ({
-                    ...prev,
-                    googleSheetUrl: '',
-                    googleSheetName: '',
-                    lastSyncTime: undefined,
-                  }));
-                }
               }
             } catch (initErr: any) {
               console.warn('Init master state warning:', initErr);
@@ -1458,67 +1455,6 @@ export function useDriveSync({
                 return;
               }
             }
-
-            const discovery = await autoDiscoverLatestCentralHub(token, currentUser?.email);
-            const latestHub = discovery.status === 'found' ? discovery.hub : null;
-            if (discovery.status === 'multiple') {
-              setSyncDriveStatus(`Tìm thấy ${discovery.hubs.length} File liên kết; không tự chuyển file.`);
-            } else if (discovery.status === 'error') {
-              setSyncDriveStatus(`Không thể xác minh File liên kết trên Drive: ${discovery.message}`);
-            }
-            if (latestHub && latestHub.id !== fileId) {
-              const remoteTime = latestHub.linkedTimestamp || '';
-              const localTime = settings.lastLocalLinkTimestamp || '';
-
-              const remoteMs = remoteTime ? new Date(remoteTime).getTime() : 0;
-              const localMs = localTime ? new Date(localTime).getTime() : 0;
-
-              if (remoteMs > 0 && localMs > 0 && remoteMs <= localMs) {
-                setDetectedDesyncHub(null);
-                return;
-              }
-
-              // Thiết bị khác (ví dụ Tablet) đã đổi sang file trung tâm mới hơn! Tự động chuyển đổi và nạp file mới
-              console.info(`[Central Hub Sync] Phát hiện thiết bị khác đã chuyển sang file "${latestHub.name}" (Timestamp: ${remoteTime}). Tự động đồng bộ theo file mới...`);
-              const newLink = latestHub.webViewLink || `https://docs.google.com/spreadsheets/d/${latestHub.id}/edit`;
-              
-              isSwitchingFileRef.current = true;
-              fileSwitchCooldownUntilRef.current = Date.now() + 8000;
-
-              try {
-                const res = await downloadRealGoogleDriveFile(token, latestHub.id, latestHub.mimeType, currentUser?.email || '');
-                if (res.success) {
-                  applyMasterSettlements(res.settlements || []);
-                  if (res.books && res.books.length > 0) {
-                    const activeRemote = res.books.map((b) => ({ ...b, status: 'active' as BookStatus }));
-                    const mergedBooks = sortAndReindexBooks(activeRemote);
-                    setBooks(mergedBooks);
-                    localStorage.setItem('savings_books_v3', JSON.stringify(mergedBooks));
-                  }
-                }
-              } catch (dErr) {
-                console.warn('Lỗi tải file trung tâm mới:', dErr);
-              } finally {
-                setTimeout(() => {
-                  isSwitchingFileRef.current = false;
-                }, 3500);
-              }
-
-              const nowStr = new Date().toLocaleString('vi-VN');
-              setSettings((prev) => ({
-                ...prev,
-                googleSheetUrl: newLink,
-                googleSheetName: latestHub.name,
-                lastSyncTime: nowStr,
-                lastLocalLinkTimestamp: remoteTime,
-                autoSync: true,
-              }));
-              setSyncDriveStatus(`⚡ Đã tự động chuyển và đồng bộ sang file trung tâm mới "${latestHub.name}"`);
-              setDetectedDesyncHub(null);
-              return;
-            } else {
-              setDetectedDesyncHub(null);
-            }
           }
         } catch (hubErr: any) {
           console.warn('Central hub check warning:', hubErr);
@@ -1528,7 +1464,7 @@ export function useDriveSync({
             hubErr?.message?.includes('invalid authentication credentials') ||
             hubErr?.message?.includes('credentials')
           ) {
-            console.warn('[Central Hub Sync] Token expired inside autoDiscover check. Clearing token.');
+            console.warn('[Central Hub Sync] Token expired inside checkRemoteSheetChanges. Clearing token.');
             setGoogleAccessToken(null);
             setIsDriveTokenExpired(true);
             setSyncDriveStatus('⚠️ Phiên kết nối Google Drive đã hết hạn.');
@@ -1543,7 +1479,12 @@ export function useDriveSync({
           return;
         }
 
-        if (meta?.modifiedTime) {
+        if (isInitial && !isInitialSyncDoneRef.current) {
+          if (meta?.modifiedTime) {
+            lastCheckedModifiedTimeRef.current = meta.modifiedTime;
+          }
+          await syncBooksFromDriveRef.current(false, token);
+        } else if (meta?.modifiedTime) {
           // Nếu vừa thực hiện đẩy dữ liệu lên Drive trong vòng 8 giây, cập nhật timestamp và bỏ qua kéo về để tránh ghi đè dữ liệu vừa sửa
           if (Date.now() - lastLocalPushTimeRef.current < 8000) {
             lastCheckedModifiedTimeRef.current = meta.modifiedTime;
@@ -1552,10 +1493,6 @@ export function useDriveSync({
 
           if (!lastCheckedModifiedTimeRef.current) {
             lastCheckedModifiedTimeRef.current = meta.modifiedTime;
-            // Chỉ kéo về nếu lần đầu tiên ứng dụng khởi động và chưa nạp dữ liệu
-            if (isInitial && !isInitialSyncDoneRef.current) {
-              await syncBooksFromDriveRef.current(false, token);
-            }
           } else if (meta.modifiedTime !== lastCheckedModifiedTimeRef.current) {
             // File trên Google Drive đã được sửa đổi bên ngoài!
             lastCheckedModifiedTimeRef.current = meta.modifiedTime;
@@ -1809,13 +1746,41 @@ export function useDriveSync({
   const renewTokenAndSync = useCallback(async () => {
     try {
       setSyncDriveStatus('🔄 Đang mở xác thực Google Drive...');
-      const token = await ensureGoogleAccessToken();
+      const authResult = await signInWithGoogle();
+      const token = authResult.accessToken;
       if (token) {
         clearExpiredNoticeTimer();
+        setIsDriveTokenExpired(false);
+        try {
+          sessionStorage.removeItem('dismissed_drive_prompt');
+        } catch {}
+
+        // Cập nhật ngay lập tức thông tin tài khoản đã đăng nhập vào React state & bộ nhớ
+        if (authResult.user && authResult.user.email) {
+          const userEmail = authResult.user.email.trim().toLowerCase();
+          const onlineUser: AuthUser = {
+            email: userEmail,
+            name: authResult.user.displayName || userEmail.split('@')[0] || 'Chủ Tài Khoản',
+            photoURL: authResult.user.photoURL || undefined,
+            role: settingsRef.current.currentRole === 'VIEWER' ? 'viewer' : 'admin',
+            title: settingsRef.current.currentRole === 'VIEWER'
+              ? 'Thành viên (Chỉ xem) - Xem dữ liệu sổ tiết kiệm'
+              : 'Quản trị viên (Admin) - Toàn quyền quản lý & Đồng bộ Google Drive',
+            isOffline: false,
+          };
+          if (setCurrentUser) {
+            setCurrentUser(onlineUser);
+          }
+          try {
+            localStorage.setItem('savings_auth_user_v3', JSON.stringify(onlineUser));
+            Preferences.set({ key: 'savings_auth_user_v3', value: JSON.stringify(onlineUser) }).catch(() => {});
+          } catch {}
+        }
+
         setSyncDriveStatus('🔄 Đang kết nối và cập nhật file trung tâm...');
 
         // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không
-        const discovery = await autoDiscoverLatestCentralHub(token, currentUser?.email);
+        const discovery = await autoDiscoverLatestCentralHub(token, authResult.user?.email || currentUser?.email);
         const hub = discovery.status === 'found' ? discovery.hub : null;
         if (hub) {
           const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
@@ -1851,7 +1816,7 @@ export function useDriveSync({
       });
       throw err;
     }
-  }, [currentUser, setSettings, clearExpiredNoticeTimer]);
+  }, [currentUser, setCurrentUser, setSettings, clearExpiredNoticeTimer]);
 
   return {
     isSyncingDrive,

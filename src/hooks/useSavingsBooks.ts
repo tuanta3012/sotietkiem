@@ -491,8 +491,8 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
     [books, currentRole]
   );
 
-  const handleDeleteAllAppData = useCallback(() => {
-    if (!canEditData(currentRole)) {
+  const handleDeleteAllAppData = useCallback((isLoggedIn: boolean = true) => {
+    if (isLoggedIn && !canEditData(currentRole)) {
       alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền xóa toàn bộ dữ liệu.');
       return;
     }

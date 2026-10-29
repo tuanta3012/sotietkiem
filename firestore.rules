@@ -38,7 +38,7 @@ service cloud.firestore {
           request.resource.data.memberEmail != request.resource.data.adminEmail &&
           request.resource.data.role in ['EDITOR', 'VIEWER'] &&
           request.resource.data.status == 'active' &&
-          request.resource.data.updatedAt is int;
+          request.resource.data.updatedAt is number;
       }
 
       allow get: if isMember();

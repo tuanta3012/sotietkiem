@@ -58,6 +58,21 @@
         "createdAt": { "type": "string" }
       },
       "required": ["id", "backupName", "backupTimestamp", "booksCount", "jsonData", "userEmail"]
+    },
+    "AssignedShare": {
+      "title": "AssignedShare",
+      "description": "Bản ghi chia sẻ liên kết file Google Sheets ngầm cho từng thành viên",
+      "type": "object",
+      "properties": {
+        "assignedFileId": { "type": "string" },
+        "assignedFileName": { "type": "string" },
+        "adminEmail": { "type": "string" },
+        "memberEmail": { "type": "string" },
+        "role": { "type": "string", "enum": ["EDITOR", "VIEWER"] },
+        "status": { "type": "string", "enum": ["active"] },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["assignedFileId", "adminEmail", "memberEmail", "role", "status", "updatedAt"]
     }
   },
   "firestore": {
@@ -72,6 +87,10 @@
     "/app_backups/{backupId}": {
       "schema": "AppBackup",
       "description": "Bản sao lưu file so_tiet_kiem_backup.json dự phòng"
+    },
+    "/assigned_shares/{memberKey}": {
+      "schema": "AssignedShare",
+      "description": "Vé chuyển tiếp liên kết file ngầm cho thành viên dựa trên email"
     }
   }
 }

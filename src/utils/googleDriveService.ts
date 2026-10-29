@@ -109,15 +109,34 @@ let cachedAccessToken: string | null = (() => {
     for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
       localStorage.removeItem(key);
     }
+    const sessToken = sessionStorage.getItem(TOKEN_KEY);
+    const sessExp = sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY);
+    if (sessToken && sessExp && Date.now() < Number(sessExp) - 60_000) {
+      return sessToken;
+    }
   } catch {
-    console.warn('[Google Auth] Không thể xóa credential web cũ khỏi localStorage.');
+    console.warn('[Google Auth] Không thể đọc credential web từ sessionStorage.');
   }
   return null;
 })();
 let cachedIdToken: string | null = null;
 let cachedRefreshToken: string | null = null;
-let cachedUserProfile: ReturnType<typeof JSON.parse> | null = null;
+let cachedUserProfile: ReturnType<typeof JSON.parse> | null = (() => {
+  try {
+    const saved = localStorage.getItem(USER_PROFILE_KEY);
+    return saved ? JSON.parse(saved) : null;
+  } catch {
+    return null;
+  }
+})();
 let cachedTokenExpiresAt: number | null = (() => {
+  if (isNativeGoogleAuth) return null;
+  try {
+    const sessExp = sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY);
+    if (sessExp && Date.now() < Number(sessExp) - 60_000) {
+      return Number(sessExp);
+    }
+  } catch {}
   return null;
 })();
 let isSigningIn = false;
@@ -217,6 +236,9 @@ export function setGoogleAccessToken(token: string | null, expiresAtMs?: number)
         setAuthSecureItem(TOKEN_EXPIRES_AT_KEY, expiresAt).catch((err) => {
           console.error('[Google Auth] Không thể lưu hạn Access Token vào Secure Storage.', err);
         });
+      } else {
+        sessionStorage.setItem(TOKEN_KEY, token);
+        sessionStorage.setItem(TOKEN_EXPIRES_AT_KEY, expiresAt);
       }
       localStorage.setItem('google_drive_ever_logged_in', 'true');
       if (!isNativeGoogleAuth) {
@@ -231,6 +253,8 @@ export function setGoogleAccessToken(token: string | null, expiresAtMs?: number)
       for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
         localStorage.removeItem(key);
       }
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_EXPIRES_AT_KEY);
       Preferences.remove({ key: TOKEN_KEY }).catch((err) => console.warn('[Google Auth] Could not clear token preference.', err));
       Preferences.remove({ key: TOKEN_EXPIRES_AT_KEY }).catch((err) => console.warn('[Google Auth] Could not clear token expiry preference.', err));
       removeSecureItem(TOKEN_KEY).catch(() => {});
@@ -269,6 +293,15 @@ export async function saveGoogleAuthSession(session: {
     if (session.userProfile) secureWrites.push(setAuthSecureItem(USER_PROFILE_KEY, JSON.stringify(session.userProfile)));
     await Promise.all(secureWrites);
   } else {
+    try {
+      sessionStorage.setItem(TOKEN_KEY, session.accessToken);
+      sessionStorage.setItem(TOKEN_EXPIRES_AT_KEY, expiresAt.toString());
+      if (session.userProfile) {
+        localStorage.setItem(USER_PROFILE_KEY, JSON.stringify(session.userProfile));
+      }
+    } catch (e) {
+      console.warn('[Google Auth] Lỗi lưu session web vào sessionStorage:', e);
+    }
     for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
       localStorage.removeItem(key);
     }
@@ -292,12 +325,26 @@ export async function saveGoogleAuthSession(session: {
  */
 export async function restoreGoogleAuthSession(): Promise<boolean> {
   if (!isNativeGoogleAuth) {
-    for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
-      try {
+    try {
+      for (const key of [TOKEN_KEY, TOKEN_EXPIRES_AT_KEY, REFRESH_TOKEN_KEY, ID_TOKEN_KEY]) {
         localStorage.removeItem(key);
-      } catch (err) {
-        console.warn(`[Google Auth] Không thể xóa credential web cũ "${key}".`, err);
       }
+      const token = sessionStorage.getItem(TOKEN_KEY);
+      const expiresAtStr = sessionStorage.getItem(TOKEN_EXPIRES_AT_KEY);
+      const expiresAt = expiresAtStr ? Number(expiresAtStr) : null;
+      if (token && expiresAt && Date.now() < expiresAt - 60_000) {
+        cachedAccessToken = token;
+        cachedTokenExpiresAt = expiresAt;
+        const savedProfile = localStorage.getItem(USER_PROFILE_KEY);
+        if (savedProfile) {
+          try {
+            cachedUserProfile = JSON.parse(savedProfile);
+          } catch {}
+        }
+        return true;
+      }
+    } catch (err) {
+      console.warn(`[Google Auth] Không thể khôi phục phiên web từ sessionStorage:`, err);
     }
     return false;
   }
@@ -4078,54 +4125,68 @@ export async function setMasterSyncUnlinked(
 async function listGoogleSheetsVisibleToApp(
   accessToken: string
 ): Promise<Array<{ id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }>> {
-  const files: Array<{ id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }> = [];
-  let pageToken: string | undefined;
+  const fileMap = new Map<string, { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }>();
 
-  do {
-    const url = new URL('https://www.googleapis.com/drive/v3/files');
-    url.searchParams.set('pageSize', '100');
-    url.searchParams.set(
-      'fields',
-      'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties,sharedWithMe)'
-    );
-    url.searchParams.set('orderBy', 'modifiedTime desc');
-    url.searchParams.set('spaces', 'drive');
-    url.searchParams.set(
-      'q',
-      `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
-        `(appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-        `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-        `appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-        `sharedWithMe = true)`
-    );
-    if (pageToken) url.searchParams.set('pageToken', pageToken);
-
-    const response = await fetchWithRetry(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok) {
-      if (response.status === 401) {
-        setGoogleAccessToken(null);
-        throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng xác thực lại.');
-      }
-      const errorData = await response.json().catch(() => ({}));
-      if (
-        response.status === 403 &&
-        errorData?.error?.message?.includes('insufficient authentication scopes')
-      ) {
-        throw new Error('Google Drive chưa được cấp quyền drive.file cho ứng dụng.');
-      }
-      throw new Error(
-        errorData?.error?.message || `Không thể dò file Google Sheets trên Drive (Mã ${response.status}).`
+  const executeDriveQuery = async (query: string): Promise<void> => {
+    let pageToken: string | undefined;
+    do {
+      const url = new URL('https://www.googleapis.com/drive/v3/files');
+      url.searchParams.set('pageSize', '100');
+      url.searchParams.set(
+        'fields',
+        'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties,sharedWithMe)'
       );
-    }
+      url.searchParams.set('orderBy', 'modifiedTime desc');
+      url.searchParams.set('spaces', 'drive');
+      url.searchParams.set('q', query);
+      if (pageToken) url.searchParams.set('pageToken', pageToken);
 
-    const data = await response.json();
-    files.push(...(data.files || []));
-    pageToken = data.nextPageToken;
-  } while (pageToken);
+      const response = await fetchWithRetry(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
 
-  return files;
+      if (!response.ok) {
+        if (response.status === 401) {
+          setGoogleAccessToken(null);
+          throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng xác thực lại.');
+        }
+        console.warn(`[Google Drive] Query "${query}" returned HTTP ${response.status}`);
+        return;
+      }
+
+      const data = await response.json();
+      for (const f of data.files || []) {
+        if (f.id && !fileMap.has(f.id)) {
+          fileMap.set(f.id, f);
+        }
+      }
+      pageToken = data.nextPageToken;
+    } while (pageToken);
+  };
+
+  // 1. Tìm các tệp được chia sẻ với tôi (sharedWithMe = true)
+  try {
+    const sharedQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and sharedWithMe = true`;
+    await executeDriveQuery(sharedQuery);
+  } catch {
+    // ignore
+  }
+
+  // 2. Dò tìm các tệp có gắn nhãn nhận diện ứng dụng (appProperties)
+  const taggedQuery =
+    `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
+    `(appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+    `appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+    `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' })`;
+  await executeDriveQuery(taggedQuery);
+
+  // 3. Tìm tất cả bảng tính trong phạm vi drive.file nếu chưa có file nào
+  if (fileMap.size === 0) {
+    const generalQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`;
+    await executeDriveQuery(generalQuery);
+  }
+
+  return Array.from(fileMap.values());
 }
 
 /**
@@ -4221,6 +4282,12 @@ export async function autoDiscoverLatestCentralHub(
       saveLocalMasterPointerFileId(assignment.assignedFileId);
       saveLocalMasterPointerState(masterState);
       setExplicitlyUnlinked(false);
+
+      try {
+        await removeWorkspaceFileAssignment(cleanUserEmail);
+      } catch (cleanupErr) {
+        console.warn('[Workspace Relay] Không thể dọn dẹp bản ghi Firestore sau khi auto-discover thành công:', cleanupErr);
+      }
 
       return {
         status: 'found',
@@ -4335,25 +4402,7 @@ export async function autoDiscoverLatestCentralHub(
     }
 
     if (scanErrors.length) {
-      const affectedFiles = [...new Set(scanErrors)];
-      const verifiedCandidates = activeWorkspaces.map(({ file, state }) => ({
-        id: file.id,
-        name: state.activeFileName || file.name || 'Sổ tiết kiệm',
-        mimeType: file.mimeType,
-        webViewLink:
-          state.activeFileUrl ||
-          file.webViewLink ||
-          `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
-        linkedTimestamp: state.linkedTimestamp,
-      }));
-      return {
-        status: 'error',
-        message:
-          `Không thể xác minh cấu hình File liên kết của ${affectedFiles.length} bảng tính` +
-          `${affectedFiles.length ? ` (${affectedFiles.join(', ')})` : ''}. ` +
-          'Không tự chọn File liên kết để tránh liên kết nhầm; hãy kiểm tra quyền truy cập hoặc chọn file thủ công.',
-        candidates: verifiedCandidates,
-      };
+      console.warn(`[Central Hub Sync] Một số bảng tính không đọc được __CONFIG__: ${scanErrors.join(', ')}`);
     }
 
     if (activeWorkspaces.length === 0) {

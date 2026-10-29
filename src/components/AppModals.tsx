@@ -213,7 +213,10 @@ export const AppModals: React.FC<AppModalsProps> = ({
     drivePromptDismissed = false;
   }
   const shouldShowDriveTokenPrompt =
-    isDriveTokenExpired && isOnline && !drivePromptDismissed && !currentUser?.isOffline;
+    Boolean(currentUser && !currentUser.isOffline) &&
+    isDriveTokenExpired &&
+    isOnline &&
+    !drivePromptDismissed;
 
   const handleUpdateSettings = React.useCallback((newSettings: Partial<AppSettings>) => {
     setSettings((prev) => ({ ...prev, ...newSettings }));
