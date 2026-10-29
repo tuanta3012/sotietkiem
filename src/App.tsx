@@ -692,7 +692,13 @@ export default function App() {
           setIsUnlocked(true);
           setGoogleAccessToken(redirectRes.accessToken);
           setIsPendingAuth(false);
-          syncBooksFromDrive(false, redirectRes.accessToken);
+          syncBooksFromDrive(
+            false,
+            redirectRes.accessToken,
+            false,
+            undefined,
+            cleanEmail
+          );
         } else {
           setIsPendingAuth(false);
         }
@@ -787,71 +793,86 @@ export default function App() {
       if (res.accessToken) {
         setGoogleAccessToken(res.accessToken);
         setIsDriveTokenExpired(false);
-        if (!settings.googleSheetUrl) {
-          try {
-            const discovery = await autoDiscoverLatestCentralHub(res.accessToken, onlineUser.email);
-            const hub = discovery.status === 'found' ? discovery.hub : null;
-            if (hub && books.length > 0) {
-              const remote = await downloadRealGoogleDriveFile(
-                res.accessToken,
-                hub.id,
-                hub.mimeType,
-                onlineUser.email
-              );
-              if (!remote.success) {
-                throw new Error(remote.errors?.[0] || 'Không thể đọc dữ liệu Google Drive.');
-              }
-              if (
-                !hasSameLinkedData(
-                  books,
-                  remote.books || [],
-                  settlementAdjustments,
-                  remote.settlements || []
-                )
-              ) {
-                setConflictHub(hub);
-                setConflictToken(res.accessToken);
-                setConflictUser(onlineUser);
-                return;
-              }
+        try {
+          const discovery = await autoDiscoverLatestCentralHub(res.accessToken, onlineUser.email);
+          const currentFileId =
+            settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] ||
+            settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/)?.[1];
+          const hub =
+            discovery.status === 'found'
+              ? discovery.hub
+              : discovery.status === 'multiple'
+                ? discovery.hubs.find((candidate) => candidate.id === currentFileId) || null
+                : null;
+          if (hub && books.length > 0) {
+            const remote = await downloadRealGoogleDriveFile(
+              res.accessToken,
+              hub.id,
+              hub.mimeType,
+              onlineUser.email
+            );
+            if (!remote.success) {
+              throw new Error(remote.errors?.[0] || 'Không thể đọc dữ liệu Google Drive.');
             }
-            if (hub) {
-              const targetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-              setSettings((prev) => ({
-                ...prev,
-                googleSheetUrl: targetUrl,
-                googleSheetName: hub.name,
-                lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-              }));
-              window.setTimeout(async () => {
-                let syncSucceeded = false;
-                for (let attempt = 1; attempt <= 3; attempt++) {
-                  try {
-                    syncSucceeded = Boolean(await syncBooksFromDrive(false, res.accessToken, false, targetUrl));
-                    if (syncSucceeded) break;
-                  } catch {
-                    // ignore and retry
-                  }
-                  if (attempt < 3) {
-                    await new Promise((resolve) => window.setTimeout(resolve, 1000));
-                  }
-                }
-                if (syncSucceeded) {
-                  await consumeWorkspaceRelay(hub.relayAssignment ?? true, onlineUser.email);
-                }
-              }, 200);
-            } else {
-              setIsSyncModalOpen(true);
-              if (discovery.status === 'error') {
-                showToast(discovery.message, 'error');
-              }
+            if (
+              !hasSameLinkedData(
+                books,
+                remote.books || [],
+                settlementAdjustments,
+                remote.settlements || []
+              )
+            ) {
+              setConflictHub(hub);
+              setConflictToken(res.accessToken);
+              setConflictUser(onlineUser);
+              return;
             }
-          } catch (err: any) {
-            console.error('Không thể dò File liên kết sau khi đăng nhập:', err);
-            showToast(err?.message || 'Chưa kết nối được Google Drive. Dữ liệu trên máy vẫn được giữ.', 'error');
           }
-        } else {
-          await syncBooksFromDrive(false, res.accessToken);
+          if (hub) {
+            const targetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+            setSettings((prev) => ({
+              ...prev,
+              googleSheetUrl: targetUrl,
+              googleSheetName: hub.name,
+              currentRole: hub.role || prev.currentRole,
+              lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+            }));
+            window.setTimeout(async () => {
+              let syncSucceeded = false;
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  syncSucceeded = Boolean(
+                    await syncBooksFromDrive(false, res.accessToken, false, targetUrl, onlineUser.email)
+                  );
+                  if (syncSucceeded) break;
+                } catch {
+                  // ignore and retry
+                }
+                if (attempt < 3) {
+                  await new Promise((resolve) => window.setTimeout(resolve, 1000));
+                }
+              }
+              if (syncSucceeded) {
+                await consumeWorkspaceRelay(hub.relayAssignment, onlineUser.email);
+              }
+            }, 200);
+          } else if (discovery.status === 'multiple') {
+            setIsSyncModalOpen(true);
+            showToast(
+              `Tìm thấy ${discovery.hubs.length} File liên kết phù hợp. Hãy chọn đúng file trong mục đồng bộ Google Drive.`,
+              'error'
+            );
+          } else if (discovery.status === 'none' && settings.googleSheetUrl) {
+            await syncBooksFromDrive(false, res.accessToken, false, settings.googleSheetUrl, onlineUser.email);
+          } else {
+            setIsSyncModalOpen(true);
+            if (discovery.status === 'error') {
+              showToast(discovery.message, 'error');
+            }
+          }
+        } catch (err: any) {
+          console.error('Không thể dò File liên kết sau khi đăng nhập:', err);
+          showToast(err?.message || 'Chưa kết nối được Google Drive. Dữ liệu trên máy vẫn được giữ.', 'error');
         }
       }
     } catch (err: any) {
@@ -1002,7 +1023,7 @@ export default function App() {
       setIsUnlocked(true);
       if (token) {
         setGoogleAccessToken(token);
-        syncBooksFromDrive(false, token);
+        syncBooksFromDrive(false, token, false, undefined, user.email);
       }
     },
     [syncBooksFromDrive]
@@ -1212,7 +1233,13 @@ export default function App() {
     setConflictUser(null);
     showToast('Đang thiết lập kết nối và tải toàn bộ sổ cũ từ Google Drive về máy...', 'info');
     setTimeout(async () => {
-      const syncSucceeded = await syncBooksFromDrive(false, accessToken);
+      const syncSucceeded = await syncBooksFromDrive(
+        false,
+        accessToken,
+        false,
+        hubUrl,
+        memberEmail
+      );
       if (syncSucceeded) {
         await consumeWorkspaceRelay(relayAssignment, memberEmail);
       }

@@ -4208,7 +4208,15 @@ export type CentralHubDiscoveryResult =
   | { status: 'none' }
   | {
       status: 'multiple';
-      hubs: Array<{ id: string; name: string; webViewLink?: string; mimeType?: string; linkedTimestamp?: string }>;
+      hubs: Array<{
+        id: string;
+        name: string;
+        webViewLink?: string;
+        mimeType?: string;
+        linkedTimestamp?: string;
+        role?: UserRole;
+        relayAssignment?: boolean;
+      }>;
     }
   | {
       status: 'error';
@@ -4283,10 +4291,12 @@ export async function autoDiscoverLatestCentralHub(
       saveLocalMasterPointerState(masterState);
       setExplicitlyUnlinked(false);
 
-      try {
-        await removeWorkspaceFileAssignment(cleanUserEmail);
-      } catch (cleanupErr) {
-        console.warn('[Workspace Relay] Không thể dọn dẹp bản ghi Firestore sau khi auto-discover thành công:', cleanupErr);
+      if (discoveryTagWritten) {
+        try {
+          await removeWorkspaceFileAssignment(cleanUserEmail);
+        } catch (cleanupErr) {
+          console.warn('[Workspace Relay] Không thể dọn dẹp bản ghi Firestore sau khi auto-discover thành công:', cleanupErr);
+        }
       }
 
       return {
@@ -4439,6 +4449,7 @@ export async function autoDiscoverLatestCentralHub(
             file.webViewLink ||
             `https://docs.google.com/spreadsheets/d/${file.id}/edit`,
           linkedTimestamp: state.linkedTimestamp,
+          role: resolveUserRole(cleanUserEmail, undefined, state.members, state.adminEmail),
         })),
       };
     }

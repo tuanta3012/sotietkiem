@@ -343,12 +343,19 @@ export function useDriveSync({
 
   // Intelligent Drive Synchronization
   const syncBooksFromDrive = useCallback(
-    async (forceTokenPrompt = false, explicitToken?: string, _pushAfterSync = false, explicitFileUrl?: string) => {
+    async (
+      forceTokenPrompt = false,
+      explicitToken?: string,
+      _pushAfterSync = false,
+      explicitFileUrl?: string,
+      explicitUserEmail?: string
+    ) => {
       if (currentUser?.isOffline && !settings.googleSheetUrl && !explicitFileUrl) return;
       if (isSwitchingFileRef.current || isPushingRef.current || isSyncingRef.current) {
         return;
       }
 
+      const syncUserEmail = explicitUserEmail?.trim() || currentUser?.email || '';
       let token = explicitToken || getGoogleAccessToken();
       const isValid = isGoogleTokenValid();
 
@@ -406,7 +413,7 @@ export function useDriveSync({
         try {
           const masterState = token ? await getMasterSyncStateFromDrive(token, fileId) : null;
           if (masterState) {
-            applyMasterStateToSettings(masterState, currentUser?.email, setSettings, settingsRef.current, token);
+            applyMasterStateToSettings(masterState, syncUserEmail, setSettings, settingsRef.current, token);
             if (masterState.status === 'unlinked' || masterState.lastAction === 'unlink') {
               const unlinkMs = masterState.updatedAt
                 ? new Date(masterState.updatedAt).getTime()
@@ -446,7 +453,7 @@ export function useDriveSync({
         if (canPushToDrive(settingsRef.current?.currentRole)) {
           try {
             await captureMasterDataCellChanges(token, fileId, 'drive_pull', {
-              userEmail: currentUser?.email,
+              userEmail: syncUserEmail,
               currentRole: settingsRef.current?.currentRole,
               sheetName: settingsRef.current?.googleSheetName,
             });
@@ -457,7 +464,7 @@ export function useDriveSync({
               title: 'Không đối chiếu được sheet master trước khi tải',
               status: 'error',
               fileId,
-              userEmail: currentUser?.email,
+              userEmail: syncUserEmail,
               currentRole: settingsRef.current?.currentRole,
               sheetName: settingsRef.current?.googleSheetName,
               summary: `Không thể kiểm tra thay đổi ô A:AC trước khi tải: ${auditError?.message || auditError}`,
@@ -469,7 +476,7 @@ export function useDriveSync({
 
         let res;
         try {
-          res = await downloadRealGoogleDriveFile(token, fileId, undefined, currentUser?.email || '');
+          res = await downloadRealGoogleDriveFile(token, fileId, undefined, syncUserEmail);
         } catch (tokenErr: any) {
           // If token expired (401) or credentials invalid
           if (
@@ -483,12 +490,12 @@ export function useDriveSync({
             if (freshToken) {
               token = freshToken;
               setIsDriveTokenExpired(false);
-              res = await downloadRealGoogleDriveFile(freshToken, fileId, undefined, currentUser?.email || '');
+              res = await downloadRealGoogleDriveFile(freshToken, fileId, undefined, syncUserEmail);
             } else if (forceTokenPrompt) {
               try {
                 token = await ensureGoogleAccessToken();
                 setIsDriveTokenExpired(false);
-                res = await downloadRealGoogleDriveFile(token, fileId, undefined, currentUser?.email || '');
+                res = await downloadRealGoogleDriveFile(token, fileId, undefined, syncUserEmail);
               } catch {
                 return;
               }
@@ -507,7 +514,7 @@ export function useDriveSync({
           isRemoteUpdateRef.current = true;
           remoteSyncCooldownUntilRef.current = Date.now() + 5000;
 
-          const userEmail = currentUser?.email || 'unknown';
+          const userEmail = syncUserEmail || 'unknown';
           if (userEmail && userEmail !== 'unknown') {
             removeWorkspaceFileAssignment(userEmail).catch(() => {});
           }
@@ -718,7 +725,7 @@ export function useDriveSync({
             title: 'Không thể phân tích dữ liệu Google Drive',
             status: 'error',
             fileId,
-            userEmail: currentUser?.email,
+            userEmail: syncUserEmail,
             currentRole: settingsRef.current?.currentRole,
             sheetName: settingsRef.current?.googleSheetName,
             summary: res.errors[0],
@@ -738,7 +745,7 @@ export function useDriveSync({
             title: 'Google Drive không trả dữ liệu hợp lệ',
             status: 'error',
             fileId,
-            userEmail: currentUser?.email,
+            userEmail: syncUserEmail,
             currentRole: settingsRef.current?.currentRole,
             sheetName: settingsRef.current?.googleSheetName,
             summary: 'Không tải được dữ liệu hợp lệ và không có thông tin lỗi chi tiết.',
@@ -757,7 +764,7 @@ export function useDriveSync({
           type: 'SYNC_ERROR',
           title: 'Lỗi tải dữ liệu từ Google Drive',
           status: 'error',
-          userEmail: currentUser?.email,
+          userEmail: syncUserEmail,
           currentRole: settingsRef.current?.currentRole,
           sheetName: settingsRef.current?.googleSheetName,
           summary: `Lỗi đọc file Google Drive: ${err?.message || err}`,
@@ -1625,10 +1632,11 @@ export function useDriveSync({
                   ...prev,
                   googleSheetUrl: sheetUrl,
                   googleSheetName: hub.name || 'Bảng tính tiết kiệm',
+                  currentRole: hub.role || prev.currentRole,
                 }));
                 setExplicitlyUnlinked(false);
                 console.info('[Central Hub Sync] Tự động liên kết và nạp dữ liệu từ master File liên kết...');
-                await syncBooksFromDriveRef.current(false, token);
+                await syncBooksFromDriveRef.current(false, token, false, sheetUrl, currentUser.email);
               }
             } else {
               const currentUrl = settingsRef.current.googleSheetUrl;
