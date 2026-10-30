@@ -21,7 +21,6 @@ import {
   updateRealGoogleDriveFile,
   getRealGoogleDriveFileMetadata,
   getGoogleAccessToken,
-  isGoogleTokenValid,
   setGoogleAccessToken,
   restoreGoogleAuthSession,
   signOutGoogle,
@@ -898,50 +897,8 @@ export default function App() {
     }
   };
 
-  const handleNavbarSync = async () => {
-    if (!isOnline || isSyncingDrive || isLoggingInGoogle) return;
-    if (
-      !currentUser ||
-      currentUser.isOffline ||
-      isDriveTokenExpired ||
-      !getGoogleAccessToken() ||
-      !isGoogleTokenValid()
-    ) {
-      try {
-        sessionStorage.removeItem('dismissed_drive_prompt');
-      } catch {}
-      setIsDriveTokenExpired(false);
-      await handleLoginGoogle();
-      return;
-    }
-    if (settings.googleSheetUrl) {
-      try {
-        const token = getGoogleAccessToken();
-        if (!token) {
-          setIsSyncModalOpen(true);
-          return;
-        }
-        showToast('Đang đồng bộ dữ liệu với Google Drive...', 'info');
-        const success = await syncBooksFromDrive(
-          false,
-          token,
-          false,
-          settings.googleSheetUrl,
-          currentUser?.email
-        );
-        if (success) {
-          showToast('Đã đồng bộ dữ liệu mới nhất với Google Drive thành công!', 'success');
-        } else {
-          setIsSyncModalOpen(true);
-        }
-      } catch (err: any) {
-        console.warn('Lỗi đồng bộ nhanh từ navbar:', err);
-        showToast(err?.message || 'Lỗi đồng bộ. Vui lòng kiểm tra lại kết nối.', 'error');
-        setIsSyncModalOpen(true);
-      }
-    } else {
-      setIsSyncModalOpen(true);
-    }
+  const handleNavbarSync = () => {
+    setIsSyncModalOpen(true);
   };
 
   const clearSessionAndLocalData = () => {
