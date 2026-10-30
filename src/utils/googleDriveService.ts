@@ -4210,6 +4210,7 @@ async function listGoogleSheetsVisibleToApp(
       sharedWithMe?: boolean;
     }
   >();
+  const queryErrors: string[] = [];
 
   const executeDriveQuery = async (query: string): Promise<void> => {
     let pageToken: string | undefined;
@@ -4234,8 +4235,10 @@ async function listGoogleSheetsVisibleToApp(
           setGoogleAccessToken(null);
           throw new Error('Phiên đăng nhập Google đã hết hạn. Vui lòng xác thực lại.');
         }
-        console.warn(`[Google Drive] Query "${query}" returned HTTP ${response.status}`);
-        return;
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          errorData?.error?.message || `Google Drive API trả về HTTP ${response.status}.`
+        );
       }
 
       const data = await response.json();
@@ -4261,6 +4264,7 @@ async function listGoogleSheetsVisibleToApp(
     const sharedQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and sharedWithMe = true`;
     await executeDriveQuery(sharedQuery);
   } catch (err) {
+    queryErrors.push(err instanceof Error ? err.message : 'Lỗi khi tìm file được chia sẻ.');
     console.warn('[Google Drive] Lỗi quét bảng tính sharedWithMe:', err);
   }
 
@@ -4269,6 +4273,7 @@ async function listGoogleSheetsVisibleToApp(
     const generalQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`;
     await executeDriveQuery(generalQuery);
   } catch (err) {
+    queryErrors.push(err instanceof Error ? err.message : 'Lỗi khi tìm bảng tính trên Drive.');
     console.warn('[Google Drive] Lỗi quét bảng tính Google Sheets trong Drive:', err);
   }
 
@@ -4282,10 +4287,14 @@ async function listGoogleSheetsVisibleToApp(
       `appProperties has { key='app_label' and value='${SAVINGS_APP_ID}' })`;
     await executeDriveQuery(taggedQuery);
   } catch (err) {
+    queryErrors.push(err instanceof Error ? err.message : 'Lỗi khi tìm file có nhãn ứng dụng.');
     console.warn('[Google Drive] Lỗi quét bảng tính có appProperties:', err);
   }
 
   const allFiles = Array.from(fileMap.values());
+  if (allFiles.length === 0 && queryErrors.length > 0) {
+    throw new Error(queryErrors[0]);
+  }
   allFiles.sort((a, b) => {
     const timeA = new Date(a.modifiedTime || 0).getTime();
     const timeB = new Date(b.modifiedTime || 0).getTime();
@@ -4354,13 +4363,13 @@ export async function autoDiscoverLatestCentralHub(
 
   try {
     let assignment: Awaited<ReturnType<typeof readWorkspaceFileAssignment>> = null;
-    let relayReadError = '';
     try {
       assignment = await readWorkspaceFileAssignment(cleanUserEmail);
     } catch (relayError) {
-      console.warn('[Workspace Relay] Không đọc được vé liên kết từ Firestore.', relayError);
-      relayReadError =
-        relayError instanceof Error ? relayError.message : 'Lỗi không xác định khi đọc Firestore.';
+      console.info(
+        '[Workspace Relay] Không đọc được vé chuyển tiếp; tiếp tục dò file liên kết qua Google Drive.',
+        relayError
+      );
     }
 
     if (assignment) {
@@ -4455,15 +4464,18 @@ export async function autoDiscoverLatestCentralHub(
     // TUYỆT ĐỐI LOẠI BỎ CÁC FILE CÓ TÊN MẶC ĐỊNH TEST (như So_tiet_kiem_2026)
     const labeledCandidates = driveFiles.filter((f) => isFileLabeledWithApp(f) && !isDefaultTestName(f.name));
 
-    // Nếu có file mang nhãn com.tietkiemgiadinh.app, CHỈ quét các file này qua Sheets API
-    // Fallback: chỉ khi hoàn toàn không có file nào mang nhãn, mới xét các file khác (tuyệt đối không lấy file test mặc định)
-    let candidateFiles = labeledCandidates;
-    if (candidateFiles.length === 0) {
-      const savingsPattern = /tiet[_\s-]?kiem|savings/i;
-      candidateFiles = driveFiles
-        .filter((f) => savingsPattern.test(f.name || '') && !isDefaultTestName(f.name))
-        .slice(0, 10);
-    }
+    // Scan labeled files first, then use likely workspace names as fallback candidates.
+    const labeledIds = new Set(labeledCandidates.map((file) => file.id));
+    const savingsPattern = /tiet[_\s-]?kiem|savings/i;
+    const namedFallbackCandidates = driveFiles
+      .filter(
+        (file) =>
+          !labeledIds.has(file.id) &&
+          savingsPattern.test(file.name || '') &&
+          !isDefaultTestName(file.name)
+      )
+      .slice(0, 10);
+    const candidateFiles = [...labeledCandidates, ...namedFallbackCandidates];
 
     const activeWorkspaces: Array<{
       file: { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string };
@@ -4533,7 +4545,9 @@ export async function autoDiscoverLatestCentralHub(
           } else if (reason.toLowerCase().includes('insufficient authentication scopes')) {
             missingDriveScope = true;
           } else {
-            scanErrors.push(file.name || 'Một bảng tính Google Sheets');
+            scanErrors.push(
+              `${file.name || 'Một bảng tính Google Sheets'}: ${reason}`
+            );
           }
           console.warn(`[Central Hub Sync] Không thể xác minh cấu hình File liên kết của file ${file.id}.`, err);
         }
@@ -4567,10 +4581,12 @@ export async function autoDiscoverLatestCentralHub(
     );
 
     if (validWorkspaces.length === 0) {
-      if (relayReadError) {
+      if (scanErrors.length > 0) {
         return {
           status: 'error',
-          message: `Không thể đọc vé liên kết Firestore và cũng không tìm thấy File liên kết trên Drive: ${relayReadError}`,
+          message: `Không thể xác minh cấu hình __CONFIG__ trên Drive: ${scanErrors
+            .slice(0, 3)
+            .join('; ')}${scanErrors.length > 3 ? `; và ${scanErrors.length - 3} file khác` : ''}.`,
         };
       }
       return { status: 'none' };
@@ -4664,7 +4680,8 @@ export async function autoDiscoverLatestCentralHub(
         : normalizedMessage.includes('insufficient authentication scopes') ||
             normalizedMessage.includes('drive.file')
           ? 'Ứng dụng chưa được cấp đủ quyền Google Drive để dò File liên kết. Vui lòng đăng nhập lại và cấp quyền Drive.'
-          : 'Không thể đọc danh sách Google Sheets trên Drive. Vui lòng kiểm tra kết nối mạng và quyền truy cập, sau đó thử lại.';
+        : rawMessage ||
+          'Không thể đọc danh sách Google Sheets trên Drive. Vui lòng kiểm tra kết nối mạng và quyền truy cập, sau đó thử lại.';
     console.warn('Error auto-discovering central hub from Drive:', err);
     return { status: 'error', message };
   }
