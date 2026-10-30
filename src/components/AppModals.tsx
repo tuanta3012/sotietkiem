@@ -33,10 +33,7 @@ import {
 } from '../utils/googleDriveService';
 import { WorkspaceMember } from '../types';
 import { resolveUserRole } from '../utils/roleHelper';
-import {
-  publishWorkspaceFileToMembers,
-  removeWorkspaceFileAssignment,
-} from '../utils/workspaceShareRelay';
+import { publishWorkspaceFileToMembers } from '../utils/workspaceShareRelay';
 
 // Lazy load modal nặng DataSyncModal (~83KB)
 const DataSyncModal = React.lazy(() =>
@@ -325,21 +322,6 @@ export const AppModals: React.FC<AppModalsProps> = ({
         }
       }
 
-      const removedMembers = (currentMaster.members || []).filter((member) => {
-        const email = member.email.trim().toLowerCase();
-        return email !== configuredAdminEmail.trim().toLowerCase() && !nextMembersByEmail.has(email);
-      });
-      for (const member of removedMembers) {
-        try {
-          await removeWorkspaceFileAssignment(member.email);
-        } catch (relayError) {
-          throw new Error(
-            `Đã cập nhật roster nhưng không thu hồi được vé Firestore của ${member.email}: ${
-              relayError instanceof Error ? relayError.message : 'Lỗi không xác định.'
-            }`
-          );
-        }
-      }
       return permissionSync;
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Lỗi không xác định khi đọc danh sách quyền.';

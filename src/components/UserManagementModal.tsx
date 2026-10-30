@@ -90,14 +90,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     if (isOpen && hasLinkedDriveFile && isAdmin) {
       const runBackgroundSync = async () => {
         try {
-          const result = await onResyncDrivePermissions();
-          if (result) {
-            const failures = result.entries.filter((entry) => entry.action === 'failed');
-            if (failures.length === 0) {
-              setSuccessMsg('Đã tự động đồng bộ quyền Drive thành công.');
-              setTimeout(() => setSuccessMsg(null), 2500);
-            }
-          }
+          await onResyncDrivePermissions();
         } catch (err) {
           console.log('Background drive permission sync note:', err);
         }
@@ -210,8 +203,9 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     try {
       setMembers(updated);
       const result = await onSaveMembers(updated);
-      showPermissionSyncResult(result);
-      setTimeout(() => setSuccessMsg(null), 2500);
+      if (!result || result.entries.some((entry) => entry.action === 'failed')) {
+        showPermissionSyncResult(result);
+      }
     } catch (err) {
       setMembers(members);
       setErrorMsg(err instanceof Error ? err.message : 'Lỗi khi xóa thành viên.');
