@@ -1094,7 +1094,7 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
     size?: string;
     webViewLink?: string;
     iconLink?: string;
-    sharedWithMe?: boolean;
+    sharedWithMeTime?: string;
     appProperties?: Record<string, string>;
   }> = [];
   let pageToken: string | undefined;
@@ -1104,7 +1104,7 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
     url.searchParams.set('pageSize', '100');
     url.searchParams.set(
       'fields',
-      'nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,iconLink,sharedWithMe,appProperties)'
+      'nextPageToken,files(id,name,mimeType,modifiedTime,size,webViewLink,iconLink,sharedWithMeTime,appProperties)'
     );
     url.searchParams.set('orderBy', 'modifiedTime desc');
     url.searchParams.set('spaces', 'drive');
@@ -1156,7 +1156,7 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
         iconLink: file.iconLink,
         isSheetOrExcel: true,
         isCentralHub,
-        isSharedWithMe: Boolean(file.sharedWithMe),
+        isSharedWithMe: Boolean(file.sharedWithMeTime),
         isCreatedByApp,
         isManagedByApp,
         linkedTimestamp: isCentralHub ? masterState?.linkedTimestamp : undefined,
@@ -4196,7 +4196,7 @@ async function listGoogleSheetsVisibleToApp(
   webViewLink?: string;
   modifiedTime?: string;
   appProperties?: Record<string, string>;
-  sharedWithMe?: boolean;
+  sharedWithMeTime?: string;
 }>> {
   const fileMap = new Map<
     string,
@@ -4207,7 +4207,7 @@ async function listGoogleSheetsVisibleToApp(
       webViewLink?: string;
       modifiedTime?: string;
       appProperties?: Record<string, string>;
-      sharedWithMe?: boolean;
+      sharedWithMeTime?: string;
     }
   >();
   const queryErrors: string[] = [];
@@ -4219,7 +4219,7 @@ async function listGoogleSheetsVisibleToApp(
       url.searchParams.set('pageSize', '100');
       url.searchParams.set(
         'fields',
-        'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties,sharedWithMe)'
+        'nextPageToken,files(id,name,mimeType,webViewLink,modifiedTime,appProperties,sharedWithMeTime)'
       );
       url.searchParams.set('orderBy', 'modifiedTime desc');
       url.searchParams.set('spaces', 'drive');
@@ -4251,7 +4251,7 @@ async function listGoogleSheetsVisibleToApp(
             webViewLink: f.webViewLink,
             modifiedTime: f.modifiedTime,
             appProperties: f.appProperties,
-            sharedWithMe: Boolean(f.sharedWithMe),
+            sharedWithMeTime: f.sharedWithMeTime,
           });
         }
       }
