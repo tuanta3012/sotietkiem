@@ -431,12 +431,16 @@ export function useDriveSync({
                   localStorage.setItem('savings_books_cleared', 'true');
                   localStorage.removeItem('savings_settlements_v3');
                   clearStaticHistoryFromStorage();
-                  sessionStorage.setItem('explicitly_unlinked', 'true');
                 } catch {}
+                setExplicitlyUnlinked(true);
                 setSettings((prev) => ({
                   ...prev,
                   googleSheetUrl: '',
                   googleSheetName: '',
+                  currentRole: 'ADMIN',
+                  workspaceOwnerEmail: undefined,
+                  isPersonalWorkspace: true,
+                  members: [],
                   lastSyncTime: undefined,
                   lastLocalLinkTimestamp: masterState.updatedAt || masterState.linkedTimestamp,
                 }));
@@ -951,6 +955,9 @@ export function useDriveSync({
               ...prev,
               googleSheetUrl: '',
               googleSheetName: '',
+              currentRole: 'ADMIN',
+              workspaceOwnerEmail: undefined,
+              isPersonalWorkspace: true,
               members: [],
               lastSyncTime: undefined,
               lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
@@ -1160,7 +1167,7 @@ export function useDriveSync({
         }
 
         // 1. Trường hợp máy chưa có file liên kết cục bộ (hoặc máy 2 vừa mở app sau khi máy 1 tạo/liên kết lại)
-        if (!settingsRef.current.googleSheetUrl && !isExplicitlyUnlinked()) {
+        if (!settingsRef.current.googleSheetUrl) {
           const discovery = await autoDiscoverLatestCentralHub(token, currentUser?.email);
           const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
           const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
@@ -1242,6 +1249,9 @@ export function useDriveSync({
             ...prev,
             googleSheetUrl: undefined,
             googleSheetName: undefined,
+            currentRole: 'ADMIN',
+            workspaceOwnerEmail: undefined,
+            isPersonalWorkspace: true,
             members: [],
             lastSyncTime: undefined,
           }));
@@ -1458,6 +1468,9 @@ export function useDriveSync({
                     ...prev,
                     googleSheetUrl: '',
                     googleSheetName: '',
+                    currentRole: 'ADMIN',
+                    workspaceOwnerEmail: undefined,
+                    isPersonalWorkspace: true,
                     members: [],
                     lastSyncTime: undefined,
                     lastLocalLinkTimestamp: currentMaster.updatedAt || currentMaster.linkedTimestamp,
@@ -1641,7 +1654,7 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
-            if (!settingsRef.current.googleSheetUrl && !isExplicitlyUnlinked()) {
+            if (!settingsRef.current.googleSheetUrl) {
               const discovery = await autoDiscoverLatestCentralHub(token, currentUser.email);
               const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
               const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
@@ -1672,6 +1685,9 @@ export function useDriveSync({
                   ...prev,
                   googleSheetUrl: undefined,
                   googleSheetName: undefined,
+                  currentRole: 'ADMIN',
+                  workspaceOwnerEmail: undefined,
+                  isPersonalWorkspace: true,
                   members: [],
                   lastSyncTime: undefined,
                 }));
@@ -1806,22 +1822,21 @@ export function useDriveSync({
 
         setSyncDriveStatus('🔄 Đang kết nối và cập nhật file trung tâm...');
 
-        // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không (nếu chưa chủ động hủy)
-        if (!isExplicitlyUnlinked()) {
-          const discovery = await autoDiscoverLatestCentralHub(token, authResult.user?.email || currentUser?.email);
-          const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
-          const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
-          if (hub) {
-            const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-            if (hubUrl !== settingsRef.current.googleSheetUrl) {
-              console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
-              setSettings((prev) => ({
-                ...prev,
-                googleSheetUrl: hubUrl,
-                googleSheetName: hub.name,
-                lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-              }));
-            }
+        // Check for an active membership even after a legacy local unlink.
+        const discovery = await autoDiscoverLatestCentralHub(token, authResult.user?.email || currentUser?.email);
+        const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
+        const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
+        if (hub) {
+          const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+          if (hubUrl !== settingsRef.current.googleSheetUrl) {
+            console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
+            setSettings((prev) => ({
+              ...prev,
+              googleSheetUrl: hubUrl,
+              googleSheetName: hub.name,
+              currentRole: hub.role || prev.currentRole,
+              lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+            }));
           }
         }
 

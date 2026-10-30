@@ -17,6 +17,7 @@ import {
 import { AppSettings, AuthUser, WorkspaceMember, UserRole, canManageMembers } from '../types';
 import { useConfirmDialog } from '../context/ConfirmDialogContext';
 import { DrivePermissionSyncResult } from '../utils/googleDriveService';
+import { resolveUserRole } from '../utils/roleHelper';
 
 interface UserManagementModalProps {
   isOpen: boolean;
@@ -47,7 +48,12 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const isOwner = Boolean(userEmail && ownerEmail && userEmail === ownerEmail);
   const currentRole: UserRole = isOwner
     ? 'ADMIN'
-    : (settings.currentRole || (currentUser?.role === 'admin' ? 'ADMIN' : 'ADMIN'));
+    : resolveUserRole(
+        userEmail,
+        settings.currentRole,
+        settings.members,
+        settings.workspaceOwnerEmail
+      );
   const isAdmin = canManageMembers(currentRole);
 
   const [members, setMembers] = useState<WorkspaceMember[]>(() => {
@@ -454,7 +460,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           </div>
 
           {/* Autonomy / Leave Workspace Option */}
-          {onLeaveWorkspace && (
+          {onLeaveWorkspace && currentRole !== 'ADMIN' && (
             <div className="pt-2 border-t border-slate-100">
               <button
                 type="button"

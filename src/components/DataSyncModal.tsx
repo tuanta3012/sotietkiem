@@ -627,7 +627,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     const token = accessToken || getGoogleAccessToken();
-    if (token && !sheetUrl && !isChoosingDifferentFile && isOpen && !isExplicitlyUnlinked()) {
+    if (token && !sheetUrl && !isChoosingDifferentFile && isOpen) {
       setIsDiscoveringHub(true);
       autoDiscoverLatestCentralHub(token, currentUser?.email || appUser?.email)
         .then(async (discovery) => {
@@ -880,6 +880,12 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   // Safeguarded disconnect and clear
   const handleSafeguardedDisconnectAndClear = async () => {
+    if (!canChangeDriveFile(settings.currentRole)) {
+      setShowClearConfirm(false);
+      setSyncErrorMessage('Chỉ Admin mới có thể hủy liên kết nhóm. Thành viên có thể rời nhóm trong mục Quản lý thành viên.');
+      return;
+    }
+
     onStartFileSwitch?.();
     setIsUnlinking(true);
     setSyncStatusStep('Đang hủy liên kết và làm sạch dữ liệu trên ứng dụng...');
@@ -939,6 +945,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       lastLocalLinkTimestamp: undefined,
       autoSync: true,
       currentRole: 'ADMIN',
+      workspaceOwnerEmail: currentUser?.email || appUser?.email || undefined,
+      isPersonalWorkspace: true,
       members: [],
     });
     setSheetUrl('');
@@ -1268,30 +1276,36 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                         {lastSyncTime && <span>Cập nhật: <strong className="text-slate-700">{lastSyncTime}</strong></span>}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-2 pt-1">
-                        <button
-                          id="btn-link-google-drive"
-                          onClick={() => {
-                            setIsChoosingDifferentFile(true);
-                            setSelectedFileId(null);
-                            setGoogleSyncMessage(null);
-                            setSyncErrorMessage(null);
-                          }}
-                          className="w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border bg-white hover:bg-slate-100 text-slate-700 border-slate-200 cursor-pointer"
-                        >
-                          <Link2 className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Đổi file liên kết</span>
-                        </button>
+                      {canChangeDriveFile(settings.currentRole) ? (
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            id="btn-link-google-drive"
+                            onClick={() => {
+                              setIsChoosingDifferentFile(true);
+                              setSelectedFileId(null);
+                              setGoogleSyncMessage(null);
+                              setSyncErrorMessage(null);
+                            }}
+                            className="w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border bg-white hover:bg-slate-100 text-slate-700 border-slate-200 cursor-pointer"
+                          >
+                            <Link2 className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Đổi file liên kết</span>
+                          </button>
 
-                        <button
-                          id="btn-unlink-and-clear-data"
-                          onClick={() => setShowClearConfirm(true)}
-                          className="w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer"
-                        >
-                          <Unlink className="w-3.5 h-3.5 text-rose-600" />
-                          <span>Hủy liên kết</span>
-                        </button>
-                      </div>
+                          <button
+                            id="btn-unlink-and-clear-data"
+                            onClick={() => setShowClearConfirm(true)}
+                            className="w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer"
+                          >
+                            <Unlink className="w-3.5 h-3.5 text-rose-600" />
+                            <span>Hủy liên kết</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <p className="pt-1 text-[10px] text-slate-500">
+                          Admin quản lý liên kết nhóm. Thành viên có thể rời nhóm trong mục Quản lý thành viên.
+                        </p>
+                      )}
                     </>
                   )}
                 </div>

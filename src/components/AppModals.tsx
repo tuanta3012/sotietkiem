@@ -59,6 +59,7 @@ interface AppModalsProps {
   // Sync Modal
   isSyncModalOpen: boolean;
   setIsSyncModalOpen: (open: boolean) => void;
+  onOpenSyncModal?: () => void;
   onLoginOnline: (user: AuthUser, token?: string) => void;
   onDriveFileNotFound: () => void;
   onImportBooks: (newBooks: SavingsBook[], mode: 'replace' | 'append') => void;
@@ -158,6 +159,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
   onSaveBook,
   isSyncModalOpen,
   setIsSyncModalOpen,
+  onOpenSyncModal,
   onLoginOnline,
   onDriveFileNotFound,
   onImportBooks,
@@ -214,6 +216,13 @@ export const AppModals: React.FC<AppModalsProps> = ({
     isDriveTokenExpired &&
     isOnline &&
     !drivePromptDismissed;
+  const canOpenDriveManagement =
+    resolveUserRole(
+      currentUser?.email,
+      settings.currentRole,
+      settings.members,
+      settings.workspaceOwnerEmail
+    ) === 'ADMIN';
 
   const handleUpdateSettings = React.useCallback((newSettings: Partial<AppSettings>) => {
     setSettings((prev) => ({ ...prev, ...newSettings }));
@@ -412,7 +421,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
       )}
 
       {/* Data Sync & Import Modal (Lazy loaded) */}
-      {isSyncModalOpen && (
+      {isSyncModalOpen && canOpenDriveManagement && (
         <Suspense fallback={<ModalLoadingSpinner />}>
           <DataSyncModal
             isOpen={isSyncModalOpen}
@@ -571,7 +580,7 @@ export const AppModals: React.FC<AppModalsProps> = ({
           onSaveMembers={handleSaveMembers}
           onResyncDrivePermissions={handleResyncDrivePermissions}
           onLeaveWorkspace={onLeaveWorkspace}
-          onOpenSyncModal={() => setIsSyncModalOpen(true)}
+          onOpenSyncModal={onOpenSyncModal || (() => setIsSyncModalOpen(true))}
         />
       )}
     </>

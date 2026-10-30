@@ -21,6 +21,7 @@ import {
   updateRealGoogleDriveFile,
   getRealGoogleDriveFileMetadata,
   getGoogleAccessToken,
+  isGoogleTokenValid,
   setGoogleAccessToken,
   restoreGoogleAuthSession,
   signOutGoogle,
@@ -35,6 +36,7 @@ import {
   addBlockedUnlinkedFileId,
 } from './utils/googleDriveService';
 import { removeWorkspaceFileAssignment } from './utils/workspaceShareRelay';
+import { resolveUserRole } from './utils/roleHelper';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
 import {
   getDynamicAnnualInterestHistory,
@@ -756,8 +758,11 @@ export default function App() {
       currentRole: 'ADMIN',
       workspaceOwnerEmail: undefined,
       members: [],
+      isPersonalWorkspace: true,
+      lastLocalLinkTimestamp: undefined,
     }));
     setBooks([]);
+    setSettlementAdjustments([]);
     showToast('Đã rời không gian chia sẻ thành công! Bạn hiện là Admin không gian cá nhân mới.', 'success');
   };
 
@@ -897,8 +902,70 @@ export default function App() {
     }
   };
 
-  const handleNavbarSync = () => {
-    setIsSyncModalOpen(true);
+  const handleNavbarSync = async () => {
+    const role = resolveUserRole(
+      currentUser?.email,
+      settings.currentRole,
+      settings.members,
+      settings.workspaceOwnerEmail
+    );
+    if (role === 'ADMIN') {
+      setIsSyncModalOpen(true);
+      return;
+    }
+    if (!isOnline || isSyncingDrive || isLoggingInGoogle) return;
+
+    if (settings.googleSheetUrl) {
+      await syncBooksFromDrive(true, undefined, true);
+      return;
+    }
+
+    const token = getGoogleAccessToken();
+    if (!token || !isGoogleTokenValid()) {
+      try {
+        sessionStorage.removeItem('dismissed_drive_prompt');
+      } catch {}
+      setIsDriveTokenExpired(false);
+      await handleLoginGoogle();
+      return;
+    }
+
+    try {
+      const discovery = await autoDiscoverLatestCentralHub(token, currentUser?.email);
+      if (discovery.status !== 'found') {
+        const message =
+          discovery.status === 'multiple'
+            ? 'Tìm thấy nhiều file liên kết. Vui lòng liên hệ Admin để xác nhận file nhóm đang dùng.'
+            : discovery.status === 'error'
+              ? discovery.message
+              : 'Không tìm thấy file nhóm đang hoạt động mà tài khoản của bạn được cấp quyền.';
+        showToast(message, 'error');
+        return;
+      }
+
+      const fileUrl =
+        discovery.hub.webViewLink ||
+        `https://docs.google.com/spreadsheets/d/${discovery.hub.id}/edit`;
+      setSettings((prev) => ({
+        ...prev,
+        googleSheetUrl: fileUrl,
+        googleSheetName: discovery.hub.name,
+        currentRole: discovery.hub.role || prev.currentRole,
+        isPersonalWorkspace: false,
+      }));
+      await syncBooksFromDrive(
+        true,
+        token,
+        true,
+        fileUrl,
+        currentUser?.email
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : 'Không thể đồng bộ với file nhóm.',
+        'error'
+      );
+    }
   };
 
   const clearSessionAndLocalData = () => {
@@ -1415,7 +1482,7 @@ export default function App() {
                         currentDateStr={CURRENT_DATE}
                         settlements={settlementAdjustments}
                         onOpenOptimizer={() => setActiveTab('optimizer')}
-                        onOpenSyncModal={() => setIsSyncModalOpen(true)}
+                        onOpenSyncModal={handleNavbarSync}
                       />
                     </Suspense>
                   )}
@@ -1477,7 +1544,7 @@ export default function App() {
                     currentDateStr={CURRENT_DATE}
                     settings={settings}
                     onOpenBookDetail={handleSelectForAnalysis}
-                    onOpenSyncModal={() => setIsSyncModalOpen(true)}
+                    onOpenSyncModal={handleNavbarSync}
                   />
                 </Suspense>
               )}
@@ -1490,7 +1557,7 @@ export default function App() {
                     currentDateStr={CURRENT_DATE}
                     settlements={settlementAdjustments}
                     onOpenOptimizer={() => setActiveTab('optimizer')}
-                    onOpenSyncModal={() => setIsSyncModalOpen(true)}
+                    onOpenSyncModal={handleNavbarSync}
                   />
                 </Suspense>
               )}
@@ -1506,6 +1573,7 @@ export default function App() {
           onSaveBook={handleSaveBookFromModal}
           isSyncModalOpen={isSyncModalOpen}
           setIsSyncModalOpen={setIsSyncModalOpen}
+          onOpenSyncModal={handleNavbarSync}
           onLoginOnline={handleLoginOnlineFromModal}
           onDriveFileNotFound={handleDriveFileNotFoundFromModal}
           onImportBooks={handleImportBooksFromModal}

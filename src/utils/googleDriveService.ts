@@ -2846,8 +2846,10 @@ export function applyMasterStateToSettings(
     const hasFileChange = Boolean(newFileUrl && currentSettings.googleSheetUrl !== newFileUrl);
     const hasFileNameChange = Boolean(newFileName && currentSettings.googleSheetName !== newFileName);
     const hasTimestampChange = Boolean(newTimestamp && currentSettings.lastLocalLinkTimestamp !== newTimestamp);
+    const hasWorkspaceTypeChange =
+      masterState.status === 'active' && currentSettings.isPersonalWorkspace !== false;
 
-    if (!hasRoleChange && !hasMembersChange && !hasOwnerChange && !hasFileChange && !hasFileNameChange && !hasTimestampChange) {
+    if (!hasRoleChange && !hasMembersChange && !hasOwnerChange && !hasFileChange && !hasFileNameChange && !hasTimestampChange && !hasWorkspaceTypeChange) {
       return; // Skip setSettings completely to prevent unnecessary re-renders
     }
   }
@@ -2868,6 +2870,9 @@ export function applyMasterStateToSettings(
     }
 
     if (masterState.activeFileId && masterState.status !== 'unlinked') {
+      if (prev.isPersonalWorkspace !== false) {
+        updates.isPersonalWorkspace = false;
+      }
       if (newFileUrl && prev.googleSheetUrl !== newFileUrl) {
         updates.googleSheetUrl = newFileUrl;
       }
@@ -2972,6 +2977,14 @@ export function addBlockedUnlinkedFileId(fileId: string): void {
       existing.push(fileId);
       localStorage.setItem(BLOCKED_UNLINKED_FILE_IDS_KEY, JSON.stringify(existing));
     }
+  } catch {}
+}
+
+export function removeBlockedUnlinkedFileId(fileId: string): void {
+  try {
+    if (!fileId) return;
+    const remaining = getBlockedUnlinkedFileIds().filter((blockedId) => blockedId !== fileId);
+    localStorage.setItem(BLOCKED_UNLINKED_FILE_IDS_KEY, JSON.stringify(remaining));
   } catch {}
 }
 
@@ -4351,11 +4364,7 @@ export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   userEmail?: string
 ): Promise<CentralHubDiscoveryResult> {
-  // Nếu người dùng vừa chọn hủy liên kết trên máy, tuyệt đối không tự động liên kết lại
-  if (isExplicitlyUnlinked()) {
-    return { status: 'none' };
-  }
-
+  const explicitlyUnlinked = isExplicitlyUnlinked();
   const cleanUserEmail = userEmail?.trim().toLowerCase();
   if (!cleanUserEmail) {
     return { status: 'error', message: 'Không xác định được email để kiểm tra thành viên Nhóm thành viên.' };
@@ -4363,17 +4372,19 @@ export async function autoDiscoverLatestCentralHub(
 
   try {
     let assignment: Awaited<ReturnType<typeof readWorkspaceFileAssignment>> = null;
-    try {
-      assignment = await readWorkspaceFileAssignment(cleanUserEmail);
-    } catch (relayError) {
-      console.info(
-        '[Workspace Relay] Không đọc được vé chuyển tiếp; tiếp tục dò file liên kết qua Google Drive.',
-        relayError
-      );
+    if (!explicitlyUnlinked) {
+      try {
+        assignment = await readWorkspaceFileAssignment(cleanUserEmail);
+      } catch (relayError) {
+        console.info(
+          '[Workspace Relay] Không đọc được vé chuyển tiếp; tiếp tục dò file liên kết qua Google Drive.',
+          relayError
+        );
+      }
     }
 
     if (assignment) {
-      const blockedIds = getBlockedUnlinkedFileIds();
+      const blockedIds = explicitlyUnlinked ? [] : getBlockedUnlinkedFileIds();
       if (blockedIds.includes(assignment.assignedFileId)) {
         assignment = null;
       }
@@ -4426,6 +4437,7 @@ export async function autoDiscoverLatestCentralHub(
       saveLocalMasterPointerFileId(assignment.assignedFileId);
       saveLocalMasterPointerState(masterState);
       setExplicitlyUnlinked(false);
+      removeBlockedUnlinkedFileId(assignment.assignedFileId);
 
       // Luôn dọn dẹp vé Firestore sau khi đã xác thực và liên kết thành công
       try {
@@ -4455,7 +4467,7 @@ export async function autoDiscoverLatestCentralHub(
       };
     }
 
-    const blockedIds = getBlockedUnlinkedFileIds();
+    const blockedIds = explicitlyUnlinked ? [] : getBlockedUnlinkedFileIds();
     const driveFiles = (await listGoogleSheetsVisibleToApp(accessToken)).filter(
       (f) => !blockedIds.includes(f.id)
     );
@@ -4579,8 +4591,25 @@ export async function autoDiscoverLatestCentralHub(
     const validWorkspaces = activeWorkspaces.filter(
       (w) => !isDefaultTestName(w.file.name) && !isDefaultTestName(w.state.activeFileName)
     );
+    const reconnectableWorkspaces = explicitlyUnlinked
+      ? validWorkspaces.filter(({ state }) => {
+          const configuredAdminEmail = (
+            state.adminEmail ||
+            state.linkedAccountEmail ||
+            ''
+          ).trim().toLowerCase();
+          return (
+            configuredAdminEmail !== cleanUserEmail &&
+            state.members?.some(
+              (member) =>
+                member.email?.trim().toLowerCase() === cleanUserEmail &&
+                ['EDITOR', 'VIEWER'].includes(String(member.role).toUpperCase())
+            )
+          );
+        })
+      : validWorkspaces;
 
-    if (validWorkspaces.length === 0) {
+    if (reconnectableWorkspaces.length === 0) {
       if (scanErrors.length > 0) {
         return {
           status: 'error',
@@ -4594,7 +4623,7 @@ export async function autoDiscoverLatestCentralHub(
 
     // SẮP XẾP ƯU TIÊN THEO NGUỒN TIN CẬY NHẤT LÀ SHEET CONFIG:
     const localFileId = getLocalMasterPointerFileId();
-    validWorkspaces.sort((a, b) => {
+    reconnectableWorkspaces.sort((a, b) => {
       // 1. File đã được liên kết trước đó trên thiết bị này
       if (localFileId) {
         if (a.file.id === localFileId) return -1;
@@ -4620,8 +4649,8 @@ export async function autoDiscoverLatestCentralHub(
       return timeB - timeA;
     });
 
-    if (validWorkspaces.length > 1) {
-      const topWorkspace = validWorkspaces[0];
+    if (reconnectableWorkspaces.length > 1) {
+      const topWorkspace = reconnectableWorkspaces[0];
       const recommendedHub = {
         id: topWorkspace.file.id,
         name: topWorkspace.state.activeFileName || topWorkspace.file.name || 'Sổ tiết kiệm',
@@ -4636,7 +4665,7 @@ export async function autoDiscoverLatestCentralHub(
       return {
         status: 'multiple',
         recommendedHub,
-        hubs: validWorkspaces.map(({ file, state }) => ({
+        hubs: reconnectableWorkspaces.map(({ file, state }) => ({
           id: file.id,
           name: state.activeFileName || file.name || 'Sổ tiết kiệm',
           mimeType: file.mimeType,
@@ -4650,11 +4679,12 @@ export async function autoDiscoverLatestCentralHub(
       };
     }
 
-    const { file, state } = validWorkspaces[0];
+    const { file, state } = reconnectableWorkspaces[0];
     if (state.banksConfig?.length) updateBanksFromRemote(state.banksConfig);
     saveLocalMasterPointerFileId(file.id);
     saveLocalMasterPointerState(state);
     setExplicitlyUnlinked(false);
+    removeBlockedUnlinkedFileId(file.id);
     return {
       status: 'found',
       hub: {
