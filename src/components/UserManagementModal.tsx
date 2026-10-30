@@ -466,9 +466,9 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 type="button"
                 onClick={async () => {
                   if (await confirm({
-                    title: 'Rời không gian chia sẻ?',
-                    message: 'Bạn sẽ chuyển sang không gian cá nhân.',
-                    confirmLabel: 'Rời không gian',
+                    title: 'Rời nhóm?',
+                    message: 'Bạn sẽ rời khỏi nhóm và chuyển sang không gian cá nhân.',
+                    confirmLabel: 'Rời nhóm',
                   })) {
                     onLeaveWorkspace();
                     onClose();
@@ -477,7 +477,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 className="w-full py-1.5 px-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                <span>Rời không gian (Tự tạo sổ riêng)</span>
+                <span>Rời nhóm</span>
               </button>
             </div>
           )}

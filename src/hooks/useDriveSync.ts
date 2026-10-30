@@ -24,6 +24,7 @@ import {
   applyMasterStateToSettings,
   isExplicitlyUnlinked,
   setExplicitlyUnlinked,
+  isDefaultTestName,
 } from '../utils/googleDriveService';
 import { buildSavingsDataAuditDiff, recordSyncAuditLog } from '../utils/syncAuditLog';
 import { resolveUserRole } from '../utils/roleHelper';
@@ -1144,17 +1145,30 @@ export function useDriveSync({
       }
 
       try {
-        console.info('[Central Hub Sync] Đang tự động quét tìm file trung tâm trên Google Drive...');
+        // Nếu tên file hiện hành là file test mặc định cũ (So_tiet_kiem_2026), giải phóng ngay
+        if (settingsRef.current.googleSheetName && isDefaultTestName(settingsRef.current.googleSheetName)) {
+          console.info('[Central Hub Sync] File hiện tại là file test mặc định cũ, tự động dọn dẹp liên kết.');
+          setSettings((prev) => ({
+            ...prev,
+            googleSheetUrl: undefined,
+            googleSheetName: undefined,
+            lastSyncTime: undefined,
+            lastLocalLinkTimestamp: undefined,
+          }));
+          setExplicitlyUnlinked(true);
+          return;
+        }
 
         // 1. Trường hợp máy chưa có file liên kết cục bộ (hoặc máy 2 vừa mở app sau khi máy 1 tạo/liên kết lại)
-        if (!settingsRef.current.googleSheetUrl) {
+        if (!settingsRef.current.googleSheetUrl && !isExplicitlyUnlinked()) {
           const discovery = await autoDiscoverLatestCentralHub(token, currentUser?.email);
-          if (discovery.status === 'multiple') {
+          const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
+          const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
+          if (discovery.status === 'multiple' && !hub) {
             setSyncDriveStatus(`Tìm thấy ${discovery.hubs.length} File liên kết; hãy chọn thủ công trong Đồng bộ Drive.`);
-          } else if (discovery.status === 'error') {
-            setSyncDriveStatus(`Không thể dò File liên kết trên Drive: ${discovery.message}`);
+          } else if (discovery.status === 'error' && !hub) {
+            console.warn(`[Central Hub Sync] ${discovery.message}`);
           }
-          const hub = discovery.status === 'found' ? discovery.hub : null;
           if (hub) {
             const masterState = await getMasterSyncStateFromDrive(token, hub.id);
             if (masterState && masterState.status === 'active' && masterState.lastAction !== 'unlink') {
@@ -1190,9 +1204,13 @@ export function useDriveSync({
                     autoSync: true,
                   }));
                   setSyncDriveStatus(`⚡ Đã tự động kết nối & đồng bộ file trung tâm "${fileName}"`);
+                  setTimeout(() => setSyncDriveStatus(null), 3500);
+                } else {
+                  setSyncDriveStatus(null);
                 }
               } catch (dlErr: any) {
                 console.warn('Lỗi tải dữ liệu cho file tự động phát hiện:', dlErr);
+                setSyncDriveStatus(null);
               }
             }
           }
@@ -1623,9 +1641,10 @@ export function useDriveSync({
         // Tự động kiểm tra và đồng bộ trạng thái master cùng danh sách thành viên
         if (currentUser.email) {
           try {
-            if (!settingsRef.current.googleSheetUrl) {
+            if (!settingsRef.current.googleSheetUrl && !isExplicitlyUnlinked()) {
               const discovery = await autoDiscoverLatestCentralHub(token, currentUser.email);
-              const hub = discovery.status === 'found' ? discovery.hub : null;
+              const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
+              const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
               if (hub) {
                 const sheetUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
                 setSettings((prev) => ({
@@ -1787,19 +1806,22 @@ export function useDriveSync({
 
         setSyncDriveStatus('🔄 Đang kết nối và cập nhật file trung tâm...');
 
-        // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không
-        const discovery = await autoDiscoverLatestCentralHub(token, authResult.user?.email || currentUser?.email);
-        const hub = discovery.status === 'found' ? discovery.hub : null;
-        if (hub) {
-          const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
-          if (hubUrl !== settingsRef.current.googleSheetUrl) {
-            console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
-            setSettings((prev) => ({
-              ...prev,
-              googleSheetUrl: hubUrl,
-              googleSheetName: hub.name,
-              lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
-            }));
+        // 1. Đọc JSON master pointer xem có đổi file liên kết từ máy khác không (nếu chưa chủ động hủy)
+        if (!isExplicitlyUnlinked()) {
+          const discovery = await autoDiscoverLatestCentralHub(token, authResult.user?.email || currentUser?.email);
+          const rawHub = discovery.status === 'found' ? discovery.hub : (discovery.status === 'multiple' ? (discovery.recommendedHub || discovery.hubs[0] || null) : null);
+          const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
+          if (hub) {
+            const hubUrl = hub.webViewLink || `https://docs.google.com/spreadsheets/d/${hub.id}/edit`;
+            if (hubUrl !== settingsRef.current.googleSheetUrl) {
+              console.info('[Central Hub Sync] Phát hiện thay đổi file trung tâm sau khi gia hạn token:', hub.name);
+              setSettings((prev) => ({
+                ...prev,
+                googleSheetUrl: hubUrl,
+                googleSheetName: hub.name,
+                lastLocalLinkTimestamp: hub.linkedTimestamp || new Date().toISOString(),
+              }));
+            }
           }
         }
 

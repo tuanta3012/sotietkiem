@@ -31,6 +31,9 @@ import {
   autoDiscoverLatestCentralHub,
   removeMemberFromDriveMaster,
   setExplicitlyUnlinked,
+  isDefaultTestName,
+  getLocalMasterPointerFileId,
+  addBlockedUnlinkedFileId,
 } from './utils/googleDriveService';
 import { removeWorkspaceFileAssignment } from './utils/workspaceShareRelay';
 import { exportSavingsBooksToExcel } from './utils/excelParser';
@@ -215,9 +218,9 @@ export default function App() {
           defaultLTV: parsed.defaultLTV ?? 1.0,
           husbandName: 'Chồng',
           wifeName: 'Vợ',
-          googleSheetUrl: parsed.googleSheetUrl || undefined,
-          googleSheetName: parsed.googleSheetName || undefined,
-          lastSyncTime: parsed.lastSyncTime ?? undefined,
+          googleSheetUrl: isDefaultTestName(parsed.googleSheetName) ? undefined : (parsed.googleSheetUrl || undefined),
+          googleSheetName: isDefaultTestName(parsed.googleSheetName) ? undefined : (parsed.googleSheetName || undefined),
+          lastSyncTime: isDefaultTestName(parsed.googleSheetName) ? undefined : (parsed.lastSyncTime ?? undefined),
           notificationsEnabled: notiDirect !== null ? notiDirect === 'true' : (parsed.notificationsEnabled ?? false),
           enableBiometricLogin: bioDirect !== null ? bioDirect === 'true' : (parsed.enableBiometricLogin ?? false),
         };
@@ -377,6 +380,11 @@ export default function App() {
             enableBiometricLogin: hasBiometric || prev.enableBiometricLogin,
             notificationsEnabled: hasNotifications || prev.notificationsEnabled,
           };
+          if (isDefaultTestName(updated.googleSheetName)) {
+            updated.googleSheetUrl = undefined;
+            updated.googleSheetName = undefined;
+            updated.lastSyncTime = undefined;
+          }
           try {
             const json = JSON.stringify(updated);
             localStorage.setItem('savings_settings_v3', json);
@@ -603,16 +611,15 @@ export default function App() {
   });
 
   const consumeWorkspaceRelay = useCallback(
-    async (relayAssignment: boolean | undefined, memberEmail: string) => {
-      if (!relayAssignment) return;
+    async (_relayAssignment: boolean | undefined, memberEmail: string) => {
+      if (!memberEmail) return;
       try {
         await removeWorkspaceFileAssignment(memberEmail);
       } catch (error) {
-        console.error('[Workspace Relay] Không thể xóa vé sau khi đồng bộ thành công.', error);
-        showToast('Đã kết nối file nhưng chưa thể xóa vé chuyển tiếp trên Firestore.', 'error');
+        console.warn('[Workspace Relay] Thông báo dọn dẹp vé Firestore:', error);
       }
     },
-    [showToast]
+    []
   );
   const [driveAuthServiceReachable, setDriveAuthServiceReachable] = useState(false);
 
@@ -727,6 +734,12 @@ export default function App() {
 
   const handleLeaveWorkspace = async () => {
     const token = getGoogleAccessToken();
+    const currentFileId =
+      settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] ||
+      getLocalMasterPointerFileId();
+    if (currentFileId) {
+      addBlockedUnlinkedFileId(currentFileId);
+    }
     if (token && currentUser?.email) {
       try {
         await removeMemberFromDriveMaster(token, currentUser.email);
@@ -798,12 +811,13 @@ export default function App() {
           const currentFileId =
             settings.googleSheetUrl?.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1] ||
             settings.googleSheetUrl?.match(/id=([a-zA-Z0-9-_]+)/)?.[1];
-          const hub =
+          const rawHub =
             discovery.status === 'found'
               ? discovery.hub
               : discovery.status === 'multiple'
-                ? discovery.hubs.find((candidate) => candidate.id === currentFileId) || null
+                ? (discovery.hubs.find((candidate) => candidate.id === currentFileId) || discovery.recommendedHub || discovery.hubs[0] || null)
                 : null;
+          const hub = rawHub && !isDefaultTestName(rawHub.name) ? rawHub : null;
           if (hub && books.length > 0) {
             const remote = await downloadRealGoogleDriveFile(
               res.accessToken,
@@ -862,8 +876,9 @@ export default function App() {
               `Tìm thấy ${discovery.hubs.length} File liên kết phù hợp. Hãy chọn đúng file trong mục đồng bộ Google Drive.`,
               'error'
             );
-          } else if (discovery.status === 'none' && settings.googleSheetUrl) {
-            await syncBooksFromDrive(false, res.accessToken, false, settings.googleSheetUrl, onlineUser.email);
+          } else if (settings.googleSheetUrl || getLocalMasterPointerFileId()) {
+            const existingUrl = settings.googleSheetUrl || `https://docs.google.com/spreadsheets/d/${getLocalMasterPointerFileId()}/edit`;
+            await syncBooksFromDrive(false, res.accessToken, false, existingUrl, onlineUser.email);
           } else {
             setIsSyncModalOpen(true);
             if (discovery.status === 'error') {
@@ -899,7 +914,34 @@ export default function App() {
       await handleLoginGoogle();
       return;
     }
-    setIsSyncModalOpen(true);
+    if (settings.googleSheetUrl) {
+      try {
+        const token = getGoogleAccessToken();
+        if (!token) {
+          setIsSyncModalOpen(true);
+          return;
+        }
+        showToast('Đang đồng bộ dữ liệu với Google Drive...', 'info');
+        const success = await syncBooksFromDrive(
+          false,
+          token,
+          false,
+          settings.googleSheetUrl,
+          currentUser?.email
+        );
+        if (success) {
+          showToast('Đã đồng bộ dữ liệu mới nhất với Google Drive thành công!', 'success');
+        } else {
+          setIsSyncModalOpen(true);
+        }
+      } catch (err: any) {
+        console.warn('Lỗi đồng bộ nhanh từ navbar:', err);
+        showToast(err?.message || 'Lỗi đồng bộ. Vui lòng kiểm tra lại kết nối.', 'error');
+        setIsSyncModalOpen(true);
+      }
+    } else {
+      setIsSyncModalOpen(true);
+    }
   };
 
   const clearSessionAndLocalData = () => {

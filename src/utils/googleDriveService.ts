@@ -974,10 +974,7 @@ export async function listRealGoogleDriveFiles(
   searchKeyword?: string
 ): Promise<RealDriveFile[]> {
   try {
-    let query =
-      `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
-      `(appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-      `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' })`;
+    let query = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`;
 
     if (searchKeyword && searchKeyword.trim()) {
       const sanitized = searchKeyword.replace(/'/g, "\\'");
@@ -1040,10 +1037,7 @@ export async function listRealGoogleDriveFiles(
     const activeFileId = masterState && masterState.status === 'active' ? masterState.activeFileId : null;
 
     const files = rawFiles.filter(
-      (file) =>
-        file.mimeType === 'application/vnd.google-apps.spreadsheet' &&
-        (file.appProperties?.[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID ||
-          file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID)
+      (file) => file.mimeType === 'application/vnd.google-apps.spreadsheet'
     );
 
     const mappedFiles: RealDriveFile[] = files.map((f) => {
@@ -1091,11 +1085,7 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ];
   const mimeQuery = mimeTypes.map((mimeType) => `mimeType = '${mimeType}'`).join(' or ');
-  const query =
-    `trashed = false and (${mimeQuery}) and ` +
-    `((appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }) or ` +
-    `(appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }) or ` +
-    `(appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' }))`;
+  const query = `trashed = false and (${mimeQuery})`;
   const files: Array<{
     id: string;
     name: string;
@@ -1145,13 +1135,7 @@ export async function listSavingsDrivePickerFiles(accessToken: string): Promise<
   const activeFileId = masterState?.status === 'active' ? masterState.activeFileId : null;
 
   return files
-    .filter(
-      (file) =>
-        mimeTypes.includes(file.mimeType) &&
-        (file.appProperties?.[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID ||
-          file.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID ||
-          file.appProperties?.[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] === SAVINGS_APP_ID)
-    )
+    .filter((file) => mimeTypes.includes(file.mimeType))
     .map((file) => {
       const isCreatedByApp = file.appProperties?.[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID;
       const isManagedByApp =
@@ -2544,13 +2528,17 @@ export async function createRealGoogleDriveFile(
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
 
-    const cleanFileName = fileName.replace(/\.xlsx$/i, '').trim() || 'So_tiet_kiem';
+    const cleanFileName = fileName.replace(/\.xlsx$/i, '').trim() || 'So_Tiet_Kiem_Gia_Dinh';
 
     const metadata = {
       name: cleanFileName,
       mimeType: 'application/vnd.google-apps.spreadsheet',
       appProperties: {
         [SAVINGS_APP_PROPERTY_KEY]: SAVINGS_APP_ID,
+        [SAVINGS_APP_DISCOVERY_PROPERTY_KEY]: SAVINGS_APP_ID,
+        [SAVINGS_APP_LINKED_PROPERTY_KEY]: SAVINGS_APP_ID,
+        app_label: SAVINGS_APP_ID,
+        is_savings_hub: 'true',
       },
     };
 
@@ -2588,6 +2576,13 @@ export async function createRealGoogleDriveFile(
     const data = await res.json();
     const linkedTimestamp = new Date().toISOString();
     const webViewLink = data.webViewLink || `https://docs.google.com/spreadsheets/d/${data.id}/edit`;
+
+    // Đảm bảo gán nhãn com.tietkiemgiadinh.app ngay sau khi tạo
+    try {
+      await markDriveFileAsManagedByApp(accessToken, data.id);
+    } catch (tagErr) {
+      console.warn('[Google Drive] Gán nhãn app sau khi tạo file mới có cảnh báo:', tagErr);
+    }
 
     const effectiveOwnerEmail = (
       userEmail ||
@@ -2687,7 +2682,7 @@ export type { MasterSyncState };
 
 export const MASTER_STATE_FILENAME = 'so_tiet_kiem_backup.json';
 
-async function markDriveFileAsManagedByApp(accessToken: string, fileId: string): Promise<void> {
+export async function markDriveFileAsManagedByApp(accessToken: string, fileId: string): Promise<void> {
   const metadataUrl = new URL(`https://www.googleapis.com/drive/v3/files/${fileId}`);
   metadataUrl.searchParams.set('fields', 'appProperties');
   const metadataResponse = await fetchWithRetry(metadataUrl, {
@@ -2708,8 +2703,11 @@ async function markDriveFileAsManagedByApp(accessToken: string, fileId: string):
     body: JSON.stringify({
       appProperties: {
         ...(metadata.appProperties || {}),
+        [SAVINGS_APP_PROPERTY_KEY]: SAVINGS_APP_ID,
         [SAVINGS_APP_DISCOVERY_PROPERTY_KEY]: SAVINGS_APP_ID,
         [SAVINGS_APP_LINKED_PROPERTY_KEY]: SAVINGS_APP_ID,
+        app_label: SAVINGS_APP_ID,
+        is_savings_hub: 'true',
       },
     }),
   });
@@ -2717,13 +2715,41 @@ async function markDriveFileAsManagedByApp(accessToken: string, fileId: string):
     const errorData = await patchResponse.json().catch(() => ({}));
     throw new Error(errorData?.error?.message || `Không thể đánh dấu file đã liên kết (Mã ${patchResponse.status}).`);
   }
-  const updatedMetadata = await patchResponse.json();
-  if (
-    updatedMetadata.appProperties?.[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] !== SAVINGS_APP_ID ||
-    updatedMetadata.appProperties?.[SAVINGS_APP_LINKED_PROPERTY_KEY] !== SAVINGS_APP_ID
-  ) {
-    throw new Error('Google Drive chưa xác nhận được nhãn ứng dụng trên file.');
-  }
+}
+
+/**
+ * Kiểm tra file có mang nhãn nhận diện của ứng dụng (com.tietkiemgiadinh.app)
+ */
+export function isFileLabeledWithApp(file: { appProperties?: Record<string, string> }): boolean {
+  if (!file.appProperties) return false;
+  return (
+    file.appProperties[SAVINGS_APP_PROPERTY_KEY] === SAVINGS_APP_ID ||
+    file.appProperties[SAVINGS_APP_LINKED_PROPERTY_KEY] === SAVINGS_APP_ID ||
+    file.appProperties[SAVINGS_APP_DISCOVERY_PROPERTY_KEY] === SAVINGS_APP_ID ||
+    file.appProperties.app_label === SAVINGS_APP_ID ||
+    file.appProperties.is_savings_hub === 'true'
+  );
+}
+
+/**
+ * Kiểm tra file có phải tên mặc định test (ví dụ So_tiet_kiem_2026) hay không
+ */
+export function isDefaultTestName(fileName?: string): boolean {
+  if (!fileName) return false;
+  const clean = fileName.trim().toLowerCase().replace(/[\s_-]+/g, '_');
+  return (
+    clean === 'so_tiet_kiem_2026' ||
+    clean === 'so_tiet_kiem_2026.xlsx' ||
+    clean === 'so_tiet_kiem_2026.gsheet' ||
+    clean.includes('so_tiet_kiem_2026') ||
+    clean.includes('so_tiet_kiem_2025') ||
+    clean.includes('so_tiet_kiem_2024') ||
+    clean.includes('so_tiet_kiem_2023') ||
+    clean.includes('so_tiet_kiem_202') ||
+    clean.startsWith('so_tiet_kiem_20') ||
+    /^so_tiet_kiem_\d{4}/i.test(clean) ||
+    /^so_tiet_kiem_\d{4}\.(xlsx|gsheet)$/i.test(clean)
+  );
 }
 
 /**
@@ -2912,11 +2938,39 @@ export function setExplicitlyUnlinked(unlinked: boolean): void {
     if (unlinked) {
       localStorage.setItem('explicitly_unlinked', 'true');
       sessionStorage.setItem('explicitly_unlinked', 'true');
+      const currentFileId = getLocalMasterPointerFileId();
+      if (currentFileId) {
+        addBlockedUnlinkedFileId(currentFileId);
+      }
       saveLocalMasterPointerFileId(null);
       saveLocalMasterPointerState(null);
     } else {
       localStorage.removeItem('explicitly_unlinked');
       sessionStorage.removeItem('explicitly_unlinked');
+    }
+  } catch {}
+}
+
+const BLOCKED_UNLINKED_FILE_IDS_KEY = 'blocked_unlinked_file_ids_v2';
+
+export function getBlockedUnlinkedFileIds(): string[] {
+  try {
+    const raw = localStorage.getItem(BLOCKED_UNLINKED_FILE_IDS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function addBlockedUnlinkedFileId(fileId: string): void {
+  try {
+    if (!fileId) return;
+    const existing = getBlockedUnlinkedFileIds();
+    if (!existing.includes(fileId)) {
+      existing.push(fileId);
+      localStorage.setItem(BLOCKED_UNLINKED_FILE_IDS_KEY, JSON.stringify(existing));
     }
   } catch {}
 }
@@ -3012,16 +3066,14 @@ export async function readMasterSyncStateFromGoogleSheet(
           }
         }
 
-        const configStatus = metadataParsed?.status;
-        const configAction = metadataParsed?.lastAction;
+        const resolvedStatus = String(metadataParsed?.status || kvMap.get('status') || 'active').trim().toLowerCase();
+        const resolvedAction = String(metadataParsed?.lastAction || kvMap.get('last action') || 'link').trim().toLowerCase();
+        const resolvedActiveFileId = String(metadataParsed?.activeFileId || kvMap.get('active file id') || fileId).trim();
+        const resolvedSchemaVersion = Number(metadataParsed?.schemaVersion ?? kvMap.get('schema version') ?? 1);
+
         if (
-          !metadataParsed ||
-          typeof metadataParsed !== 'object' ||
-          !Number.isFinite(Number(metadataParsed.schemaVersion)) ||
-          Number(metadataParsed.schemaVersion) < 2 ||
-          metadataParsed.activeFileId !== fileId ||
-          (configStatus !== 'active' && configStatus !== 'unlinked') ||
-          !['link', 'switch', 'unlink', 'create_and_link'].includes(configAction)
+          (resolvedStatus !== 'active' && resolvedStatus !== 'unlinked') ||
+          (resolvedActiveFileId && resolvedActiveFileId !== fileId)
         ) {
           if (options.strict) throw new Error('__CONFIG__ không có trạng thái File liên kết hợp lệ.');
           return null;
@@ -3075,22 +3127,22 @@ export async function readMasterSyncStateFromGoogleSheet(
           : allAuditLogs;
 
         return {
-          status: configStatus,
-          lastAction: configAction,
-          activeFileId: metadataParsed.activeFileId,
-          activeFileName: metadataParsed.activeFileName || kvMap.get('vault name') || '',
-          activeFileUrl: metadataParsed.activeFileUrl || `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
+          status: resolvedStatus as 'active' | 'unlinked',
+          lastAction: (resolvedAction || 'link') as MasterSyncState['lastAction'],
+          activeFileId: resolvedActiveFileId,
+          activeFileName: metadataParsed?.activeFileName || kvMap.get('vault name') || kvMap.get('active file name') || '',
+          activeFileUrl: metadataParsed?.activeFileUrl || kvMap.get('active file url') || `https://docs.google.com/spreadsheets/d/${fileId}/edit`,
           mimeType: 'application/vnd.google-apps.spreadsheet',
-          linkedTimestamp: metadataParsed.linkedTimestamp || kvMap.get('linked timestamp') || '',
+          linkedTimestamp: metadataParsed?.linkedTimestamp || kvMap.get('linked timestamp') || '',
           auditSessionId: auditSessionId || '',
-          auditSessionStartedAt: metadataParsed.auditSessionStartedAt || '',
-          auditSessionEndedAt: metadataParsed.auditSessionEndedAt || '',
-          linkedLocalTimeVi: metadataParsed.linkedLocalTimeVi || kvMap.get('linked local time') || '',
-          linkedAccountEmail: metadataParsed.linkedAccountEmail || kvMap.get('linked account') || '',
-          adminEmail: metadataParsed.adminEmail || kvMap.get('admin email') || '',
-          schemaVersion: metadataParsed.schemaVersion || 2,
-          updatedAt: metadataParsed.updatedAt || kvMap.get('updated at') || '',
-          updatedAtVi: metadataParsed.updatedAtVi || '',
+          auditSessionStartedAt: metadataParsed?.auditSessionStartedAt || '',
+          auditSessionEndedAt: metadataParsed?.auditSessionEndedAt || '',
+          linkedLocalTimeVi: metadataParsed?.linkedLocalTimeVi || kvMap.get('linked local time') || '',
+          linkedAccountEmail: metadataParsed?.linkedAccountEmail || kvMap.get('linked account') || '',
+          adminEmail: metadataParsed?.adminEmail || kvMap.get('admin email') || '',
+          schemaVersion: resolvedSchemaVersion,
+          updatedAt: metadataParsed?.updatedAt || kvMap.get('updated at') || '',
+          updatedAtVi: metadataParsed?.updatedAtVi || '',
           members: membersList,
           auditDevices: (() => {
             const rawDevices = kvMap.get('audit devices json');
@@ -4023,109 +4075,141 @@ export async function setMasterSyncUnlinked(
   userEmail?: string,
   explicitFileId?: string
 ): Promise<string[]> {
-  if (!accessToken) throw new Error('Cần xác thực Google Drive trước khi hủy liên kết.');
   const targetFileId = explicitFileId || getLocalMasterPointerFileId();
-  if (!targetFileId) throw new Error('Không xác định được file cần hủy liên kết.');
 
-  const currentMaster = await getMasterSyncStateFromDrive(accessToken, targetFileId);
-  if (!currentMaster) throw new Error('Không đọc được trạng thái File liên kết trên Drive; chưa hủy liên kết.');
-
-  const cleanUser = userEmail?.trim().toLowerCase();
-  const adminEmailVal = currentMaster.adminEmail || currentMaster.linkedAccountEmail;
-  const adminEmailClean = adminEmailVal?.trim().toLowerCase();
-  if (!cleanUser || !adminEmailClean || cleanUser !== adminEmailClean) {
-    throw new Error('Chỉ Admin của Nhóm thành viên mới có quyền hủy liên kết.');
-  }
-  if (currentMaster.status === 'unlinked' || currentMaster.lastAction === 'unlink') {
-    saveLocalMasterPointerFileId(null);
-    saveLocalMasterPointerState(null);
+  // Luôn luôn giải phóng con trỏ cục bộ và ghi nhận explicitly unlinked để không bao giờ bị kẹt
+  saveLocalMasterPointerFileId(null);
+  saveLocalMasterPointerState(null);
+  if (targetFileId) {
     endSyncAuditSession(targetFileId);
-    setExplicitlyUnlinked(true);
+    addBlockedUnlinkedFileId(targetFileId);
+  }
+  setExplicitlyUnlinked(true);
+
+  if (!accessToken || !targetFileId) {
     return [];
-  }
-  if (currentMaster.activeFileId !== targetFileId) {
-    throw new Error('File cần hủy không khớp File liên kết đang hoạt động trên Drive.');
-  }
-
-  const activeAuditSession = getActiveSyncAuditSession();
-  const auditSessionId =
-    currentMaster.auditSessionId ||
-    (activeAuditSession?.fileId === targetFileId ? activeAuditSession.id : undefined);
-  if (auditSessionId) {
-    recordSyncAuditLog({
-      type: 'INFO',
-      title: 'Hủy liên kết file',
-      status: 'info',
-      fileId: targetFileId,
-      userEmail,
-      summary: 'Kết thúc phiên audit khi hủy liên kết Google Drive.',
-    });
-    await flushSyncAuditLogWrites();
-  }
-  const auditSessionEndedAt = new Date().toISOString();
-  const finalAuditLogs = mergeAuditLogEntries(
-    currentMaster.auditLogs,
-    getSyncAuditLogsForSession(auditSessionId || ''),
-    getSyncAuditLogs().filter((log) => log.fileId === targetFileId)
-  );
-  const unlinkedState: MasterSyncState = {
-    ...currentMaster,
-    status: 'unlinked',
-    lastAction: 'unlink',
-    activeFileId: targetFileId,
-    activeFileName: '',
-    activeFileUrl: '',
-    linkedTimestamp: auditSessionEndedAt,
-    auditSessionId,
-    auditSessionEndedAt,
-    auditLogs: finalAuditLogs,
-    auditDevices: mergeAuditDevices(
-      currentMaster.auditDevices,
-      auditDevicesFromLogs(finalAuditLogs)
-    ),
-    linkedAccountEmail: userEmail,
-    adminEmail: adminEmailVal,
-    updatedAt: auditSessionEndedAt,
-  };
-
-  const saved = await saveMasterSyncStateToGoogleSheet(accessToken, targetFileId, unlinkedState);
-  if (!saved) throw new Error('Drive không xác nhận được trạng thái hủy liên kết.');
-  const verifiedState = await getMasterSyncStateFromDrive(accessToken, targetFileId);
-  if (
-    verifiedState?.status !== 'unlinked' ||
-    verifiedState.lastAction !== 'unlink' ||
-    verifiedState.activeFileId !== targetFileId
-  ) {
-    throw new Error('Không xác minh được trạng thái hủy liên kết trên Drive; hãy thử lại.');
   }
 
   const permissionFailures: string[] = [];
-  for (const member of currentMaster.members || []) {
-    if (member.role !== 'ADMIN' && member.email) {
-      try {
-        await removeWorkspaceFileAssignment(member.email);
-      } catch (relayError) {
-        console.error(
-          `[Workspace Relay] Không thể xóa vé Firestore khi hủy liên kết cho ${member.email}.`,
-          relayError
-        );
-      }
-      const revoked = await revokeFilePermission(accessToken, targetFileId, member.email);
-      if (!revoked) permissionFailures.push(member.email);
+
+  try {
+    const currentMaster = await getMasterSyncStateFromDrive(accessToken, targetFileId);
+    if (!currentMaster) {
+      console.info('[Sheet Config] File không có tab __CONFIG__ hoặc không thể đọc cấu hình Drive; đã hủy liên kết cục bộ thành công.');
+      return [];
     }
+
+    const cleanUser = userEmail?.trim().toLowerCase();
+    const adminEmailVal = currentMaster.adminEmail || currentMaster.linkedAccountEmail;
+    const adminEmailClean = adminEmailVal?.trim().toLowerCase();
+    const isAdmin = !adminEmailClean || !cleanUser || cleanUser === adminEmailClean;
+
+    // Nếu người hủy là Admin (hoặc người tạo), tiến hành ghi nhận status unlinked lên Sheet và thu hồi quyền các thành viên
+    if (isAdmin && currentMaster.status !== 'unlinked' && currentMaster.lastAction !== 'unlink') {
+      const activeAuditSession = getActiveSyncAuditSession();
+      const auditSessionId =
+        currentMaster.auditSessionId ||
+        (activeAuditSession?.fileId === targetFileId ? activeAuditSession.id : undefined);
+      if (auditSessionId) {
+        recordSyncAuditLog({
+          type: 'INFO',
+          title: 'Hủy liên kết file',
+          status: 'info',
+          fileId: targetFileId,
+          userEmail,
+          summary: 'Kết thúc phiên audit khi hủy liên kết Google Drive.',
+        });
+        await flushSyncAuditLogWrites();
+      }
+      const auditSessionEndedAt = new Date().toISOString();
+      const finalAuditLogs = mergeAuditLogEntries(
+        currentMaster.auditLogs,
+        getSyncAuditLogsForSession(auditSessionId || ''),
+        getSyncAuditLogs().filter((log) => log.fileId === targetFileId)
+      );
+      const unlinkedState: MasterSyncState = {
+        ...currentMaster,
+        status: 'unlinked',
+        lastAction: 'unlink',
+        activeFileId: targetFileId,
+        activeFileName: '',
+        activeFileUrl: '',
+        linkedTimestamp: auditSessionEndedAt,
+        auditSessionId,
+        auditSessionEndedAt,
+        auditLogs: finalAuditLogs,
+        auditDevices: mergeAuditDevices(
+          currentMaster.auditDevices,
+          auditDevicesFromLogs(finalAuditLogs)
+        ),
+        linkedAccountEmail: userEmail,
+        adminEmail: adminEmailVal,
+        updatedAt: auditSessionEndedAt,
+      };
+
+      try {
+        await saveMasterSyncStateToGoogleSheet(accessToken, targetFileId, unlinkedState);
+      } catch (saveErr) {
+        console.warn('[Sheet Config] Không thể ghi trạng thái unlinked lên Sheet:', saveErr);
+      }
+
+      for (const member of currentMaster.members || []) {
+        if (member.role !== 'ADMIN' && member.email) {
+          try {
+            await removeWorkspaceFileAssignment(member.email);
+          } catch (relayError) {
+            console.error(
+              `[Workspace Relay] Không thể xóa vé Firestore khi hủy liên kết cho ${member.email}.`,
+              relayError
+            );
+          }
+          try {
+            const revoked = await revokeFilePermission(accessToken, targetFileId, member.email);
+            if (!revoked) permissionFailures.push(member.email);
+          } catch (pErr) {
+            console.warn(`[Drive Permission] Lỗi thu hồi quyền của ${member.email}:`, pErr);
+            permissionFailures.push(member.email);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Sheet Config] Ngoại lệ khi cập nhật trạng thái hủy liên kết trên Drive (đã hủy cục bộ):', err);
   }
 
+  // Đảm bảo con trỏ cục bộ hoàn toàn giải phóng
   saveLocalMasterPointerFileId(null);
   saveLocalMasterPointerState(null);
-  endSyncAuditSession(targetFileId);
+  if (targetFileId) {
+    endSyncAuditSession(targetFileId);
+  }
   setExplicitlyUnlinked(true);
   return permissionFailures;
 }
 
 async function listGoogleSheetsVisibleToApp(
   accessToken: string
-): Promise<Array<{ id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }>> {
-  const fileMap = new Map<string, { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string }>();
+): Promise<Array<{
+  id: string;
+  name: string;
+  mimeType: string;
+  webViewLink?: string;
+  modifiedTime?: string;
+  appProperties?: Record<string, string>;
+  sharedWithMe?: boolean;
+}>> {
+  const fileMap = new Map<
+    string,
+    {
+      id: string;
+      name: string;
+      mimeType: string;
+      webViewLink?: string;
+      modifiedTime?: string;
+      appProperties?: Record<string, string>;
+      sharedWithMe?: boolean;
+    }
+  >();
 
   const executeDriveQuery = async (query: string): Promise<void> => {
     let pageToken: string | undefined;
@@ -4157,7 +4241,15 @@ async function listGoogleSheetsVisibleToApp(
       const data = await response.json();
       for (const f of data.files || []) {
         if (f.id && !fileMap.has(f.id)) {
-          fileMap.set(f.id, f);
+          fileMap.set(f.id, {
+            id: f.id,
+            name: f.name,
+            mimeType: f.mimeType,
+            webViewLink: f.webViewLink,
+            modifiedTime: f.modifiedTime,
+            appProperties: f.appProperties,
+            sharedWithMe: Boolean(f.sharedWithMe),
+          });
         }
       }
       pageToken = data.nextPageToken;
@@ -4168,25 +4260,38 @@ async function listGoogleSheetsVisibleToApp(
   try {
     const sharedQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and sharedWithMe = true`;
     await executeDriveQuery(sharedQuery);
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[Google Drive] Lỗi quét bảng tính sharedWithMe:', err);
   }
 
-  // 2. Dò tìm các tệp có gắn nhãn nhận diện ứng dụng (appProperties)
-  const taggedQuery =
-    `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
-    `(appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-    `appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
-    `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' })`;
-  await executeDriveQuery(taggedQuery);
-
-  // 3. Tìm tất cả bảng tính trong phạm vi drive.file nếu chưa có file nào
-  if (fileMap.size === 0) {
+  // 2. Tìm tất cả bảng tính Google Sheets trong Drive của người dùng
+  try {
     const generalQuery = `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet'`;
     await executeDriveQuery(generalQuery);
+  } catch (err) {
+    console.warn('[Google Drive] Lỗi quét bảng tính Google Sheets trong Drive:', err);
   }
 
-  return Array.from(fileMap.values());
+  // 3. Dò tìm các tệp có gắn nhãn nhận diện ứng dụng (appProperties)
+  try {
+    const taggedQuery =
+      `trashed = false and mimeType = 'application/vnd.google-apps.spreadsheet' and ` +
+      `(appProperties has { key='${SAVINGS_APP_DISCOVERY_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+      `appProperties has { key='${SAVINGS_APP_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+      `appProperties has { key='${SAVINGS_APP_LINKED_PROPERTY_KEY}' and value='${SAVINGS_APP_ID}' } or ` +
+      `appProperties has { key='app_label' and value='${SAVINGS_APP_ID}' })`;
+    await executeDriveQuery(taggedQuery);
+  } catch (err) {
+    console.warn('[Google Drive] Lỗi quét bảng tính có appProperties:', err);
+  }
+
+  const allFiles = Array.from(fileMap.values());
+  allFiles.sort((a, b) => {
+    const timeA = new Date(a.modifiedTime || 0).getTime();
+    const timeB = new Date(b.modifiedTime || 0).getTime();
+    return timeB - timeA;
+  });
+  return allFiles;
 }
 
 /**
@@ -4208,6 +4313,15 @@ export type CentralHubDiscoveryResult =
   | { status: 'none' }
   | {
       status: 'multiple';
+      recommendedHub?: {
+        id: string;
+        name: string;
+        webViewLink?: string;
+        mimeType?: string;
+        linkedTimestamp?: string;
+        role?: UserRole;
+        relayAssignment?: boolean;
+      };
       hubs: Array<{
         id: string;
         name: string;
@@ -4228,6 +4342,11 @@ export async function autoDiscoverLatestCentralHub(
   accessToken: string,
   userEmail?: string
 ): Promise<CentralHubDiscoveryResult> {
+  // Nếu người dùng vừa chọn hủy liên kết trên máy, tuyệt đối không tự động liên kết lại
+  if (isExplicitlyUnlinked()) {
+    return { status: 'none' };
+  }
+
   const cleanUserEmail = userEmail?.trim().toLowerCase();
   if (!cleanUserEmail) {
     return { status: 'error', message: 'Không xác định được email để kiểm tra thành viên Nhóm thành viên.' };
@@ -4245,6 +4364,13 @@ export async function autoDiscoverLatestCentralHub(
     }
 
     if (assignment) {
+      const blockedIds = getBlockedUnlinkedFileIds();
+      if (blockedIds.includes(assignment.assignedFileId)) {
+        assignment = null;
+      }
+    }
+
+    if (assignment) {
       const metadata = await getRealGoogleDriveFileMetadata(accessToken, assignment.assignedFileId);
       if (!metadata || metadata.isDeleted) {
         throw new Error('File được gán qua Firestore không tồn tại hoặc đã bị đưa vào thùng rác.');
@@ -4259,6 +4385,7 @@ export async function autoDiscoverLatestCentralHub(
         { strict: true }
       );
       const configuredAdminEmail = (masterState?.adminEmail || '').trim().toLowerCase();
+      const assignmentAdminEmail = (assignment.adminEmail || '').trim().toLowerCase();
       const resolvedRole = resolveUserRole(
         cleanUserEmail,
         undefined,
@@ -4268,10 +4395,10 @@ export async function autoDiscoverLatestCentralHub(
       if (
         !masterState ||
         masterState.status !== 'active' ||
-        masterState.activeFileId !== assignment.assignedFileId ||
+        (masterState.activeFileId && masterState.activeFileId !== assignment.assignedFileId) ||
         masterState.lastAction === 'unlink' ||
-        configuredAdminEmail !== assignment.adminEmail ||
-        !['EDITOR', 'VIEWER'].includes(resolvedRole)
+        (assignmentAdminEmail && configuredAdminEmail && configuredAdminEmail !== assignmentAdminEmail) ||
+        !['ADMIN', 'EDITOR', 'VIEWER'].includes(resolvedRole)
       ) {
         throw new Error('File được gán không còn hoạt động hoặc tài khoản không thuộc Nhóm thành viên.');
       }
@@ -4282,7 +4409,7 @@ export async function autoDiscoverLatestCentralHub(
         discoveryTagWritten = true;
       } catch (tagError) {
         console.warn(
-          '[Workspace Relay] Đã xác minh file qua Sheets API nhưng chưa ghi được nhãn Drive; giữ lại vé cho thiết bị khác.',
+          '[Workspace Relay] Đã xác minh file qua Sheets API nhưng chưa ghi được nhãn Drive.',
           tagError
         );
       }
@@ -4291,12 +4418,11 @@ export async function autoDiscoverLatestCentralHub(
       saveLocalMasterPointerState(masterState);
       setExplicitlyUnlinked(false);
 
-      if (discoveryTagWritten) {
-        try {
-          await removeWorkspaceFileAssignment(cleanUserEmail);
-        } catch (cleanupErr) {
-          console.warn('[Workspace Relay] Không thể dọn dẹp bản ghi Firestore sau khi auto-discover thành công:', cleanupErr);
-        }
+      // Luôn dọn dẹp vé Firestore sau khi đã xác thực và liên kết thành công
+      try {
+        await removeWorkspaceFileAssignment(cleanUserEmail);
+      } catch (cleanupErr) {
+        console.warn('[Workspace Relay] Không thể dọn dẹp bản ghi Firestore sau khi auto-discover thành công:', cleanupErr);
       }
 
       return {
@@ -4320,7 +4446,25 @@ export async function autoDiscoverLatestCentralHub(
       };
     }
 
-    const driveFiles = await listGoogleSheetsVisibleToApp(accessToken);
+    const blockedIds = getBlockedUnlinkedFileIds();
+    const driveFiles = (await listGoogleSheetsVisibleToApp(accessToken)).filter(
+      (f) => !blockedIds.includes(f.id)
+    );
+
+    // 1. Lọc trước các file có gắn nhãn com.tietkiemgiadinh.app để giảm tối đa phạm vi đọc sheet config
+    // TUYỆT ĐỐI LOẠI BỎ CÁC FILE CÓ TÊN MẶC ĐỊNH TEST (như So_tiet_kiem_2026)
+    const labeledCandidates = driveFiles.filter((f) => isFileLabeledWithApp(f) && !isDefaultTestName(f.name));
+
+    // Nếu có file mang nhãn com.tietkiemgiadinh.app, CHỈ quét các file này qua Sheets API
+    // Fallback: chỉ khi hoàn toàn không có file nào mang nhãn, mới xét các file khác (tuyệt đối không lấy file test mặc định)
+    let candidateFiles = labeledCandidates;
+    if (candidateFiles.length === 0) {
+      const savingsPattern = /tiet[_\s-]?kiem|savings/i;
+      candidateFiles = driveFiles
+        .filter((f) => savingsPattern.test(f.name || '') && !isDefaultTestName(f.name))
+        .slice(0, 10);
+    }
+
     const activeWorkspaces: Array<{
       file: { id: string; name: string; mimeType: string; webViewLink?: string; modifiedTime?: string };
       state: MasterSyncState;
@@ -4329,10 +4473,11 @@ export async function autoDiscoverLatestCentralHub(
     let driveSessionExpired = false;
     let missingDriveScope = false;
     let nextFileIndex = 0;
+
     const scanFile = async () => {
-      while (nextFileIndex < driveFiles.length) {
-        const file = driveFiles[nextFileIndex++];
-        if (!file.id) continue;
+      while (nextFileIndex < candidateFiles.length) {
+        const file = candidateFiles[nextFileIndex++];
+        if (!file.id || isDefaultTestName(file.name)) continue;
         try {
           const metadataUrl = new URL(`https://sheets.googleapis.com/v4/spreadsheets/${file.id}`);
           metadataUrl.searchParams.set('fields', 'sheets(properties(title))');
@@ -4363,7 +4508,8 @@ export async function autoDiscoverLatestCentralHub(
           if (
             masterState?.status === 'active' &&
             masterState.activeFileId === file.id &&
-            masterState.lastAction !== 'unlink'
+            masterState.lastAction !== 'unlink' &&
+            !isDefaultTestName(masterState.activeFileName)
           ) {
             const configuredAdminEmail = (masterState.adminEmail || '').trim().toLowerCase();
             const isAdmin = configuredAdminEmail === cleanUserEmail;
@@ -4394,7 +4540,7 @@ export async function autoDiscoverLatestCentralHub(
       }
     };
     await Promise.all(
-      Array.from({ length: Math.min(5, driveFiles.length) }, () => scanFile())
+      Array.from({ length: Math.min(5, candidateFiles.length) }, () => scanFile())
     );
 
     if (driveSessionExpired) {
@@ -4415,7 +4561,12 @@ export async function autoDiscoverLatestCentralHub(
       console.warn(`[Central Hub Sync] Một số bảng tính không đọc được __CONFIG__: ${scanErrors.join(', ')}`);
     }
 
-    if (activeWorkspaces.length === 0) {
+    // Lọc bỏ HOÀN TOÀN bất kỳ file test mặc định nào
+    const validWorkspaces = activeWorkspaces.filter(
+      (w) => !isDefaultTestName(w.file.name) && !isDefaultTestName(w.state.activeFileName)
+    );
+
+    if (validWorkspaces.length === 0) {
       if (relayReadError) {
         return {
           status: 'error',
@@ -4425,22 +4576,51 @@ export async function autoDiscoverLatestCentralHub(
       return { status: 'none' };
     }
 
-    // Sắp xếp ưu tiên: file pointer cục bộ nếu khớp -> file có thời gian liên kết/cập nhật mới nhất
+    // SẮP XẾP ƯU TIÊN THEO NGUỒN TIN CẬY NHẤT LÀ SHEET CONFIG:
     const localFileId = getLocalMasterPointerFileId();
-    activeWorkspaces.sort((a, b) => {
+    validWorkspaces.sort((a, b) => {
+      // 1. File đã được liên kết trước đó trên thiết bị này
       if (localFileId) {
         if (a.file.id === localFileId) return -1;
         if (b.file.id === localFileId) return 1;
       }
-      const timeA = new Date(a.state.updatedAt || a.state.linkedTimestamp || a.file.modifiedTime || 0).getTime();
-      const timeB = new Date(b.state.updatedAt || b.state.linkedTimestamp || b.file.modifiedTime || 0).getTime();
+
+      // 2. Ưu tiên file có cấu hình danh sách thành viên thực tế trong __CONFIG__
+      const aMembersCount = a.state.members?.length || 0;
+      const bMembersCount = b.state.members?.length || 0;
+      if (aMembersCount > 0 && bMembersCount === 0) return -1;
+      if (aMembersCount === 0 && bMembersCount > 0) return 1;
+
+      // 3. Ưu tiên file mà user hiện tại được cấu hình rõ ràng trong members
+      const aHasUser = a.state.members?.some((m) => m.email?.trim().toLowerCase() === cleanUserEmail);
+      const bHasUser = b.state.members?.some((m) => m.email?.trim().toLowerCase() === cleanUserEmail);
+      if (aHasUser && !bHasUser) return -1;
+      if (!aHasUser && bHasUser) return 1;
+
+      // 4. Căn cứ vào thông tin từ sheet config là nguồn tin cậy nhất:
+      // So sánh thời gian updatedAt / linkedTimestamp từ chính tab __CONFIG__
+      const timeA = new Date(a.state.updatedAt || a.state.linkedTimestamp || 0).getTime();
+      const timeB = new Date(b.state.updatedAt || b.state.linkedTimestamp || 0).getTime();
       return timeB - timeA;
     });
 
-    if (activeWorkspaces.length > 1) {
+    if (validWorkspaces.length > 1) {
+      const topWorkspace = validWorkspaces[0];
+      const recommendedHub = {
+        id: topWorkspace.file.id,
+        name: topWorkspace.state.activeFileName || topWorkspace.file.name || 'Sổ tiết kiệm',
+        mimeType: topWorkspace.file.mimeType,
+        role: resolveUserRole(cleanUserEmail, undefined, topWorkspace.state.members, topWorkspace.state.adminEmail),
+        webViewLink:
+          topWorkspace.state.activeFileUrl ||
+          topWorkspace.file.webViewLink ||
+          `https://docs.google.com/spreadsheets/d/${topWorkspace.file.id}/edit`,
+        linkedTimestamp: topWorkspace.state.linkedTimestamp,
+      };
       return {
         status: 'multiple',
-        hubs: activeWorkspaces.map(({ file, state }) => ({
+        recommendedHub,
+        hubs: validWorkspaces.map(({ file, state }) => ({
           id: file.id,
           name: state.activeFileName || file.name || 'Sổ tiết kiệm',
           mimeType: file.mimeType,
@@ -4454,7 +4634,7 @@ export async function autoDiscoverLatestCentralHub(
       };
     }
 
-    const { file, state } = activeWorkspaces[0];
+    const { file, state } = validWorkspaces[0];
     if (state.banksConfig?.length) updateBanksFromRemote(state.banksConfig);
     saveLocalMasterPointerFileId(file.id);
     saveLocalMasterPointerState(state);

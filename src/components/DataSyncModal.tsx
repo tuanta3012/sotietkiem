@@ -45,6 +45,9 @@ import {
   setMasterSyncUnlinked,
   autoDiscoverLatestCentralHub,
   setExplicitlyUnlinked,
+  isExplicitlyUnlinked,
+  isDefaultTestName,
+  markDriveFileAsManagedByApp,
   saveLocalMasterPointerFileId,
   saveLocalMasterPointerState,
   RealDriveFile,
@@ -146,7 +149,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   }, [isOpen, syncErrorMessage, showToast]);
   const [isCreatingNewFile, setIsCreatingNewFile] = useState<boolean>(false);
   const [showCreateFileDialog, setShowCreateFileDialog] = useState<boolean>(false);
-  const [newFileNameInput, setNewFileNameInput] = useState<string>('So_tiet_kiem');
+  const [newFileNameInput, setNewFileNameInput] = useState<string>('So_Tiet_Kiem_Gia_Dinh');
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null);
 
   // Clear confirmation
@@ -558,6 +561,9 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           });
           saveLocalMasterPointerFileId(file.id);
           saveLocalMasterPointerState(remoteMaster);
+          try {
+            await markDriveFileAsManagedByApp(token, file.id);
+          } catch {}
         } else {
           stampTime = await setMasterSyncLinked(
             token,
@@ -621,14 +627,14 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   useEffect(() => {
     let isMounted = true;
     const token = accessToken || getGoogleAccessToken();
-    if (token && !sheetUrl && !isChoosingDifferentFile && isOpen) {
+    if (token && !sheetUrl && !isChoosingDifferentFile && isOpen && !isExplicitlyUnlinked()) {
       setIsDiscoveringHub(true);
       autoDiscoverLatestCentralHub(token, currentUser?.email || appUser?.email)
         .then(async (discovery) => {
           if (!isMounted) return;
           setIsDiscoveringHub(false);
-          // Nếu modal hoặc máy đã có file liên kết, bỏ qua thông báo dò File liên kết
-          if (sheetUrl || selectedFileId || settingsRef.current.googleSheetUrl) {
+          // Nếu modal hoặc máy đã có file liên kết hoặc vừa hủy liên kết, bỏ qua
+          if (sheetUrl || selectedFileId || settingsRef.current.googleSheetUrl || isExplicitlyUnlinked()) {
             setDiscoveredHub(null);
             return;
           }
@@ -874,10 +880,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
   // Safeguarded disconnect and clear
   const handleSafeguardedDisconnectAndClear = async () => {
-    if (!canChangeDriveFile(settings.currentRole)) {
-      setSyncErrorMessage('🔒 Chỉ Admin mới có quyền hủy liên kết file.');
-      return;
-    }
     onStartFileSwitch?.();
     setIsUnlinking(true);
     setSyncStatusStep('Đang hủy liên kết và làm sạch dữ liệu trên ứng dụng...');
@@ -893,48 +895,66 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     }
 
     const token = accessToken || getGoogleAccessToken();
-    try {
-      if (!token) throw new Error('Cần đăng nhập Google Drive để xác nhận hủy liên kết.');
-      const permissionFailures = await setMasterSyncUnlinked(
-        token,
-        currentUser?.email || appUser?.email,
-        fileIdToUnlink
-      );
-      const nowStr = new Date().toLocaleString('vi-VN');
+    let permissionFailures: string[] = [];
 
-      onClearBooks();
+    if (token && fileIdToUnlink) {
       try {
-        localStorage.setItem('savings_books_v3', JSON.stringify([]));
-        localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
-        localStorage.setItem('savings_books_cleared', 'true');
-        clearStaticHistoryFromStorage();
-        setExplicitlyUnlinked(true);
-      } catch (storageError) {
-        console.warn('Không thể dọn toàn bộ dữ liệu cục bộ sau khi hủy liên kết:', storageError);
+        permissionFailures = await setMasterSyncUnlinked(
+          token,
+          currentUser?.email || appUser?.email,
+          fileIdToUnlink
+        );
+      } catch (driveErr) {
+        console.warn('Lỗi khi cập nhật trạng thái hủy trên Google Drive (tiếp tục dọn sạch cục bộ):', driveErr);
       }
-
-      if (onFinishFileSwitch) {
-        onFinishFileSwitch([], [], '', '', '', '');
-      }
-      onUpdateSettings({ googleSheetUrl: undefined, googleSheetName: undefined, lastSyncTime: undefined, lastLocalLinkTimestamp: undefined, autoSync: true });
-      setSheetUrl('');
-      setSelectedFileId('');
-      setSelectedFileName('');
-      setLastSyncTime(null);
-      setShowClearConfirm(false);
-      setGoogleSyncMessage(
-        permissionFailures.length
-          ? `Đã hủy liên kết. Chưa thu hồi được quyền Drive của: ${permissionFailures.join(', ')}.`
-          : `✅ Đã hủy liên kết thành công. Dữ liệu trên Google Drive được giữ nguyên (${nowStr}).`
-      );
-    } catch (err: any) {
-      console.error('Lỗi khi xác nhận hủy liên kết trên Drive:', err);
-      onCancelFileSwitch?.();
-      setSyncErrorMessage(err?.message || 'Không thể xác nhận hủy liên kết trên Google Drive. Dữ liệu trên máy vẫn được giữ nguyên.');
-    } finally {
-      setIsUnlinking(false);
-      setSyncStatusStep(null);
     }
+
+    // ĐẢM BẢO TUYỆT ĐỐI: Làm sạch toàn bộ dữ liệu nội bộ và ngắt liên kết trên thiết bị này
+    onClearBooks();
+    try {
+      localStorage.setItem('savings_books_v3', JSON.stringify([]));
+      localStorage.setItem('savings_settlements_v3', JSON.stringify([]));
+      localStorage.setItem('savings_books_cleared', 'true');
+      localStorage.removeItem('savings_master_pointer_file_id');
+      localStorage.removeItem('savings_master_pointer_state');
+      localStorage.removeItem('last_linked_file_id_v2');
+      localStorage.removeItem('master_sync_state_local_v2');
+      clearStaticHistoryFromStorage();
+      setExplicitlyUnlinked(true);
+    } catch (storageError) {
+      console.warn('Không thể dọn toàn bộ dữ liệu cục bộ sau khi hủy liên kết:', storageError);
+    }
+
+    saveLocalMasterPointerFileId(null);
+    saveLocalMasterPointerState(null);
+    setExplicitlyUnlinked(true);
+
+    if (onFinishFileSwitch) {
+      onFinishFileSwitch([], [], '', '', '', '');
+    }
+    onUpdateSettings({
+      googleSheetUrl: undefined,
+      googleSheetName: undefined,
+      lastSyncTime: undefined,
+      lastLocalLinkTimestamp: undefined,
+      autoSync: true,
+      currentRole: 'ADMIN',
+      members: [],
+    });
+    setSheetUrl('');
+    setSelectedFileId('');
+    setSelectedFileName('');
+    setLastSyncTime(null);
+    setShowClearConfirm(false);
+    setIsChoosingDifferentFile(false);
+    const nowStr = new Date().toLocaleString('vi-VN');
+    setGoogleSyncMessage(
+      permissionFailures.length
+        ? `Đã hủy liên kết thành công. Chưa thu hồi được quyền Drive của: ${permissionFailures.join(', ')}.`
+        : `✅ Đã hủy liên kết thành công. Dữ liệu trên Google Drive được giữ nguyên (${nowStr}).`
+    );
+    setIsUnlinking(false);
+    setSyncStatusStep(null);
   };
 
   // CHẾ ĐỘ OFFLINE: Xuất bản sao lưu Excel về máy tính/điện thoại
@@ -1048,7 +1068,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     {canChangeDriveFile(settings.currentRole) && (
                       <button
                         onClick={() => {
-                          setNewFileNameInput(`So_tiet_kiem_${new Date().getFullYear()}`);
+                          setNewFileNameInput('So_Tiet_Kiem_Gia_Dinh');
                           setShowCreateFileDialog(true);
                         }}
                         disabled={isCreatingNewFile}
@@ -1180,7 +1200,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                       <div className="flex gap-2">
                         <button
                           onClick={() => {
-                            setNewFileNameInput(`So_tiet_kiem_${new Date().getFullYear()}`);
+                            setNewFileNameInput('So_Tiet_Kiem_Gia_Dinh');
                             setShowCreateFileDialog(true);
                           }}
                           disabled={isCreatingNewFile}
@@ -1265,13 +1285,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
                         <button
                           id="btn-unlink-and-clear-data"
-                          disabled={!canChangeDriveFile(settings.currentRole)}
                           onClick={() => setShowClearConfirm(true)}
-                          className={`w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border ${
-                            !canChangeDriveFile(settings.currentRole)
-                              ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-60'
-                              : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer'
-                          }`}
+                          className="w-full py-2 px-2.5 rounded-lg font-bold text-xs flex items-center justify-center space-x-1 border bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200 cursor-pointer"
                         >
                           <Unlink className="w-3.5 h-3.5 text-rose-600" />
                           <span>Hủy liên kết</span>
