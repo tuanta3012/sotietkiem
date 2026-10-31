@@ -4,7 +4,6 @@ import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment, BookStatus, c
 import {
   sortAndReindexBooks,
   deduplicateSettlementAdjustments,
-  buildSavingsBookBusinessId,
 } from '../utils/dataTranslator';
 import {
   getGoogleAccessToken,
@@ -30,7 +29,12 @@ import { buildSavingsDataAuditDiff, recordSyncAuditLog } from '../utils/syncAudi
 import { resolveUserRole } from '../utils/roleHelper';
 
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
-import { clearLocalSyncQueue, readLocalSyncQueue } from '../utils/localSyncQueue';
+import {
+  clearLocalSyncQueue,
+  hasLocalSyncMutations,
+  readLocalSyncQueue,
+} from '../utils/localSyncQueue';
+import { mergeQueuedBooks } from '../utils/syncMutationMerge';
 import { removeWorkspaceFileAssignment } from '../utils/workspaceShareRelay';
 
 
@@ -112,8 +116,10 @@ export function useDriveSync({
   const isInitialSyncDoneRef = useRef<boolean>(false);
   const lastCheckedModifiedTimeRef = useRef<string | null>(null);
   const isCheckingRemoteRef = useRef<boolean>(false);
-  const previousBooksStringRef = useRef<string>(JSON.stringify(books));
-  const previousAdjsStringRef = useRef<string>(JSON.stringify(settlementAdjustments));
+  const [initialBooksString] = useState(() => JSON.stringify(books));
+  const [initialAdjsString] = useState(() => JSON.stringify(settlementAdjustments));
+  const previousBooksStringRef = useRef<string>(initialBooksString);
+  const previousAdjsStringRef = useRef<string>(initialAdjsString);
   const booksRef = useRef<SavingsBook[]>(books);
   booksRef.current = books;
 
@@ -531,10 +537,7 @@ export function useDriveSync({
             JSON.stringify({ fileId, books: pulledBooks, settlements: pulledSettlements })
           );
           const localQueue = readLocalSyncQueue();
-          const hasQueuedMutations =
-            localQueue.newBooks.length > 0 ||
-            localQueue.settlements.length > 0 ||
-            localQueue.settledBookCodes.length > 0;
+          const hasQueuedMutations = hasLocalSyncMutations(localQueue);
           const restorePending =
             localStorage.getItem('savings_master_restore_required') === 'true' ||
             hasQueuedMutations;
@@ -601,37 +604,13 @@ export function useDriveSync({
               },
             });
           }
-          const settledBookCodes = new Set(
-            localQueue.settledBookCodes.map((code) => code.replace(/\s+/g, '').toUpperCase())
-          );
-          const restoredBooks = pulledBooks.filter(
-            (book) => !settledBookCodes.has((book.bookCode || '').replace(/\s+/g, '').toUpperCase())
-          );
-          const remoteByBusinessId = new Map(
-            restoredBooks.map((book) => [buildSavingsBookBusinessId(book), book])
-          );
-          let localBookCollision = false;
-          if (restorePending) {
-            for (const localBook of localQueue.newBooks) {
-              const sameBook =
-                restoredBooks.find((book) => book.id === localBook.id) ||
-                remoteByBusinessId.get(buildSavingsBookBusinessId(localBook));
-              if (sameBook) {
-                const { id: _localId, ...localFields } = localBook;
-                const { id: _remoteId, ...remoteFields } = sameBook;
-                if (JSON.stringify(localFields) !== JSON.stringify(remoteFields)) {
-                  localBookCollision = true;
-                  break;
-                }
-              } else {
-                restoredBooks.push(localBook);
-                remoteByBusinessId.set(buildSavingsBookBusinessId(localBook), localBook);
-              }
-            }
-          }
-          if (localBookCollision) {
+          const mergeResult = restorePending
+            ? mergeQueuedBooks(pulledBooks, localQueue)
+            : { books: pulledBooks, conflict: undefined };
+          const restoredBooks = mergeResult.books;
+          if (mergeResult.conflict) {
             isInitialSyncDoneRef.current = true;
-            setSyncDriveStatus('⚠️ Có sổ local trùng khóa nhận diện nhưng nội dung khác Drive. Dữ liệu được giữ nguyên, cần xử lý xung đột trước khi ghi.');
+            setSyncDriveStatus(`⚠️ ${mergeResult.conflict}`);
             return;
           }
           const restoredSettlements = restorePending
@@ -642,10 +621,10 @@ export function useDriveSync({
             : pulledSettlements;
           applyMasterSettlements(restoredSettlements);
 
-          const hasLocalRestoreChanges = hasQueuedMutations && (
-            restoredBooks.length !== pulledBooks.length ||
-            restoredSettlements.length !== pulledSettlements.length
-          );
+          const hasLocalRestoreChanges =
+            hasQueuedMutations &&
+            (JSON.stringify(restoredBooks) !== JSON.stringify(pulledBooks) ||
+              JSON.stringify(restoredSettlements) !== JSON.stringify(pulledSettlements));
           if (restorePending && hasLocalRestoreChanges && currentUser && !currentUser.isOffline && canPushToDrive(settingsRef.current.currentRole)) {
             isRestoreMergePushRef.current = true;
             needsPushRef.current = true;
@@ -658,7 +637,7 @@ export function useDriveSync({
               console.error('Không thể xóa cờ phục hồi local sau khi đọc Drive:', error);
             }
           } else if (restorePending && hasQueuedMutations && !hasLocalRestoreChanges) {
-            clearLocalSyncQueue();
+            clearLocalSyncQueue(localQueue);
           }
 
           isInitialSyncDoneRef.current = true;
@@ -834,9 +813,7 @@ export function useDriveSync({
       const pendingMutationQueue = readLocalSyncQueue();
       if (
         (localStorage.getItem('savings_master_restore_required') === 'true' ||
-          (pendingMutationQueue.newBooks.length === 0 &&
-            pendingMutationQueue.settlements.length === 0 &&
-            pendingMutationQueue.settledBookCodes.length === 0)) &&
+          !hasLocalSyncMutations(pendingMutationQueue)) &&
         !isRestoreMergePushRef.current
       ) return;
       if (!canPushToDrive(settings.currentRole)) {
@@ -876,11 +853,7 @@ export function useDriveSync({
       let booksToWrite = updatedBooks;
       let settlementsToWrite =
         currentAdjustments ?? settlementAdjustmentsRef.current ?? settlementAdjustments ?? [];
-      if (
-        queuedMutations.newBooks.length > 0 ||
-        queuedMutations.settlements.length > 0 ||
-        queuedMutations.settledBookCodes.length > 0
-      ) {
+      if (hasLocalSyncMutations(queuedMutations)) {
         const baselineText = localStorage.getItem('savings_drive_sync_baseline_v1');
         if (!baselineText) {
           throw new Error('Chưa có bản dữ liệu Drive làm mốc. Đã giữ thay đổi local và dừng ghi.');
@@ -898,30 +871,9 @@ export function useDriveSync({
           throw new Error('Bản mốc Drive không khớp file đang liên kết. Đã giữ thay đổi local và dừng ghi.');
         }
 
-        const settledCodes = new Set(
-          queuedMutations.settledBookCodes.map((code) => code.replace(/\s+/g, '').toUpperCase())
-        );
-        const mergedBooks = baseline.books.filter(
-          (book) => !settledCodes.has((book.bookCode || '').replace(/\s+/g, '').toUpperCase())
-        );
-        const mergedByBusinessId = new Map(
-          mergedBooks.map((book) => [buildSavingsBookBusinessId(book), book])
-        );
-        for (const localBook of queuedMutations.newBooks) {
-          const businessId = buildSavingsBookBusinessId(localBook);
-          const existing = mergedByBusinessId.get(businessId);
-          if (existing) {
-            const { id: _localId, ...localFields } = localBook;
-            const { id: _remoteId, ...remoteFields } = existing;
-            if (JSON.stringify(localFields) !== JSON.stringify(remoteFields)) {
-              throw new Error(`Sổ ${localBook.bookCode || businessId} trùng khóa nhưng khác nội dung. Đã dừng ghi để tránh ghi đè.`);
-            }
-            continue;
-          }
-          mergedBooks.push(localBook);
-          mergedByBusinessId.set(businessId, localBook);
-        }
-        booksToWrite = sortAndReindexBooks(mergedBooks);
+        const mergeResult = mergeQueuedBooks(baseline.books, queuedMutations);
+        if (mergeResult.conflict) throw new Error(mergeResult.conflict);
+        booksToWrite = sortAndReindexBooks(mergeResult.books);
         settlementsToWrite = deduplicateSettlementAdjustments([
           ...baseline.settlements,
           ...queuedMutations.settlements,
@@ -1043,7 +995,7 @@ export function useDriveSync({
             'savings_drive_sync_baseline_v1',
             JSON.stringify({ fileId, books: booksToWrite, settlements: adjs })
           );
-          clearLocalSyncQueue();
+          clearLocalSyncQueue(queuedMutations);
           localStorage.removeItem('savings_master_restore_required');
           lastLocalPushTimeRef.current = Date.now();
           const nowStr = new Date().toLocaleString('vi-VN');
@@ -1305,11 +1257,10 @@ export function useDriveSync({
     []
   );
 
-  // Only queued book-creation and settlement mutations are eligible for Drive push.
+  // Only explicitly queued book and settlement mutations are eligible for Drive push.
   useEffect(() => {
     const queued = readLocalSyncQueue();
-    const hasQueued =
-      queued.newBooks.length > 0 || queued.settlements.length > 0 || queued.settledBookCodes.length > 0;
+    const hasQueued = hasLocalSyncMutations(queued);
     if (isSyncingRef.current && hasQueued) {
       needsPushRef.current = true;
       pendingBooksRef.current = books;
@@ -1711,9 +1662,7 @@ export function useDriveSync({
     checkDriveTokenValidity(true);
     const startupQueue = readLocalSyncQueue();
     if (
-      startupQueue.newBooks.length > 0 ||
-      startupQueue.settlements.length > 0 ||
-      startupQueue.settledBookCodes.length > 0 ||
+      hasLocalSyncMutations(startupQueue) ||
       localStorage.getItem('savings_master_restore_required') === 'true'
     ) {
       void syncBooksFromDriveRef.current(false);
@@ -1748,9 +1697,7 @@ export function useDriveSync({
       checkDriveTokenValidity(true);
       const pendingQueue = readLocalSyncQueue();
       if (
-        pendingQueue.newBooks.length > 0 ||
-        pendingQueue.settlements.length > 0 ||
-        pendingQueue.settledBookCodes.length > 0 ||
+        hasLocalSyncMutations(pendingQueue) ||
         localStorage.getItem('savings_master_restore_required') === 'true'
       ) {
         void syncBooksFromDriveRef.current(false);

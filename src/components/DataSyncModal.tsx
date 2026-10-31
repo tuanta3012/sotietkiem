@@ -27,6 +27,7 @@ import { exportSavingsBooksToExcel, parseExcelFile } from '../utils/excelParser'
 import { Capacitor } from '@capacitor/core';
 import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory, clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import { formatVND } from '../utils/formatters';
+import { getVietnamDateISO } from '../utils/date';
 
 import {
   initGoogleAuth,
@@ -968,7 +969,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   // CHẾ ĐỘ OFFLINE: Xuất bản sao lưu Excel về máy tính/điện thoại
   const handleExportBackup = async () => {
     try {
-      const today = new Date().toISOString().split('T')[0];
+      const today = getVietnamDateISO();
       const annualHistory = getDynamicAnnualInterestHistory(books, settlements);
       const balanceHistory = getDynamicBalanceGrowthHistory(books, settlements);
       await exportSavingsBooksToExcel(books, `So_Tiet_Kiem_Backup_${today}.xlsx`, annualHistory, balanceHistory, settlements);

@@ -49,6 +49,7 @@ import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
 import { clearLocalSyncQueue } from './utils/localSyncQueue';
 import { scheduleMaturityNotifications } from './utils/notificationService';
+import { getVietnamDateISO } from './utils/date';
 
 // Chuyển hai component có kích thước lớn và chứa biểu đồ thành dạng lazy load
 const MobilizationOptimizer = React.lazy(() =>
@@ -71,8 +72,6 @@ const TabLoadingFallback = () => (
 import { CURRENT_APP_VERSION } from './version';
 
 import { useAppUpdate } from './hooks/useAppUpdate';
-
-const CURRENT_DATE = new Date().toISOString().split('T')[0];
 
 const hasSameLinkedData = (
   localBooks: SavingsBook[],
@@ -132,6 +131,18 @@ const hasSameLinkedData = (
 
 export default function App() {
   const { showToast } = useToast();
+  const [currentDate, setCurrentDate] = useState(getVietnamDateISO);
+
+  useEffect(() => {
+    const refreshDate = () => setCurrentDate(getVietnamDateISO());
+    const intervalId = window.setInterval(refreshDate, 60_000);
+    document.addEventListener('visibilitychange', refreshDate);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', refreshDate);
+    };
+  }, []);
+
   const [isPendingAuth, setIsPendingAuth] = useState<boolean>(() => {
     try {
       return sessionStorage.getItem('pending_google_redirect_auth') === 'true';
@@ -1199,7 +1210,7 @@ export default function App() {
     const balanceHistory = getDynamicBalanceGrowthHistory(books, settlementAdjustments);
     
     // 1. Thực hiện xuất file Excel lưu về máy trước
-    await exportSavingsBooksToExcel(books, `So_Tiet_Kiem_Gia_Dinh_Backup_${CURRENT_DATE}.xlsx`, annualHistory, balanceHistory);
+    await exportSavingsBooksToExcel(books, `So_Tiet_Kiem_Gia_Dinh_Backup_${currentDate}.xlsx`, annualHistory, balanceHistory);
     
     setIsLogoutWarningModalOpen(false);
     
@@ -1427,7 +1438,7 @@ export default function App() {
                       books={books}
                       filteredBooks={filteredBooks}
                       settings={settings}
-                      currentDateStr={CURRENT_DATE}
+                      currentDateStr={currentDate}
                       settlementAdjustments={settlementAdjustments}
                       currentUser={currentUser}
                       sheetSubView={sheetSubView}
@@ -1467,7 +1478,7 @@ export default function App() {
                     <Suspense fallback={<TabLoadingFallback />}>
                       <MobilizationOptimizer
                         books={books}
-                        currentDateStr={CURRENT_DATE}
+                        currentDateStr={currentDate}
                         settings={settings}
                         onOpenBookDetail={handleSelectForAnalysis}
                       />
@@ -1479,7 +1490,7 @@ export default function App() {
                       <InterestCalculationView
                         books={books}
                         settings={settings}
-                        currentDateStr={CURRENT_DATE}
+                        currentDateStr={currentDate}
                         settlements={settlementAdjustments}
                         onOpenOptimizer={() => setActiveTab('optimizer')}
                         onOpenSyncModal={handleNavbarSync}
@@ -1498,7 +1509,7 @@ export default function App() {
                   books={books}
                   filteredBooks={filteredBooks}
                   settings={settings}
-                  currentDateStr={CURRENT_DATE}
+                  currentDateStr={currentDate}
                   settlementAdjustments={settlementAdjustments}
                   currentUser={currentUser}
                   sheetSubView={sheetSubView}
@@ -1541,7 +1552,7 @@ export default function App() {
                 <Suspense fallback={<TabLoadingFallback />}>
                   <MobilizationOptimizer
                     books={books}
-                    currentDateStr={CURRENT_DATE}
+                    currentDateStr={currentDate}
                     settings={settings}
                     onOpenBookDetail={handleSelectForAnalysis}
                     onOpenSyncModal={handleNavbarSync}
@@ -1554,7 +1565,7 @@ export default function App() {
                   <InterestCalculationView
                     books={books}
                     settings={settings}
-                    currentDateStr={CURRENT_DATE}
+                    currentDateStr={currentDate}
                     settlements={settlementAdjustments}
                     onOpenOptimizer={() => setActiveTab('optimizer')}
                     onOpenSyncModal={handleNavbarSync}
@@ -1618,7 +1629,7 @@ export default function App() {
           settings={settings}
           setSettings={setSettings}
           currentUser={currentUser}
-          currentDateStr={CURRENT_DATE}
+          currentDateStr={currentDate}
         />
 
         {/* Footer */}

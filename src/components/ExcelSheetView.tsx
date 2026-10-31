@@ -1,13 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-} from 'recharts';
 import { SavingsBook, AppSettings, SettlementAdjustment, canEditData } from '../types';
 import { getBankById } from '../data/banks';
 import { getDynamicAnnualInterestHistory, getDynamicBalanceGrowthHistory } from '../data/historicalGrowth';
@@ -18,7 +9,6 @@ import {
   formatAdaptiveShortVND,
   formatDateVN,
   formatPercent,
-  formatDecimal,
   getOwnerLabel,
   getOwnerBadgeStyle,
 } from '../utils/formatters';
@@ -45,6 +35,10 @@ import {
   AlertTriangle,
   Eye,
 } from 'lucide-react';
+
+const CashflowChart = React.lazy(() =>
+  import('./CashflowChart').then((module) => ({ default: module.CashflowChart }))
+);
 
 interface ExcelSheetViewProps {
   books: SavingsBook[];
@@ -272,6 +266,34 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
       });
   }, [booksWithMetrics, filterCategory, sortBy]);
 
+  const cashflowChartData = useMemo(() => {
+    return booksWithMetrics
+      .reduce<Array<{
+        monthKey: string;
+        label: string;
+        principalMillion: number;
+        interestMillion: number;
+      }>>((acc, item) => {
+        const monthKey = item.maturityDate.slice(0, 7);
+        const [year, month] = monthKey.split('-');
+        const label = `T${parseInt(month, 10)}/${year.slice(2)}`;
+        const existing = acc.find((entry) => entry.monthKey === monthKey);
+        if (existing) {
+          existing.principalMillion += Math.round(item.principal / 1_000_000);
+          existing.interestMillion += Math.round(item.calculatedTermInterest / 1_000_000);
+        } else {
+          acc.push({
+            monthKey,
+            label,
+            principalMillion: Math.round(item.principal / 1_000_000),
+            interestMillion: Math.round(item.calculatedTermInterest / 1_000_000),
+          });
+        }
+        return acc;
+      }, [])
+      .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  }, [booksWithMetrics]);
+
   // Tổng hợp thống kê dựa trên danh sách đang hiển thị
   const summary = useMemo(() => {
     const totalPrincipal = displayedBooks.reduce((sum, b) => sum + b.principal, 0);
@@ -434,49 +456,9 @@ export const ExcelSheetView: React.FC<ExcelSheetViewProps> = ({
             </div>
 
             <div className="h-48 sm:h-56 w-full bg-slate-900/60 rounded-xl p-2 sm:p-3 border border-white/10">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={booksWithMetrics
-                    .reduce((acc: any[], item) => {
-                      const ym = item.maturityDate.slice(0, 7);
-                      const [year, month] = ym.split('-');
-                      const label = `T${parseInt(month, 10)}/${year.slice(2)}`;
-                      const existing = acc.find((x) => x.monthKey === ym);
-                      const pMil = Math.round(item.principal / 1_000_000);
-                      const iMil = Math.round(item.calculatedTermInterest / 1_000_000);
-                      if (existing) {
-                        existing.principalMillion += pMil;
-                        existing.interestMillion += iMil;
-                      } else {
-                        acc.push({
-                          monthKey: ym,
-                          label,
-                          principalMillion: pMil,
-                          interestMillion: iMil,
-                        });
-                      }
-                      return acc;
-                    }, [])
-                    .sort((a, b) => a.monthKey.localeCompare(b.monthKey))}
-                  margin={{ top: 10, right: 10, left: -10, bottom: 5 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
-                  <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#cbd5e1' }} />
-                  <YAxis
-                    tick={{ fontSize: 10, fill: '#cbd5e1' }}
-                    tickFormatter={(v) => `${formatDecimal(v / 1000, 1)}T`}
-                  />
-                  <Tooltip
-                    formatter={(val: any, name: any) => [
-                      `${Number(val).toLocaleString('vi-VN')} Tr VNĐ`,
-                      name === 'principalMillion' ? 'Gốc' : 'Lãi',
-                    ]}
-                    contentStyle={{ backgroundColor: '#0f172a', color: '#fff', borderRadius: '8px', fontSize: '11px', border: '1px solid #334155' }}
-                  />
-                  <Bar dataKey="principalMillion" name="principalMillion" stackId="a" fill="#10b981" />
-                  <Bar dataKey="interestMillion" name="interestMillion" stackId="a" fill="#f59e0b" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <React.Suspense fallback={<div className="h-full animate-pulse rounded-lg bg-slate-800" />}>
+                <CashflowChart data={cashflowChartData} />
+              </React.Suspense>
             </div>
           </div>
         )}

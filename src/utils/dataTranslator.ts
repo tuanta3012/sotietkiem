@@ -13,6 +13,7 @@ import { SavingsBook, AnnualInterestRecord, BalanceGrowthRecord, SettlementAdjus
 import { getDaysBetween, getAdjustedMaturityDate } from './calculator';
 import { getOwnerLabel, getCustomOwnerNames } from './formatters';
 import { isUsingSampleData, loadStaticHistoryFromStorage } from '../data/historicalGrowth';
+import { getVietnamDateISO } from './date';
 
 export interface RawSheetRow {
   bank: string;
@@ -557,7 +558,7 @@ export function translateBooksToDataRows(books: SavingsBook[]): (string | number
     const startStr = translateDateToSheet(b.startDate, 'yyyy-mm-dd');
     const maturityStr = translateDateToSheet(b.maturityDate, 'yyyy-mm-dd');
     const term = b.termMonths;
-    const benchmarkDateStr = new Date().toISOString().slice(0, 10);
+    const benchmarkDateStr = getVietnamDateISO();
     const daysRemaining = getDaysBetween(benchmarkDateStr, b.maturityDate);
     const monthsRemaining = Math.max(0, Math.round(daysRemaining / 30.417));
 
@@ -659,7 +660,7 @@ export function translateBooksToSheetMatrix(
     const startStr = translateDateToSheet(b.startDate, 'yyyy-mm-dd');
     const maturityStr = translateDateToSheet(b.maturityDate, 'yyyy-mm-dd');
     const term = b.termMonths;
-    const benchmarkDateStr = new Date().toISOString().slice(0, 10);
+    const benchmarkDateStr = getVietnamDateISO();
     const daysRemaining = getDaysBetween(benchmarkDateStr, b.maturityDate);
     const monthsRemaining = Math.max(0, Math.round(daysRemaining / 30.417));
 

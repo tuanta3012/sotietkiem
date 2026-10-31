@@ -26,6 +26,7 @@ import {
   formatAuditLogsAsText,
   SyncAuditLogEntry,
 } from '../utils/syncAuditLog';
+import { getVietnamDateISO } from '../utils/date';
 import {
   getMasterSyncStateFromDrive,
   getGoogleAccessToken,
@@ -190,7 +191,7 @@ export const SyncAuditLogModal: React.FC<SyncAuditLogModalProps> = ({
 
   const handleDownloadLogs = async () => {
     const text = formatAuditLogsAsText(filteredLogs);
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const dateStr = getVietnamDateISO();
     const fileName = `nhat_ky_kiem_toan_${dateStr}.txt`;
 
     if (Capacitor.isNativePlatform()) {

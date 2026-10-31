@@ -75,8 +75,12 @@ jobs:
       # 4. Cài đặt các thư viện cần thiết (bao gồm cả Capacitor Android Core)
       - name: Install Dependencies
         run: |
-          npm install --legacy-peer-deps
-          node scripts/patch-google-auth.cjs
+          npm ci --legacy-peer-deps
+
+      - name: Type-check and test
+        run: |
+          npm run lint
+          npm test
 
       # 5. Khởi tạo lại hoàn toàn thư mục Android nếu bị rỗng / thiếu file build.gradle
       - name: Generate Fresh Android Project
@@ -253,22 +257,6 @@ jobs:
           
           # Đồng bộ keystore cố định vào các vị trí chuẩn của Android build
           cp keystore/debug.keystore ~/.android/debug.keystore
-          cp keystore/debug.keystore android/app/debug.keystore
-          
-          # Cấu hình tường minh signingConfig debug trong android/app/build.gradle
-          if [ -f "android/app/build.gradle" ]; then
-            node -e "
-              const fs = require('fs');
-              const file = 'android/app/build.gradle';
-              let content = fs.readFileSync(file, 'utf8');
-              if (!content.includes('signingConfigs {')) {
-                const signingBlock = 'signingConfigs {\\n        debug {\\n            storeFile file(\\'debug.keystore\\')\\n            storePassword \\'android\\'\\n            keyAlias \\'androiddebugkey\\'\\n            keyPassword \\'android\\'\\n        }\\n    }\\n    buildTypes {';
-                content = content.replace('buildTypes {', signingBlock);
-                content = content.replace('release {', 'release {\\n        signingConfig signingConfigs.debug');
-                fs.writeFileSync(file, content, 'utf8');
-              }
-            "
-          fi
           
           SHA1_VAL=$(keytool -list -v -keystore keystore/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
           
@@ -343,8 +331,31 @@ jobs:
             }
           "
 
+      - name: Prepare protected Google Play signing key
+        if: steps.auto_version.outputs.BUILD_AAB == 'true'
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_RELEASE_KEYSTORE_BASE64" ] || \
+             [ -z "$ANDROID_RELEASE_STORE_PASSWORD" ] || \
+             [ -z "$ANDROID_RELEASE_KEY_ALIAS" ] || \
+             [ -z "$ANDROID_RELEASE_KEY_PASSWORD" ]; then
+            echo "::error::AAB builds require the four ANDROID_RELEASE_* GitHub Actions secrets."
+            exit 1
+          fi
+          printf '%s' "$ANDROID_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/sotietkiem-release.jks"
+          chmod 600 "$RUNNER_TEMP/sotietkiem-release.jks"
+
       - name: Compile AAB file
         if: steps.auto_version.outputs.BUILD_AAB == 'true'
+        env:
+          ANDROID_RELEASE_KEYSTORE_PATH: ${{ runner.temp }}/sotietkiem-release.jks
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
           cd android
           ./gradlew bundleRelease --no-daemon
@@ -355,8 +366,9 @@ jobs:
           mkdir -p dist-aab
           if [ -f "android/app/build/outputs/bundle/release/app-release.aab" ]; then
             cp android/app/build/outputs/bundle/release/app-release.aab dist-aab/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
-          elif [ -f "android/app/build/outputs/bundle/debug/app-debug.aab" ]; then
-            cp android/app/build/outputs/bundle/debug/app-debug.aab dist-aab/sotietkiem_v${{ steps.auto_version.outputs.NAME }}.aab
+          else
+            echo "::error::The signed release AAB was not produced."
+            exit 1
           fi
 
       - name: Upload AAB to GitHub Actions Artifacts (Private Storage for Play Store)

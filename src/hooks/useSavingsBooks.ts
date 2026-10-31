@@ -14,11 +14,13 @@ import { getSortedBanksByUsage } from '../data/banks';
 import { clearStaticHistoryFromStorage } from '../data/historicalGrowth';
 import { recordSyncAuditLog } from '../utils/syncAuditLog';
 import { useConfirmDialog } from '../context/ConfirmDialogContext';
+import { getVietnamDateISO } from '../utils/date';
 import {
   clearLocalSyncQueue,
   queueNewBookForDrive,
+  queueBookUpdateForDrive,
+  queueBookDeletionForDrive,
   queueSettlementForDrive,
-  removePendingBookFromDrive,
 } from '../utils/localSyncQueue';
 
 interface UseSavingsBooksProps {
@@ -156,6 +158,10 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
         alert('Tài khoản của bạn ở vai trò "Chỉ xem (Viewer)". Bạn không có quyền chỉnh sửa hoặc tác động vào dữ liệu.');
         return;
       }
+      const previousBook = books.find((book) => book.id === updatedBook.id);
+      if (previousBook && !queueBookUpdateForDrive(previousBook, updatedBook)) {
+        onShowSyncStatusRef.current?.('Không lưu được thay đổi chờ đồng bộ. Dữ liệu vẫn được giữ trên thiết bị.');
+      }
       const updated = books.map((b) => (b.id === updatedBook.id ? updatedBook : b));
       const nextBooks = sortAndReindexBooks(updated);
       setBooks(nextBooks);
@@ -170,11 +176,17 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
         return;
       }
       const exists = books.some((b) => b.id === savedBook.id);
+      const previousBook = exists ? books.find((book) => book.id === savedBook.id) : undefined;
       const updated = exists
         ? books.map((b) => (b.id === savedBook.id ? savedBook : b))
         : [savedBook, ...books];
       const nextBooks = sortAndReindexBooks(updated);
-      if (!exists && !queueNewBookForDrive(savedBook)) {
+      const queued = exists && previousBook
+        ? queueBookUpdateForDrive(previousBook, savedBook)
+        : !exists
+        ? queueNewBookForDrive(savedBook)
+        : true;
+      if (!queued) {
         onShowSyncStatusRef.current?.('Không lưu được thay đổi chờ đồng bộ. Dữ liệu vẫn được giữ trên thiết bị.');
       }
       setBooks(nextBooks);
@@ -197,7 +209,9 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
 
       const updated = books.filter((b) => b.id !== bookId);
       const nextBooks = sortAndReindexBooks(updated);
-      removePendingBookFromDrive(bookId);
+      if (book && !queueBookDeletionForDrive(book)) {
+        onShowSyncStatusRef.current?.('Không lưu được thay đổi chờ đồng bộ. Dữ liệu vẫn được giữ trên thiết bị.');
+      }
       setBooks(nextBooks);
       return true;
     },
@@ -223,7 +237,7 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
       if (!bookToSettle) return;
 
       const isEarly = extra?.isEarlySettled ?? false;
-      const rawSettlementDate = extra?.settlementDate || new Date().toISOString().slice(0, 10);
+      const rawSettlementDate = extra?.settlementDate || getVietnamDateISO();
       const settlementDate = normalizeDateToISO(rawSettlementDate) || rawSettlementDate;
       const settlementYear = parseInt(settlementDate.slice(0, 4), 10) || new Date().getFullYear();
       const daysTotal = Math.max(1, getDaysBetween(bookToSettle.startDate, bookToSettle.maturityDate));
