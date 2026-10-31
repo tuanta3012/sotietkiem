@@ -262,6 +262,7 @@ jobs:
           
           # Đồng bộ keystore cố định vào các vị trí chuẩn của Android build
           cp keystore/debug.keystore ~/.android/debug.keystore
+          cp keystore/debug.keystore android/app/debug.keystore
           
           SHA1_VAL=$(keytool -list -v -keystore keystore/debug.keystore -alias androiddebugkey -storepass android | grep "SHA1:" | head -1 | awk '{print $2}')
           
