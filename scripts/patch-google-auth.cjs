@@ -184,13 +184,25 @@ try {
   const capCliTemplatePath = path.join(__dirname, '..', 'node_modules', '@capacitor', 'cli', 'dist', 'util', 'template.js');
   if (fs.existsSync(capCliTemplatePath)) {
     let templateSrc = fs.readFileSync(capCliTemplatePath, 'utf8');
-    if (templateSrc.includes('await tar_1.default.extract({ file: src, cwd: dir });')) {
-      templateSrc = templateSrc.replace(
-        'await tar_1.default.extract({ file: src, cwd: dir });',
-        'const extractFn = (tar_1.default && tar_1.default.extract) || tar_1.extract || (typeof tar_1 === "function" ? tar_1 : null);\n    if (extractFn) { await extractFn({ file: src, cwd: dir }); }'
-      );
-      fs.writeFileSync(capCliTemplatePath, templateSrc, 'utf8');
-      console.log('✓ Patched @capacitor/cli template.js for tar compatibility');
+    if (!templateSrc.includes('const extractFn =')) {
+      const safeExtractCode = `async function extractTemplate(src, dir) {
+    await (0, utils_fs_1.mkdirp)(dir);
+    const tarMod = require("tar");
+    const extractFn = (tar_1 && tar_1.default && tar_1.default.extract) ||
+                      (tar_1 && tar_1.extract) ||
+                      (tarMod && tarMod.extract) ||
+                      (tarMod && tarMod.default && tarMod.default.extract) ||
+                      (tarMod && tarMod.x) ||
+                      (typeof tarMod === "function" ? tarMod : null);
+    if (typeof extractFn === "function") {
+      await extractFn({ file: src, cwd: dir });
+    }
+}`;
+      if (/async function extractTemplate\([\s\S]*?\n\}/.test(templateSrc)) {
+        templateSrc = templateSrc.replace(/async function extractTemplate\([\s\S]*?\n\}/, safeExtractCode);
+        fs.writeFileSync(capCliTemplatePath, templateSrc, 'utf8');
+        console.log('✓ Patched @capacitor/cli template.js for tar compatibility');
+      }
     }
   }
 } catch (e) {
