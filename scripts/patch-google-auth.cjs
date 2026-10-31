@@ -178,3 +178,21 @@ gradle = gradle.replace(
   "implementation 'com.google.android.gms:play-services-auth:21.6.0'"
 );
 fs.writeFileSync(gradlePath, gradle);
+
+// Patch @capacitor/cli template.js compatibility for tar.extract
+try {
+  const capCliTemplatePath = path.join(__dirname, '..', 'node_modules', '@capacitor', 'cli', 'dist', 'util', 'template.js');
+  if (fs.existsSync(capCliTemplatePath)) {
+    let templateSrc = fs.readFileSync(capCliTemplatePath, 'utf8');
+    if (templateSrc.includes('await tar_1.default.extract({ file: src, cwd: dir });')) {
+      templateSrc = templateSrc.replace(
+        'await tar_1.default.extract({ file: src, cwd: dir });',
+        'const extractFn = (tar_1.default && tar_1.default.extract) || tar_1.extract || (typeof tar_1 === "function" ? tar_1 : null);\n    if (extractFn) { await extractFn({ file: src, cwd: dir }); }'
+      );
+      fs.writeFileSync(capCliTemplatePath, templateSrc, 'utf8');
+      console.log('✓ Patched @capacitor/cli template.js for tar compatibility');
+    }
+  }
+} catch (e) {
+  console.warn('Warning: Could not patch @capacitor/cli template.js:', e.message);
+}

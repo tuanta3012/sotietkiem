@@ -49,7 +49,7 @@
   },
   "overrides": {
     "@capacitor/cli": {
-      "tar": "7.5.21"
+      "tar": "^6.2.1"
     },
     "@firebase/firestore": {
       "@grpc/grpc-js": "1.14.7"
