@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { Smartphone, Loader2 } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
+import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Preferences } from '@capacitor/preferences';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment } from './types';
@@ -743,6 +744,81 @@ export default function App() {
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState<boolean>(false);
   const [bookToEdit, setBookToEdit] = useState<SavingsBook | null>(null);
   const [selectedBookForDetail, setSelectedBookForDetail] = useState<SavingsBook | null>(null);
+
+  // Tích hợp phím Back cứng và cử chỉ vuốt Back của Android (Capacitor App plugin)
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const handleBackButton = CapApp.addListener('backButton', () => {
+      if (selectedBookForDetail) {
+        setSelectedBookForDetail(null);
+        return;
+      }
+      if (isAddModalOpen) {
+        setIsAddModalOpen(false);
+        setBookToEdit(null);
+        return;
+      }
+      if (isSyncModalOpen) {
+        setIsSyncModalOpen(false);
+        return;
+      }
+      if (isAndroidSpecModalOpen) {
+        setIsAndroidSpecModalOpen(false);
+        return;
+      }
+      if (isManageBanksModalOpen) {
+        setIsManageBanksModalOpen(false);
+        return;
+      }
+      if (isUserManagementModalOpen) {
+        setIsUserManagementModalOpen(false);
+        return;
+      }
+      if (isLogoutWarningModalOpen) {
+        setIsLogoutWarningModalOpen(false);
+        return;
+      }
+      if (showFileDeletedRecovery) {
+        setShowFileDeletedRecovery(false);
+        return;
+      }
+      if (isClearDataModalOpen) {
+        setIsClearDataModalOpen(false);
+        return;
+      }
+      if (isUpdateModalOpen) {
+        setIsUpdateModalOpen(false);
+        return;
+      }
+      if (conflictHub) {
+        setConflictHub(null);
+        return;
+      }
+      if (activeTab !== 'sheet-view') {
+        setActiveTab('sheet-view');
+        return;
+      }
+      // Nếu đang ở màn hình chính và không có modal nào mở -> Thoát app
+      CapApp.exitApp();
+    });
+
+    return () => {
+      handleBackButton.then((listener) => listener.remove()).catch(() => {});
+    };
+  }, [
+    selectedBookForDetail,
+    isAddModalOpen,
+    isSyncModalOpen,
+    isAndroidSpecModalOpen,
+    isManageBanksModalOpen,
+    isUserManagementModalOpen,
+    isLogoutWarningModalOpen,
+    showFileDeletedRecovery,
+    isClearDataModalOpen,
+    isUpdateModalOpen,
+    conflictHub,
+    activeTab,
+  ]);
 
   const handleLeaveWorkspace = async () => {
     const token = getGoogleAccessToken();
