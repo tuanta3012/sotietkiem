@@ -611,6 +611,8 @@ export default function App() {
     startFileSwitch,
     finishFileSwitch,
     cancelFileSwitch,
+    conflictDetected,
+    setConflictDetected,
   } = useDriveSync({
     currentUser,
     setCurrentUser,
@@ -622,6 +624,13 @@ export default function App() {
     setSettlementAdjustments,
     setShowFileDeletedRecovery,
   });
+
+  useEffect(() => {
+    if (conflictDetected) {
+      showToast(conflictDetected, 'error', 5000);
+      setConflictDetected(null);
+    }
+  }, [conflictDetected, showToast]);
 
   const consumeWorkspaceRelay = useCallback(
     async (_relayAssignment: boolean | undefined, memberEmail: string) => {

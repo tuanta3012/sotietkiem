@@ -93,6 +93,7 @@ export function useDriveSync({
 }: UseDriveSyncProps) {
   const [isSyncingDrive, setIsSyncingDrive] = useState<boolean>(false);
   const [syncDriveStatus, setSyncDriveStatus] = useState<string | null>(null);
+  const [conflictDetected, setConflictDetected] = useState<string | null>(null); // State mới để báo xung đột
   const [detectedDesyncHub, setDetectedDesyncHub] = useState<{ id: string; name: string; webViewLink?: string; linkedTimestamp?: string } | null>(null);
   const [isDriveTokenExpired, setIsDriveTokenExpired] = useState<boolean>(false);
 
@@ -557,22 +558,15 @@ export function useDriveSync({
               userEmail,
               currentRole: role,
               sheetName: settingsRef.current?.googleSheetName,
-              summary: `Đã thay dữ liệu cục bộ bằng bản Drive; phát hiện ${cacheDiff.changes.length}${cacheDiff.truncated ? '+' : ''} thay đổi khác biệt.`,
+              summary: `Phát hiện ${cacheDiff.changes.length}${cacheDiff.truncated ? '+' : ''} thay đổi khác biệt trên Drive.`,
               details: {
                 source: 'local_cache_vs_drive',
-                localBooksCount: booksRef.current.length,
-                driveBooksCount: pulledBooks.length,
-                localSettlementsCount: settlementAdjustmentsRef.current.length,
-                driveSettlementsCount: pulledSettlements.length,
-                localStorageBooksCount: localStorageSnapshot.books.length,
-                localStorageSettlementsCount: localStorageSnapshot.settlements.length,
-                ...(localStorageSnapshot.issues.length
-                  ? { localStorageIssues: localStorageSnapshot.issues }
-                  : {}),
                 changes: cacheDiff.changes,
-                ...(cacheDiff.truncated ? { truncated: true } : {}),
               },
             });
+            setConflictDetected('Phát hiện thay đổi trên Drive. Vui lòng chọn đồng bộ để xử lý xung đột.');
+            setIsSyncingDrive(false);
+            return;
           }
           const storageToStateDiff = buildSavingsDataAuditDiff(
             localStorageSnapshot.books,
@@ -941,7 +935,10 @@ export function useDriveSync({
           }
         } catch (masterCheckErr) {
           console.error('[Auto-Push] Không thể xác minh master state; đã dừng push.', masterCheckErr);
-          throw masterCheckErr;
+          setConflictDetected('Lỗi đồng bộ: Trạng thái file trên Drive đã thay đổi. Vui lòng tải lại dữ liệu để xử lý xung đột.');
+          isPushingRef.current = false;
+          setIsSyncingDrive(false);
+          return;
         }
 
         const adjs = settlementsToWrite;
@@ -1826,5 +1823,7 @@ export function useDriveSync({
     startFileSwitch,
     finishFileSwitch,
     cancelFileSwitch,
+    conflictDetected,
+    setConflictDetected,
   };
 }
