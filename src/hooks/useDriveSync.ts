@@ -157,6 +157,7 @@ export function useDriveSync({
   const pendingAdjsRef = useRef<SettlementAdjustment[] | null>(null);
   const isRestoreMergePushRef = useRef(false);
   const pendingQueueRetryRef = useRef<number | null>(null);
+  const concurrentChangeRecoveryAttemptsRef = useRef(0);
 
   // Quản lý độ trễ index tìm kiếm của Google Drive API (để tránh vòng lặp phản hồi ngược)
   const lastUrlChangeTimeRef = useRef<number>(Date.now());
@@ -997,6 +998,7 @@ export function useDriveSync({
           sheetName: settingsRef.current?.googleSheetName,
         }, expectedModifiedTime);
         if (success) {
+          concurrentChangeRecoveryAttemptsRef.current = 0;
           localStorage.setItem(
             'savings_drive_sync_baseline_v1',
             JSON.stringify({ fileId, books: booksToWrite, settlements: adjs })
@@ -1055,7 +1057,33 @@ export function useDriveSync({
         ) {
           console.warn('Push to Drive notice:', err?.message);
           setSyncDriveStatus('Phiên đăng nhập Google hết hạn. Vui lòng bấm đăng nhập lại.');
+        } else if (err?.message?.includes('CONCURRENT_REMOTE_CHANGE')) {
+          if (concurrentChangeRecoveryAttemptsRef.current === 0) {
+            concurrentChangeRecoveryAttemptsRef.current = 1;
+            setSyncDriveStatus('Drive vừa thay đổi. Đang tải lại và gộp an toàn trước khi thử đồng bộ lại...');
+            window.setTimeout(() => {
+              void syncBooksFromDrive(false, token)
+                .then((recovered) => {
+                  if (!recovered || !hasLocalSyncMutations(readLocalSyncQueue())) {
+                    concurrentChangeRecoveryAttemptsRef.current = 0;
+                  }
+                })
+                .catch((recoveryError: unknown) => {
+                  concurrentChangeRecoveryAttemptsRef.current = 0;
+                  console.error('[Drive Sync] Không thể tự khôi phục sau thay đổi đồng thời:', recoveryError);
+                  setSyncDriveStatus(
+                    '⚠️ Không thể tải lại Drive để gộp các thay đổi. Dữ liệu trên thiết bị vẫn được giữ; hãy thử đồng bộ thủ công.'
+                  );
+                });
+            }, 400);
+          } else {
+            concurrentChangeRecoveryAttemptsRef.current = 0;
+            setSyncDriveStatus(
+              '⚠️ Drive tiếp tục thay đổi trong lúc đồng bộ. Thay đổi trên thiết bị vẫn được giữ; hãy đồng bộ lại để xử lý xung đột.'
+            );
+          }
         } else {
+          concurrentChangeRecoveryAttemptsRef.current = 0;
           console.error('Push to Drive error:', err);
           setSyncDriveStatus(`❌ Lỗi đồng bộ lên Drive: ${err.message}`);
         }
