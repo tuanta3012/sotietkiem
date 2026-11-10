@@ -533,6 +533,18 @@ export function useDriveSync({
           const role = resolveUserRole(userEmail, settingsRef.current?.currentRole, settingsRef.current?.members, settingsRef.current?.workspaceOwnerEmail);
           const pulledBooks = res.books || [];
           const pulledSettlements = res.settlements || [];
+          let fetchedName = settingsRef.current.googleSheetName;
+          try {
+            const meta = await getRealGoogleDriveFileMetadata(token, fileId);
+            if (meta?.modifiedTime) {
+              lastCheckedModifiedTimeRef.current = meta.modifiedTime;
+            }
+            if (meta?.name && !fetchedName) {
+              fetchedName = meta.name;
+            }
+          } catch (metadataError) {
+            console.warn('[Drive Sync] Không thể lấy mốc phiên bản sau khi tải dữ liệu:', metadataError);
+          }
           localStorage.setItem(
             'savings_drive_sync_baseline_v1',
             JSON.stringify({ fileId, books: pulledBooks, settlements: pulledSettlements })
@@ -620,10 +632,14 @@ export function useDriveSync({
             (JSON.stringify(restoredBooks) !== JSON.stringify(pulledBooks) ||
               JSON.stringify(restoredSettlements) !== JSON.stringify(pulledSettlements));
           if (restorePending && hasLocalRestoreChanges && currentUser && !currentUser.isOffline && canPushToDrive(settingsRef.current.currentRole)) {
-            isRestoreMergePushRef.current = true;
-            needsPushRef.current = true;
-            pendingBooksRef.current = restoredBooks;
-            pendingAdjsRef.current = restoredSettlements;
+            if (lastCheckedModifiedTimeRef.current) {
+              isRestoreMergePushRef.current = true;
+              needsPushRef.current = true;
+              pendingBooksRef.current = restoredBooks;
+              pendingAdjsRef.current = restoredSettlements;
+            } else {
+              setSyncDriveStatus('Đã tải dữ liệu nhưng chưa xác minh được phiên bản Drive. Thay đổi cục bộ vẫn được giữ, chưa đẩy lên.');
+            }
           } else if (restorePending && !hasQueuedMutations) {
             try {
               localStorage.removeItem('savings_master_restore_required');
@@ -657,19 +673,6 @@ export function useDriveSync({
             });
 
             const nowStr = new Date().toLocaleString('vi-VN');
-            let fetchedName = settings.googleSheetName;
-            try {
-              const meta = await getRealGoogleDriveFileMetadata(token, fileId);
-              if (meta?.modifiedTime) {
-                lastCheckedModifiedTimeRef.current = meta.modifiedTime;
-              }
-              if (meta?.name && !fetchedName) {
-                fetchedName = meta.name;
-              }
-            } catch {
-              // ignore
-            }
-
             setSettings((prev) => {
               const shouldUpdateName = fetchedName && fetchedName !== prev.googleSheetName;
               if (!shouldUpdateName && prev.lastSyncTime === nowStr) {
@@ -841,6 +844,15 @@ export function useDriveSync({
           setSyncDriveStatus('⚠️ Cần xác thực lại tài khoản Google Drive.');
           return;
         }
+      }
+
+      if (!lastCheckedModifiedTimeRef.current) {
+        setSyncDriveStatus('Đang tải lại dữ liệu Drive để xác minh phiên bản trước khi đồng bộ...');
+        await syncBooksFromDrive(false, token);
+        if (!lastCheckedModifiedTimeRef.current && hasLocalSyncMutations(readLocalSyncQueue())) {
+          setSyncDriveStatus('⚠️ Chưa xác minh được phiên bản Google Drive. Thay đổi vẫn được giữ trên thiết bị và chưa được đẩy lên.');
+        }
+        return;
       }
 
       const queuedMutations = readLocalSyncQueue();
@@ -1069,7 +1081,7 @@ export function useDriveSync({
         }
       }
     },
-    [currentUser, settings.googleSheetUrl, setSettings, settlementAdjustments, setShowFileDeletedRecovery]
+    [currentUser, settings.googleSheetUrl, setSettings, settlementAdjustments, setShowFileDeletedRecovery, syncBooksFromDrive]
   );
 
   // Auto-sync whenever Google Sheet link is present or user logs in with a valid token
