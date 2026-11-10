@@ -10,7 +10,11 @@ import { App as CapApp } from '@capacitor/app';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Preferences } from '@capacitor/preferences';
 import { SavingsBook, AppSettings, AuthUser, SettlementAdjustment } from './types';
-import { buildSavingsBookBusinessId, sortAndReindexBooks } from './utils/dataTranslator';
+import {
+  buildSavingsBookBusinessId,
+  deduplicateSettlementAdjustments,
+  sortAndReindexBooks,
+} from './utils/dataTranslator';
 import { Navbar, NavTabType } from './components/Navbar';
 import { BiometricUnlockModal } from './components/BiometricUnlockModal';
 import { AppUpdateModal } from './components/AppUpdateModal';
@@ -48,7 +52,8 @@ import { getSecureItem, setSecureItem, autoCleanupStartupCache } from './utils/s
 import { useDriveSync } from './hooks/useDriveSync';
 import { useSavingsBooks } from './hooks/useSavingsBooks';
 import { useToast } from './context/ToastContext';
-import { clearLocalSyncQueue } from './utils/localSyncQueue';
+import { clearLocalSyncQueue, readLocalSyncQueue } from './utils/localSyncQueue';
+import { mergeQueuedBooks } from './utils/syncMutationMerge';
 import { scheduleMaturityNotifications } from './utils/notificationService';
 import { getVietnamDateISO } from './utils/date';
 
@@ -1208,7 +1213,7 @@ export default function App() {
       } else {
         updated = [...books, ...newBooks];
       }
-      setBooks(updated);
+      setBooks(sortAndReindexBooks(updated));
     },
     [books, setBooks]
   );
@@ -1322,21 +1327,29 @@ export default function App() {
       }
       const res = await downloadRealGoogleDriveFile(conflictToken, fileId, undefined, conflictUser.email || '');
       if (res.success) {
-        // Gộp danh sách sổ tiết kiệm (Union theo ID)
+        const queuedMutations = readLocalSyncQueue();
         const localBooks = books || [];
         const remoteBooks = res.books || [];
-        const bookMap = new Map<string, SavingsBook>();
-        remoteBooks.forEach((b: SavingsBook) => bookMap.set(b.id, b));
-        localBooks.forEach((b: SavingsBook) => bookMap.set(b.id, b));
+        const queuedMerge = mergeQueuedBooks(remoteBooks, queuedMutations);
+        if (queuedMerge.conflict) throw new Error(queuedMerge.conflict);
+
+        const queuedLocalIds = new Set([
+          ...queuedMutations.newBooks.map((book) => book.id),
+          ...queuedMutations.updatedBooks.map((update) => update.book.id),
+        ]);
+        const bookMap = new Map<string, SavingsBook>(
+          queuedMerge.books.map((book) => [buildSavingsBookBusinessId(book), book])
+        );
+        localBooks.forEach((book) => {
+          if (queuedLocalIds.has(book.id)) return;
+          const businessId = buildSavingsBookBusinessId(book);
+          if (!bookMap.has(businessId)) bookMap.set(businessId, book);
+        });
         const mergedBooks = sortAndReindexBooks(Array.from(bookMap.values()));
 
-        // Gộp nhật ký tất toán (Union theo ID)
         const localAdjs = settlementAdjustments || [];
         const remoteAdjs = res.settlements || [];
-        const adjMap = new Map<string, SettlementAdjustment>();
-        remoteAdjs.forEach((a: SettlementAdjustment) => adjMap.set(a.id, a));
-        localAdjs.forEach((a: SettlementAdjustment) => adjMap.set(a.id, a));
-        const mergedAdjs = Array.from(adjMap.values());
+        const mergedAdjs = deduplicateSettlementAdjustments([...remoteAdjs, ...localAdjs]);
 
         // Cập nhật React State cục bộ
         setBooks(mergedBooks);
@@ -1352,11 +1365,19 @@ export default function App() {
         }));
 
         // Đẩy toàn bộ dữ liệu đã gộp ngược lên Drive trung tâm ngay lập tức
-        await updateRealGoogleDriveFile(conflictToken, fileId, mergedBooks, mergedAdjs, {
+        const writeSucceeded = await updateRealGoogleDriveFile(conflictToken, fileId, mergedBooks, mergedAdjs, {
           userEmail: conflictUser.email,
           currentRole: settings.currentRole,
           sheetName: conflictHub.name,
         }, conflictBaseMetadata.modifiedTime);
+        if (!writeSucceeded) throw new Error('Không thể ghi dữ liệu đã gộp lên Google Drive.');
+        localStorage.setItem(
+          'savings_drive_sync_baseline_v1',
+          JSON.stringify({ fileId, books: mergedBooks, settlements: mergedAdjs })
+        );
+        if (clearLocalSyncQueue(queuedMutations)) {
+          localStorage.removeItem('savings_master_restore_required');
+        }
         const nowStr = new Date().toLocaleString('vi-VN');
         setSettings((prev) => ({ ...prev, lastSyncTime: nowStr }));
         await consumeWorkspaceRelay(conflictHub.relayAssignment, conflictUser.email);

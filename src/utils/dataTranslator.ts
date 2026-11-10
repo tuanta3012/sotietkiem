@@ -754,6 +754,7 @@ export function translateBooksToSheetMatrix(
 export function sortAndReindexBooks(bookList: SavingsBook[]): SavingsBook[] {
   // Loại bỏ hoàn toàn sổ đã tất toán khỏi danh sách sổ
   const activeBooks = bookList.filter((b) => b.status !== 'settled');
+  const seenIds = new Set<string>();
 
   // Sắp xếp các sổ active theo ngày đáo hạn tăng dần
   activeBooks.sort((a, b) => {
@@ -776,8 +777,21 @@ export function sortAndReindexBooks(bookList: SavingsBook[]): SavingsBook[] {
       code = `${tag}-${yy}${mm}-${mil}`;
     }
 
+    let id = book.id;
+    if (!id || seenIds.has(id)) {
+      const baseId = buildSavingsBookBusinessId(book);
+      id = baseId;
+      let suffix = 2;
+      while (seenIds.has(id)) {
+        id = `${baseId}_${suffix}`;
+        suffix += 1;
+      }
+    }
+    seenIds.add(id);
+
     return {
       ...book,
+      id,
       owner: normalizeOwner(book.owner, book.bankId, book.bookCode),
       bookCode: code,
       status: 'active' as BookStatus,

@@ -6,6 +6,7 @@ import {
   queueBookDeletionForDrive,
   queueBookUpdateForDrive,
   queueNewBookForDrive,
+  queueSettlementForDrive,
   readLocalSyncQueue,
 } from './localSyncQueue';
 
@@ -44,7 +45,11 @@ describe('local sync mutation queue', () => {
       JSON.stringify({ newBooks: [], settlements: [], settledBookCodes: [] })
     );
 
-    expect(readLocalSyncQueue()).toMatchObject({ updatedBooks: [], deletedBooks: [] });
+    expect(readLocalSyncQueue()).toMatchObject({
+      updatedBooks: [],
+      deletedBooks: [],
+      settledBooks: [],
+    });
   });
 
   it('preserves the original snapshot across repeated edits', () => {
@@ -74,6 +79,28 @@ describe('local sync mutation queue', () => {
       updatedBooks: [],
       deletedBooks: [edited],
     });
+  });
+
+  it('queues a settlement by book identity instead of removing pending books with the same code', () => {
+    const otherBook = makeBook({
+      id: 'other-book',
+      bookCode: 'SEA-2609-1100',
+      principal: 20_000_000,
+      startDate: '2026-02-01',
+    });
+    const settledBook = makeBook({
+      id: 'settled-book',
+      bookCode: 'SEA-2609-1100',
+      principal: 30_000_000,
+      startDate: '2026-03-01',
+    });
+
+    queueNewBookForDrive(otherBook);
+    queueNewBookForDrive(settledBook);
+
+    expect(queueSettlementForDrive(null, settledBook)).toBe(true);
+    expect(readLocalSyncQueue().newBooks).toEqual([otherBook]);
+    expect(readLocalSyncQueue().settledBooks).toEqual([settledBook]);
   });
 
   it('does not clear mutations added while an earlier push is in flight', () => {

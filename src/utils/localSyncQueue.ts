@@ -1,4 +1,5 @@
 import { SavingsBook, SettlementAdjustment } from '../types';
+import { buildSavingsBookBusinessId } from './dataTranslator';
 
 const QUEUE_KEY = 'savings_sync_mutations_v1';
 
@@ -6,6 +7,7 @@ export interface LocalSyncMutationQueue {
   newBooks: SavingsBook[];
   settlements: SettlementAdjustment[];
   settledBookCodes: string[];
+  settledBooks: SavingsBook[];
   updatedBooks: Array<{ baseBook: SavingsBook; book: SavingsBook }>;
   deletedBooks: SavingsBook[];
 }
@@ -14,6 +16,7 @@ const EMPTY_QUEUE = (): LocalSyncMutationQueue => ({
   newBooks: [],
   settlements: [],
   settledBookCodes: [],
+  settledBooks: [],
   updatedBooks: [],
   deletedBooks: [],
 });
@@ -27,6 +30,7 @@ export function readLocalSyncQueue(): LocalSyncMutationQueue {
       !Array.isArray(parsed.newBooks) ||
       !Array.isArray(parsed.settlements) ||
       !Array.isArray(parsed.settledBookCodes) ||
+      (parsed.settledBooks !== undefined && !Array.isArray(parsed.settledBooks)) ||
       (parsed.updatedBooks !== undefined && !Array.isArray(parsed.updatedBooks)) ||
       (parsed.deletedBooks !== undefined && !Array.isArray(parsed.deletedBooks))
     ) {
@@ -36,6 +40,7 @@ export function readLocalSyncQueue(): LocalSyncMutationQueue {
       newBooks: parsed.newBooks,
       settlements: parsed.settlements,
       settledBookCodes: parsed.settledBookCodes,
+      settledBooks: parsed.settledBooks || [],
       updatedBooks: parsed.updatedBooks || [],
       deletedBooks: parsed.deletedBooks || [],
     };
@@ -62,6 +67,7 @@ export function hasLocalSyncMutations(queue: LocalSyncMutationQueue): boolean {
     queue.newBooks.length > 0 ||
     queue.settlements.length > 0 ||
     queue.settledBookCodes.length > 0 ||
+    queue.settledBooks.length > 0 ||
     queue.updatedBooks.length > 0 ||
     queue.deletedBooks.length > 0
   );
@@ -109,29 +115,27 @@ export function queueBookDeletionForDrive(book: SavingsBook): boolean {
 
 export function queueSettlementForDrive(
   settlement: SettlementAdjustment | null,
-  settledBookCode: string
+  settledBook: SavingsBook
 ): boolean {
+  const settledBusinessId = buildSavingsBookBusinessId(settledBook);
+  const settledBookCode = (settledBook.bookCode || '').replace(/\s+/g, '').toUpperCase();
   return updateLocalSyncQueue((queue) => ({
     ...queue,
-    newBooks: queue.newBooks.filter(
-      (book) =>
-        (book.bookCode || '').replace(/\s+/g, '').toUpperCase() !==
-        settledBookCode.replace(/\s+/g, '').toUpperCase()
-    ),
+    newBooks: queue.newBooks.filter((book) => buildSavingsBookBusinessId(book) !== settledBusinessId),
     updatedBooks: queue.updatedBooks.filter(
-      (item) =>
-        (item.book.bookCode || '').replace(/\s+/g, '').toUpperCase() !==
-        settledBookCode.replace(/\s+/g, '').toUpperCase()
+      (item) => buildSavingsBookBusinessId(item.book) !== settledBusinessId
     ),
-    deletedBooks: queue.deletedBooks.filter(
-      (book) =>
-        (book.bookCode || '').replace(/\s+/g, '').toUpperCase() !==
-        settledBookCode.replace(/\s+/g, '').toUpperCase()
-    ),
+    deletedBooks: queue.deletedBooks.filter((book) => buildSavingsBookBusinessId(book) !== settledBusinessId),
     settlements: settlement
       ? [...queue.settlements.filter((item) => item.id !== settlement.id), settlement]
       : queue.settlements,
-    settledBookCodes: Array.from(new Set([...queue.settledBookCodes, settledBookCode])),
+    settledBookCodes: queue.settledBookCodes.filter(
+      (code) => code.replace(/\s+/g, '').toUpperCase() !== settledBookCode
+    ),
+    settledBooks: [
+      ...queue.settledBooks.filter((book) => buildSavingsBookBusinessId(book) !== settledBusinessId),
+      settledBook,
+    ],
   }));
 }
 

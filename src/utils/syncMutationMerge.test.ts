@@ -23,6 +23,7 @@ const emptyQueue = (): LocalSyncMutationQueue => ({
   newBooks: [],
   settlements: [],
   settledBookCodes: [],
+  settledBooks: [],
   updatedBooks: [],
   deletedBooks: [],
 });
@@ -70,5 +71,51 @@ describe('mergeQueuedBooks', () => {
 
     expect(result.conflict).toContain('Không tìm thấy sổ');
     expect(result.books).toEqual([]);
+  });
+
+  it('settles only the matching book when different books share a displayed code and id', () => {
+    const settledBook = makeBook('shared', {
+      bookCode: 'SEA-2609-1100',
+      principal: 3_450_000_000,
+      startDate: '2025-11-10',
+      termMonths: 12,
+    });
+    const otherBook = makeBook('shared', {
+      bookCode: 'SEA-2609-1100',
+      principal: 3_600_000_000,
+      startDate: '2025-12-09',
+      termMonths: 12,
+    });
+    const newBook = makeBook('new', {
+      bookCode: 'SHB-2711-3800',
+      bankId: 'shb',
+      principal: 3_800_000_000,
+    });
+
+    const result = mergeQueuedBooks([settledBook, otherBook], {
+      ...emptyQueue(),
+      newBooks: [newBook],
+      settledBooks: [settledBook],
+    });
+
+    expect(result.conflict).toBeUndefined();
+    expect(result.books).toEqual([otherBook, newBook]);
+  });
+
+  it('refuses to apply legacy code-only settlements when a code is ambiguous', () => {
+    const first = makeBook('first', { bookCode: 'SEA-2609-1100' });
+    const second = makeBook('second', {
+      bookCode: 'SEA-2609-1100',
+      principal: 20_000_000,
+      startDate: '2026-02-01',
+    });
+
+    const result = mergeQueuedBooks([first, second], {
+      ...emptyQueue(),
+      settledBookCodes: ['SEA-2609-1100'],
+    });
+
+    expect(result.conflict).toContain('xuất hiện nhiều lần');
+    expect(result.books).toEqual([first, second]);
   });
 });

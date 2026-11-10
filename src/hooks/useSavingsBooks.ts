@@ -321,9 +321,9 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
         });
       }
 
-      const remainingBooks = books.filter((b) => b.id !== bookId);
+      const remainingBooks = books.filter((b) => b !== bookToSettle);
       const nextBooks = sortAndReindexBooks(remainingBooks);
-      if (!queueSettlementForDrive(newAdjustmentForQueue, bookToSettle.bookCode)) {
+      if (!queueSettlementForDrive(newAdjustmentForQueue, bookToSettle)) {
         onShowSyncStatusRef.current?.('Không lưu được thay đổi chờ đồng bộ. Dữ liệu vẫn được giữ trên thiết bị.');
       }
       setBooks(nextBooks);
@@ -458,11 +458,11 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
 
       if (
         (!queueNewBookForDrive(newBook) ||
-          !queueSettlementForDrive(newAdjustmentForQueue, oldBook.bookCode))
+          !queueSettlementForDrive(newAdjustmentForQueue, oldBook))
       ) {
         onShowSyncStatusRef.current?.('Không lưu được thay đổi chờ đồng bộ. Dữ liệu vẫn được giữ trên thiết bị.');
       }
-      const withoutOld = books.filter((b) => b.id !== oldBookId);
+      const withoutOld = books.filter((b) => b !== oldBook);
       const updated = [newBook, ...withoutOld];
       const nextBooks = sortAndReindexBooks(updated);
       setBooks(nextBooks);
@@ -478,11 +478,13 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
       }
       let finalBooks = newBooks;
       if (mode === 'merge') {
-        const existingMap = new Map<string, SavingsBook>(books.map((b) => [b.id, b]));
-        newBooks.forEach((b) => existingMap.set(b.id, b));
+        const existingMap = new Map<string, SavingsBook>(
+          books.map((book) => [buildSavingsBookBusinessId(book), book])
+        );
+        newBooks.forEach((book) => existingMap.set(buildSavingsBookBusinessId(book), book));
         finalBooks = Array.from(existingMap.values());
       }
-      setBooks(finalBooks);
+      setBooks(sortAndReindexBooks(finalBooks));
     },
     [books, settlementAdjustments, currentRole]
   );
