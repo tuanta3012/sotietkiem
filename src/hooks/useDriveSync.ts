@@ -570,15 +570,12 @@ export function useDriveSync({
               userEmail,
               currentRole: role,
               sheetName: settingsRef.current?.googleSheetName,
-              summary: `Phát hiện ${cacheDiff.changes.length}${cacheDiff.truncated ? '+' : ''} thay đổi khác biệt trên Drive.`,
+              summary: `Phát hiện ${cacheDiff.changes.length}${cacheDiff.truncated ? '+' : ''} thay đổi trên Drive; tiếp tục nạp dữ liệu Drive và gộp các thay đổi local đang chờ nếu có.`,
               details: {
                 source: 'local_cache_vs_drive',
                 changes: cacheDiff.changes,
               },
             });
-            setConflictDetected('Phát hiện thay đổi trên Drive. Vui lòng chọn đồng bộ để xử lý xung đột.');
-            setIsSyncingDrive(false);
-            return;
           }
           const storageToStateDiff = buildSavingsDataAuditDiff(
             localStorageSnapshot.books,
@@ -1494,9 +1491,11 @@ export function useDriveSync({
           } else if (meta.modifiedTime !== lastCheckedModifiedTimeRef.current) {
             // File trên Google Drive đã được sửa đổi bên ngoài!
             lastCheckedModifiedTimeRef.current = meta.modifiedTime;
-            await syncBooksFromDriveRef.current(false, token);
-            setSyncDriveStatus('Đã cập nhật dữ liệu mới từ Google Drive');
-            setTimeout(() => setSyncDriveStatus(null), 3500);
+            const syncSucceeded = await syncBooksFromDriveRef.current(false, token);
+            if (syncSucceeded) {
+              setSyncDriveStatus('Đã cập nhật dữ liệu mới từ Google Drive');
+              setTimeout(() => setSyncDriveStatus(null), 3500);
+            }
           }
         }
       } catch (err: any) {
