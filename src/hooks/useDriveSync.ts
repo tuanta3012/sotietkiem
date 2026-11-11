@@ -617,12 +617,11 @@ export function useDriveSync({
             setSyncDriveStatus(`⚠️ ${mergeResult.conflict}`);
             return;
           }
-          const restoredSettlements = restorePending
-            ? deduplicateSettlementAdjustments([
-                ...pulledSettlements,
-                ...localQueue.settlements,
-              ])
-            : pulledSettlements;
+          const restoredSettlements = deduplicateSettlementAdjustments(
+            restorePending
+              ? [...pulledSettlements, ...localQueue.settlements]
+              : pulledSettlements
+          );
           applyMasterSettlements(restoredSettlements);
 
           const isSettlementsSanitized = JSON.stringify(restoredSettlements) !== JSON.stringify(pulledSettlements);
