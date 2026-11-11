@@ -849,11 +849,23 @@ export function deduplicateSettlementAdjustments(
 
     // Chuẩn hóa mã sổ sạch sẽ
     const rawCode = (adj.bookCode || '').trim();
-    const cleanCode = rawCode.replace(/\s*\(Tái tục\)+/gi, '').replace(/\s+/g, '').toUpperCase();
+    let cleanCode = rawCode.replace(/\s*\(Tái tục\)+/gi, '').replace(/\s+/g, '').toUpperCase();
     const isoDate = normalizeDateToISO(adj.settlementDate);
     const principal = Number(adj.principal) || 0;
     const bankId = (adj.bankId || '').trim().toLowerCase();
     const settlementType = adj.settlementType || 'early';
+    const tag = getBankTagForBook(bankId, adj.owner);
+
+    // Tự động khôi phục mã sổ chuẩn xác nếu bị dán nhãn sai từ các phiên bản cũ
+    // Quy tắc: Mã sổ chuẩn có dạng {TAG}-{YYMM}-{MILLIONS}. Nếu đuôi số tiền khác số tiền gốc thực tế thì tự sửa lại.
+    const mil = Math.round(principal / 1_000_000);
+    const codeMatch = cleanCode.match(/^[A-Z0-9]+-(\d{4})-(\d+)$/);
+    if (!cleanCode || !codeMatch || (mil > 0 && parseInt(codeMatch[2], 10) !== mil)) {
+      const dateForCode = isoDate || adj.settlementDate || '';
+      const yy = dateForCode.length >= 4 ? dateForCode.slice(2, 4) : '26';
+      const mm = dateForCode.length >= 7 ? dateForCode.slice(5, 7) : '01';
+      cleanCode = `${tag}-${yy}${mm}-${mil || 0}`;
+    }
 
     // Khóa định danh nghiệp vụ duy nhất:
     // MỖI SỰ KIỆN TẤT TOÁN DỰA TRÊN: Mã Sổ (hoặc Ngân hàng) + Ngày Tất Toán + Số Tiền Gốc + Loại Tất Toán
