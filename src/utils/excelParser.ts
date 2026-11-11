@@ -126,7 +126,15 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
     };
 
     // 1. Bank and Code (Column A / index 0 fallback)
-    const bankVal = findVal(['ngân hàng', 'bank', 'nh', 'tổ chức'], ['chi nhánh', 'nhận', 'nhóm', 'doanh', 'thành', 'bệnh', 'số tài khoản', 'số tk']);
+    let bankVal = findVal(['ngân hàng', 'bank', 'nh', 'tổ chức'], ['chi nhánh', 'nhận', 'nhóm', 'doanh', 'thành', 'bệnh', 'số tài khoản', 'số tk']);
+    
+    // If the detected bank value looks like a book ID (e.g. SEA-2609-1100 or SHB-123), it's likely the wrong column
+    if (bankVal && typeof bankVal === 'string' && /^[A-Z]{2,4}-\d{4}/.test(bankVal.trim().toUpperCase())) {
+      // Try to find another column that might be the real bank name
+      const betterBankVal = findVal(['tên ngân hàng', 'đơn vị', 'nơi gửi']);
+      if (betterBankVal) bankVal = betterBankVal;
+    }
+
     const bankRaw = String(bankVal !== undefined ? bankVal : (row['__col_0'] || '')).trim();
     const rawCode = findVal(['mã sổ', 'mã', 'ký hiệu', 'số sổ', 'code', 'hợp đồng', 'stt']);
     const bankLower = bankRaw.toLowerCase().normalize('NFC');

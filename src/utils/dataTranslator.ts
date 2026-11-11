@@ -166,77 +166,79 @@ export function translateBankFromSheet(bankRaw: string): {
   let bankId = '';
   let baseCode = '';
 
-  if (root.includes('SHB')) {
+  if (root.includes('SHB') || /\bSHB\b/.test(root)) {
     bankId = 'shb';
     baseCode = 'SHB';
-  } else if (root.includes('SEA') || root.includes('SEABANK')) {
+  } else if (root.includes('SEA') || root.includes('SEABANK') || /\bSEA\b/.test(root)) {
     bankId = 'seabank';
     baseCode = 'SEA';
-  } else if (root.includes('VCB') || root.includes('VIETCOM')) {
+  } else if (root.includes('VCB') || root.includes('VIETCOM') || /\bVCB\b/.test(root)) {
     bankId = 'vietcombank';
     baseCode = 'VCB';
-  } else if (root.includes('TCB') || root.includes('TECHCOM')) {
+  } else if (root.includes('TCB') || root.includes('TECHCOM') || /\bTCB\b/.test(root)) {
     bankId = 'techcombank';
     baseCode = 'TCB';
-  } else if (root.includes('BIDV') || root.includes('BID')) {
+  } else if (root.includes('BIDV') || root.includes('BID') || /\bBIDV\b/.test(root)) {
     bankId = 'bidv';
     baseCode = 'BIDV';
-  } else if (root.includes('VPB') || root.includes('VPBANK')) {
+  } else if (root.includes('VPB') || root.includes('VPBANK') || /\bVPB\b/.test(root)) {
     bankId = 'vpbank';
     baseCode = 'VPB';
-  } else if (root.includes('MB') || root.includes('MBBANK')) {
+  } else if (root.includes('MB') || root.includes('MBBANK') || /\bMB\b/.test(root)) {
     bankId = 'mbbank';
     baseCode = 'MB';
-  } else if (root.includes('ACB')) {
+  } else if (root.includes('ACB') || /\bACB\b/.test(root)) {
     bankId = 'acb';
     baseCode = 'ACB';
-  } else if (root.includes('VIB')) {
+  } else if (root.includes('VIB') || /\bVIB\b/.test(root)) {
     bankId = 'vib';
     baseCode = 'VIB';
-  } else if (root.includes('TPB') || root.includes('TIENPHONG')) {
+  } else if (root.includes('TPB') || root.includes('TIENPHONG') || /\bTPB\b/.test(root)) {
     bankId = 'tpbank';
     baseCode = 'TPB';
-  } else if (root.includes('LPB') || root.includes('LPBANK') || root.includes('LIENVIET')) {
+  } else if (root.includes('LPB') || root.includes('LPBANK') || root.includes('LIENVIET') || /\bLPB\b/.test(root)) {
     bankId = 'lpbank';
     baseCode = 'LPB';
-  } else if (root.includes('HDB') || root.includes('HDBANK')) {
+  } else if (root.includes('HDB') || root.includes('HDBANK') || /\bHDB\b/.test(root)) {
     bankId = 'hdbank';
     baseCode = 'HDB';
-  } else if (root.includes('MSB') || root.includes('MARITIME')) {
+  } else if (root.includes('MSB') || root.includes('MARITIME') || /\bMSB\b/.test(root)) {
     bankId = 'msb';
     baseCode = 'MSB';
-  } else if (root.includes('OCB')) {
+  } else if (root.includes('OCB') || /\bOCB\b/.test(root)) {
     bankId = 'ocb';
     baseCode = 'OCB';
-  } else if (root.includes('NAB') || root.includes('NAMABANK')) {
+  } else if (root.includes('NAB') || root.includes('NAMABANK') || /\bNAB\b/.test(root)) {
     bankId = 'namabank';
     baseCode = 'NAB';
-  } else if (root.includes('NCB')) {
+  } else if (root.includes('NCB') || /\bNCB\b/.test(root)) {
     bankId = 'ncb';
     baseCode = 'NCB';
-  } else if (root.includes('BVB') || root.includes('BAOVIET')) {
+  } else if (root.includes('BVB') || root.includes('BAOVIET') || /\bBVB\b/.test(root)) {
     bankId = 'baovietbank';
     baseCode = 'BVB';
-  } else if (root.includes('AGRI') || root.includes('AGRIBANK')) {
+  } else if (root.includes('AGRI') || root.includes('AGRIBANK') || /\bAGRI\b/.test(root)) {
     bankId = 'agribank';
     baseCode = 'AGRI';
-  } else if (root.includes('SCB')) {
+  } else if (root.includes('SCB') || /\bSCB\b/.test(root)) {
     bankId = 'scb';
     baseCode = 'SCB';
-  } else if (root.includes('PVB') || root.includes('PVCOMBANK')) {
+  } else if (root.includes('PVB') || root.includes('PVCOMBANK') || /\bPVB\b/.test(root)) {
     bankId = 'pvcombank';
     baseCode = 'PVB';
-  } else if (root.includes('CTG') || root.includes('VIETIN')) {
+  } else if (root.includes('CTG') || root.includes('VIETIN') || /\bCTG\b/.test(root)) {
     bankId = 'vietinbank';
     baseCode = 'CTG';
-  } else if (root) {
+  } else if (root && root.length >= 2 && !/^\d+$/.test(root) && !root.includes('-')) {
+    // If it doesn't match but looks like a bank name (not all numbers, no dashes like IDs)
     baseCode = root;
     bankId = root.toLowerCase();
   }
 
   if (!bankId) {
-    bankId = 'seabank';
-    baseCode = 'SEA';
+    // DO NOT default to 'seabank' anymore. Use a fallback that signals it's unidentified.
+    bankId = 'other';
+    baseCode = root || 'BANK';
   }
 
   const { husbandName, wifeName } = getCustomOwnerNames();
@@ -777,14 +779,16 @@ export function sortAndReindexBooks(bookList: SavingsBook[]): SavingsBook[] {
       code = `${tag}-${yy}${mm}-${mil}`;
     }
 
+    // 1. Preserve existing ID if it's already unique in this set
     let id = book.id;
+    
+    // 2. If no ID or collision, generate a new one, but only ONCE
     if (!id || seenIds.has(id)) {
       const baseId = buildSavingsBookBusinessId(book);
-      id = baseId;
-      let suffix = 2;
+      id = `${baseId}_${Math.random().toString(36).substring(2, 7)}`;
+      // Ensure absolute uniqueness
       while (seenIds.has(id)) {
-        id = `${baseId}_${suffix}`;
-        suffix += 1;
+        id = `${baseId}_${Math.random().toString(36).substring(2, 7)}`;
       }
     }
     seenIds.add(id);
@@ -794,7 +798,7 @@ export function sortAndReindexBooks(bookList: SavingsBook[]): SavingsBook[] {
       id,
       owner: normalizeOwner(book.owner, book.bankId, book.bookCode),
       bookCode: code,
-      status: 'active' as BookStatus,
+      status: book.status || 'active',
     };
   });
 }

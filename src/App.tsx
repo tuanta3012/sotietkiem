@@ -1337,13 +1337,16 @@ export default function App() {
           ...queuedMutations.newBooks.map((book) => book.id),
           ...queuedMutations.updatedBooks.map((update) => update.book.id),
         ]);
-        const bookMap = new Map<string, SavingsBook>(
-          queuedMerge.books.map((book) => [buildSavingsBookBusinessId(book), book])
-        );
+        const bookMap = new Map<string, SavingsBook>();
+        queuedMerge.books.forEach((book) => {
+          bookMap.set(book.id, book);
+        });
         localBooks.forEach((book) => {
           if (queuedLocalIds.has(book.id)) return;
-          const businessId = buildSavingsBookBusinessId(book);
-          if (!bookMap.has(businessId)) bookMap.set(businessId, book);
+          // Use ID as key to prevent overwriting different books that might have same business attributes
+          if (!bookMap.has(book.id)) {
+            bookMap.set(book.id, book);
+          }
         });
         const mergedBooks = sortAndReindexBooks(Array.from(bookMap.values()));
 

@@ -479,9 +479,13 @@ export function useSavingsBooks({ currentRole, onShowSyncStatus }: UseSavingsBoo
       let finalBooks = newBooks;
       if (mode === 'merge') {
         const existingMap = new Map<string, SavingsBook>(
-          books.map((book) => [buildSavingsBookBusinessId(book), book])
+          books.map((book) => [book.id, book])
         );
-        newBooks.forEach((book) => existingMap.set(buildSavingsBookBusinessId(book), book));
+        newBooks.forEach((book) => {
+          // If the imported book has an ID that matches an existing one, it updates it.
+          // Otherwise, it adds it as a new book.
+          existingMap.set(book.id, book);
+        });
         finalBooks = Array.from(existingMap.values());
       }
       setBooks(sortAndReindexBooks(finalBooks));
