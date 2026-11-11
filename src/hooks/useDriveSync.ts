@@ -355,7 +355,7 @@ export function useDriveSync({
     async (
       forceTokenPrompt = false,
       explicitToken?: string,
-      _pushAfterSync = false,
+      isManualTrigger = false,
       explicitFileUrl?: string,
       explicitUserEmail?: string
     ) => {
@@ -625,11 +625,19 @@ export function useDriveSync({
             : pulledSettlements;
           applyMasterSettlements(restoredSettlements);
 
+          const isSettlementsSanitized = JSON.stringify(restoredSettlements) !== JSON.stringify(pulledSettlements);
+          const isBooksSanitized = JSON.stringify(restoredBooks) !== JSON.stringify(pulledBooks);
           const hasLocalRestoreChanges =
-            hasQueuedMutations &&
-            (JSON.stringify(restoredBooks) !== JSON.stringify(pulledBooks) ||
-              JSON.stringify(restoredSettlements) !== JSON.stringify(pulledSettlements));
-          if (restorePending && hasLocalRestoreChanges && currentUser && !currentUser.isOffline && canPushToDrive(settingsRef.current.currentRole)) {
+            (hasQueuedMutations && (isBooksSanitized || isSettlementsSanitized)) ||
+            isSettlementsSanitized ||
+            (isManualTrigger && canPushToDrive(settingsRef.current.currentRole));
+
+          if (
+            hasLocalRestoreChanges &&
+            currentUser &&
+            !currentUser.isOffline &&
+            canPushToDrive(settingsRef.current.currentRole)
+          ) {
             if (lastCheckedModifiedTimeRef.current) {
               isRestoreMergePushRef.current = true;
               needsPushRef.current = true;
