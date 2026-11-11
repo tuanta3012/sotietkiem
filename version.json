@@ -1,5 +1,5 @@
 {
   "version": "1.1.1",
-  "notes": "Sửa triệt để lỗi ghi đè ngân hàng SHB thành SEA do xung đột cột bảng phụ và đồng bộ 2 chiều",
+  "notes": "Bản cập nhật tự động v1.1.1",
   "apkUrl": "https://github.com/tuanta3012/sotietkiem/releases/download/v1.1.1/sotietkiem_v1.1.1.apk"
 }
