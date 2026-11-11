@@ -782,13 +782,14 @@ export function sortAndReindexBooks(bookList: SavingsBook[]): SavingsBook[] {
     // 1. Preserve existing ID if it's already unique in this set
     let id = book.id;
     
-    // 2. If no ID or collision, generate a new one, but only ONCE
+    // 2. If no ID or collision, generate a stable, deterministic ID
     if (!id || seenIds.has(id)) {
       const baseId = buildSavingsBookBusinessId(book);
-      id = `${baseId}_${Math.random().toString(36).substring(2, 7)}`;
-      // Ensure absolute uniqueness
+      id = baseId;
+      let suffix = 2;
       while (seenIds.has(id)) {
-        id = `${baseId}_${Math.random().toString(36).substring(2, 7)}`;
+        id = `${baseId}_${suffix}`;
+        suffix += 1;
       }
     }
     seenIds.add(id);

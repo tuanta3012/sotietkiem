@@ -62,33 +62,65 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
   const rawRows: Record<string, any>[] = [];
   if (headerRowIdx >= 0) {
     const headers = matrix[headerRowIdx].map((h, i) => String(h || `col_${i}`).trim());
+    
+    // Ranh giới cột của Bảng sổ tiết kiệm chính (ngăn chặn bảng phụ bên phải N..AC ghi đè vào sổ chính)
+    let bookTableMaxCol = headers.length;
+    for (let c = 4; c < headers.length; c++) {
+      const hClean = headers[c].toLowerCase().normalize('NFC').trim();
+      if (
+        headers[c] === '' ||
+        hClean === '' ||
+        hClean.includes('lãi hàng năm') ||
+        hClean.includes('lãi năm') ||
+        hClean.includes('số cuối năm') ||
+        hClean.includes('dư cuối năm') ||
+        hClean.includes('nhật ký') ||
+        hClean.includes('biến động') ||
+        hClean.includes('tất toán') ||
+        headers[c].startsWith('col_')
+      ) {
+        bookTableMaxCol = c;
+        break;
+      }
+    }
+    // Giới hạn an toàn: Bảng sổ tiết kiệm chuẩn có 12 cột (A..L, indices 0..11)
+    if (bookTableMaxCol > 12 && headers.length >= 13) {
+      bookTableMaxCol = 12;
+    }
+
     for (let r = headerRowIdx + 1; r < matrix.length; r++) {
       const rowData: Record<string, any> = {};
       let hasContent = false;
-      (matrix[r] || []).forEach((val, cIdx) => {
+      const rowCells = matrix[r] || [];
+      // CHỈ lấy các ô trong phạm vi cột của Bảng sổ tiết kiệm chính (cIdx < bookTableMaxCol)
+      for (let cIdx = 0; cIdx < Math.min(rowCells.length, bookTableMaxCol); cIdx++) {
+        const val = rowCells[cIdx];
         if (val !== undefined && val !== '') {
           hasContent = true;
           const headerName = headers[cIdx] || `col_${cIdx}`;
           rowData[headerName] = val;
           rowData[`__col_${cIdx}`] = val; // Store positional column index for reliable fallback
         }
-      });
+      }
       if (hasContent) rawRows.push(rowData);
     }
   } else {
     // Treat row 0 as header if no explicit keyword matched
     const headers = (matrix[0] || []).map((h, i) => String(h || `col_${i}`).trim());
+    let bookTableMaxCol = Math.min(headers.length, 12);
     for (let r = 1; r < matrix.length; r++) {
       const rowData: Record<string, any> = {};
       let hasContent = false;
-      (matrix[r] || []).forEach((val, cIdx) => {
+      const rowCells = matrix[r] || [];
+      for (let cIdx = 0; cIdx < Math.min(rowCells.length, bookTableMaxCol); cIdx++) {
+        const val = rowCells[cIdx];
         if (val !== undefined && val !== '') {
           hasContent = true;
           const headerName = headers[cIdx] || `col_${cIdx}`;
           rowData[headerName] = val;
-          rowData[`__col_${cIdx}`] = val; // Store positional column index for reliable fallback
+          rowData[`__col_${cIdx}`] = val;
         }
-      });
+      }
       if (hasContent) rawRows.push(rowData);
     }
   }
@@ -126,11 +158,14 @@ export function parseMatrixData(matrix: any[][]): ParseExcelResult {
     };
 
     // 1. Bank and Code (Column A / index 0 fallback)
-    let bankVal = findVal(['ngân hàng', 'bank', 'nh', 'tổ chức'], ['chi nhánh', 'nhận', 'nhóm', 'doanh', 'thành', 'bệnh', 'số tài khoản', 'số tk']);
+    // Cột A (index 0) luôn là cột Ngân hàng chuẩn của Bảng sổ tiết kiệm
+    const col0Val = row['__col_0'];
+    let bankVal = col0Val !== undefined && col0Val !== '' 
+      ? col0Val 
+      : findVal(['ngân hàng', 'bank', 'nh', 'tổ chức'], ['chi nhánh', 'nhận', 'nhóm', 'doanh', 'thành', 'bệnh', 'số tài khoản', 'số tk']);
     
     // If the detected bank value looks like a book ID (e.g. SEA-2609-1100 or SHB-123), it's likely the wrong column
     if (bankVal && typeof bankVal === 'string' && /^[A-Z]{2,4}-\d{4}/.test(bankVal.trim().toUpperCase())) {
-      // Try to find another column that might be the real bank name
       const betterBankVal = findVal(['tên ngân hàng', 'đơn vị', 'nơi gửi']);
       if (betterBankVal) bankVal = betterBankVal;
     }
